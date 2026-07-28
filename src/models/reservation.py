@@ -50,7 +50,15 @@ class RunningReservation:
     process_id: int
     korail_id: str
     search_params: TrainSearchParams
+    # Identifies the application run that spawned the search process. A record
+    # carrying anything else was left behind by a run that is already gone,
+    # which means nothing is searching for it any more.
+    run_id: str = ""
     started_at: datetime = datetime.now()
+
+    def is_stale(self, current_run_id: str) -> bool:
+        """Check whether this record outlived the process that owned it."""
+        return self.run_id != current_run_id
 
 
 @dataclass

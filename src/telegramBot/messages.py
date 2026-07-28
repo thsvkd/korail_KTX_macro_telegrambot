@@ -269,6 +269,34 @@ class Messages:
 💡 코레일 사이트에서 예약 상태를 확인해주세요.
 """
 
+    # ========== 재시작 복구 메시지 ==========
+    RESERVATION_RESUMED = """🔄 검색을 다시 시작했습니다
+
+서버가 재시작되어 검색이 잠시 멈췄지만, 자동으로 이어서 진행합니다.
+
+📋 {srcLocate} → {dstLocate}
+📅 {depDate}
+
+취소표가 나오면 바로 알려드립니다."""
+
+    RESERVATION_INTERRUPTED = """⚠️ 검색이 중단되었습니다
+
+서버가 재시작되면서 진행 중이던 검색이 멈췄습니다.
+
+📋 {srcLocate} → {dstLocate}
+📅 {depDate}
+
+/start 를 입력해 다시 시작해주세요."""
+
+    RESERVATION_INTERRUPTED_PARTIAL = """⚠️ 검색이 중단되었습니다
+
+서버가 재시작되면서 검색이 멈췄습니다.
+이미 예약된 좌석이 있어 중복 예약을 피하려고 자동 재개는 하지 않았습니다.
+
+🔗 예약 확인: {paymentUrl}
+
+남은 좌석이 필요하시면 /start 로 다시 시작해주세요."""
+
     # ========== 관리자 메시지 ==========
     ADMIN_AUTH_REQUIRED = "🔐 관리자 인증이 필요합니다.\n관리자 비밀번호를 입력해주세요."
     ADMIN_AUTH_SUCCESS = "✅ 관리자 인증 성공!"

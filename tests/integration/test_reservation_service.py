@@ -153,8 +153,10 @@ class TestReservationService:
             search_params=search_params
         )
 
-        # Now cancel it
-        with patch('os.kill') as mock_kill:
+        # Now cancel it. The recorded PID is a mock, so the ownership check
+        # that stops us signalling a recycled PID has to be satisfied here.
+        with patch('os.kill') as mock_kill, \
+             patch.object(ReservationService, '_owns_process', return_value=True):
             self.service.cancel_reservation(chat_id)
 
             # Should have killed the process
@@ -243,8 +245,9 @@ class TestReservationService:
         self.service.start_reservation_process(11111, "010-1111-1111", "pass1", search_params)
         self.service.start_reservation_process(22222, "010-2222-2222", "pass2", search_params)
 
-        # Cancel all
-        with patch('os.kill') as mock_kill:
+        # Cancel all. See above: the PIDs are mocks, so ownership is forced.
+        with patch('os.kill') as mock_kill, \
+             patch.object(ReservationService, '_owns_process', return_value=True):
             count = self.service.cancel_all_reservations(99999)
 
             assert count == 2

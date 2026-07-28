@@ -117,6 +117,21 @@ class TelegramWebhook(Resource):
             # status=1: Error/failure
             # status=2: Partial success (random seating intermediate notification)
 
+            # status=1 means the search process gave up and exited. Its record
+            # has to go with it, or /status keeps reporting a search that is
+            # not running and a restart would try to resume it.
+            if str(status) == "1":
+                logger.info(f"Reservation process failed for chat_id={chat_id}")
+                self.storage.delete_running_reservation(chat_id)
+                self.storage.delete_resume_credentials(chat_id)
+
+                session = self.storage.get_user_session(chat_id)
+                if session:
+                    session.reset()
+                    self.storage.save_user_session(session)
+
+                return make_response("OK")
+
             if str(status) == "2":
                 # Partial reservation notification (random seating)
                 logger.info(f"Partial reservation notification for chat_id={chat_id}")
@@ -157,8 +172,10 @@ class TelegramWebhook(Resource):
                     logger.info(f"Starting single payment reminders for chat_id={chat_id}")
                     self.payment_reminder.start_reminders(chat_id)
 
-                # Clean up running reservation
+                # Clean up running reservation. The search is over, so the
+                # credentials kept for a restart have no reason to exist.
                 self.storage.delete_running_reservation(chat_id)
+                self.storage.delete_resume_credentials(chat_id)
 
                 # Notify subscribers
                 subscribers = self.storage.get_all_subscribers()

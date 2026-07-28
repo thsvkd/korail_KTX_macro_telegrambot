@@ -110,6 +110,22 @@ class Settings:
     # Sessions expire so that credentials never linger indefinitely.
     SESSION_TTL_SECONDS: int = int(os.environ.get('SESSION_TTL_SECONDS', '86400'))
 
+    # Restart Recovery
+    #
+    # A search runs in a child process, so a restart of the app leaves the
+    # stored reservation without anything actually searching. Resuming means
+    # logging in to Korail again, which means keeping the password for as long
+    # as the search is alive - encrypted, in a key of its own, deleted the
+    # moment the search ends. Turn this off to be told about the interruption
+    # instead of recovering from it.
+    RESUME_ON_RESTART: bool = _env_bool('RESUME_ON_RESTART', True)
+    # Backstop only: the credentials are deleted when the search finishes.
+    RESUME_TTL_SECONDS: int = int(os.environ.get('RESUME_TTL_SECONDS', '259200'))
+
+    # Identifies this run of the application. Reservations carry it, so
+    # anything left over from an earlier run is recognisable as abandoned.
+    RUN_ID: str = secrets.token_hex(8)
+
     # Process Management
     RECURSION_LIMIT: int = 10**7
 
@@ -158,6 +174,13 @@ class Settings:
                 "ephemeral key, so stored sessions become unreadable after a "
                 "restart. Generate one with 'scripts/gen-secrets.sh'."
             )
+            if cls.RESUME_ON_RESTART:
+                messages.append(
+                    "RESUME_ON_RESTART is enabled but SESSION_SECRET is not "
+                    "set, so an interrupted search can never be resumed - the "
+                    "stored credentials are unreadable after the restart that "
+                    "would need them."
+                )
 
         if not cls.ADMIN_PASSWORD:
             messages.append(

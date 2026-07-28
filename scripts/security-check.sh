@@ -93,6 +93,21 @@ if [[ -f "$ENV_FILE" ]]; then
         fi
     done
 
+    # Resuming a search means reading back a password stored before the
+    # restart, which an ephemeral key cannot do - the feature would fail
+    # silently exactly when it is needed.
+    resume_on_restart="$(env_value RESUME_ON_RESTART)"
+    resume_on_restart="${resume_on_restart:-true}"
+    if [[ "$resume_on_restart" =~ ^([Tt]rue|1|[Yy]es|[Oo]n)$ ]]; then
+        if [[ -n "$(env_value SESSION_SECRET)" ]]; then
+            pass_check "RESUME_ON_RESTART is on and SESSION_SECRET can decrypt it"
+        else
+            fail_check "RESUME_ON_RESTART is on but SESSION_SECRET is empty - interrupted searches can never be resumed"
+        fi
+    else
+        pass_check "RESUME_ON_RESTART is off - no credentials are kept between restarts"
+    fi
+
     if [[ -n "$(env_value ADMIN_PASSWORD)" ]]; then
         pass_check "ADMIN_PASSWORD is set"
         if [[ -n "$(env_value USERPW)" && "$(env_value ADMIN_PASSWORD)" == "$(env_value USERPW)" ]]; then

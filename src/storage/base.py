@@ -50,6 +50,22 @@ class StorageInterface(ABC):
         """Get all running reservations."""
         pass
 
+    # Resume Credentials Management
+    @abstractmethod
+    def save_resume_credentials(self, chat_id: int, username: str, password: str) -> None:
+        """Store the credentials needed to restart an interrupted search."""
+        pass
+
+    @abstractmethod
+    def get_resume_credentials(self, chat_id: int) -> Optional[tuple]:
+        """Get (username, password) of an interrupted search, or None."""
+        pass
+
+    @abstractmethod
+    def delete_resume_credentials(self, chat_id: int) -> None:
+        """Forget the credentials of a search that is over."""
+        pass
+
     # Payment Status Management
     @abstractmethod
     def get_payment_status(self, chat_id: int) -> Optional[PaymentStatus]:
@@ -157,6 +173,53 @@ class StorageInterface(ABC):
     @abstractmethod
     def get_all_multi_reservation_statuses(self) -> List[MultiReservationStatus]:
         """Get all multi-reservation statuses."""
+        pass
+
+    # Partial Reservation Management (random seat allocation)
+    #
+    # Random seating books one seat at a time, so the seats already secured,
+    # the seat currently being paid for, and the payment handshake between the
+    # bot and its search process all have to outlive a single request.
+    @abstractmethod
+    def save_partial_reservation(
+        self, chat_id: int, seat_index: int, reservation_data: dict
+    ) -> None:
+        """Record a seat that has been reserved."""
+        pass
+
+    @abstractmethod
+    def get_partial_reservations(self, chat_id: int) -> List[dict]:
+        """Get the seats reserved so far."""
+        pass
+
+    @abstractmethod
+    def delete_partial_reservations(self, chat_id: int) -> None:
+        """Forget the seats reserved so far."""
+        pass
+
+    @abstractmethod
+    def get_current_seat_index(self, chat_id: int) -> Optional[int]:
+        """Get the seat currently awaiting payment, or None."""
+        pass
+
+    @abstractmethod
+    def set_current_seat_index(self, chat_id: int, index: Optional[int]) -> None:
+        """Set the seat currently awaiting payment."""
+        pass
+
+    @abstractmethod
+    def is_payment_ready(self, chat_id: int, seat_index: int) -> bool:
+        """Check whether the user confirmed payment for a seat."""
+        pass
+
+    @abstractmethod
+    def mark_payment_ready(self, chat_id: int, seat_index: int) -> None:
+        """Record that the user confirmed payment for a seat."""
+        pass
+
+    @abstractmethod
+    def wait_for_payment(self, chat_id: int, seat_index: int, timeout: int = 600) -> bool:
+        """Block until payment for a seat is confirmed or the timeout passes."""
         pass
 
     # Debug Mode Management

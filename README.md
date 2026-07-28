@@ -108,6 +108,8 @@ make requirements
 | `USERID` / `USERPW` | ❌ | 관리자 편의 로그인용 코레일 계정 |
 | `ALLOW_LIST` | ❌ | 허용할 사용자 전화번호 목록 (쉼표로 구분) |
 | `SESSION_TTL_SECONDS` | ❌ | 세션 보관 기간 (기본 86400) |
+| `RESUME_ON_RESTART` | ❌ | 재시작 시 중단된 검색 자동 재개 (기본 `true`). `SESSION_SECRET` 필요 |
+| `RESUME_TTL_SECONDS` | ❌ | 재개용 자격증명 보관 상한 (기본 259200 = 3일) |
 | `ADMIN_MAX_AUTH_FAILURES` | ❌ | 관리자 인증 실패 허용 횟수 (기본 5) |
 | `ADMIN_LOCKOUT_SECONDS` | ❌ | 인증 차단 시간 (기본 900) |
 | `FLASK_DEBUG` | ❌ | 기본 `False`. 외부에서 접근 가능한 호스트에서는 절대 켜지 마세요 |
@@ -130,6 +132,16 @@ make requirements
   `010-****-5678` 형태로 마스킹됩니다. `/status` 는 본인 예약만 보여줍니다.
 - **관리자 인증**: 실패 횟수가 `ADMIN_MAX_AUTH_FAILURES` 를 넘으면
   `ADMIN_LOCKOUT_SECONDS` 동안 차단됩니다.
+- **재시작 복구**: 검색은 자식 프로세스에서 돌기 때문에 앱을 재시작하면
+  기록만 남고 실제로 검색하는 주체가 사라집니다. 각 예약에 실행 ID를 남겨
+  이전 실행의 잔재를 식별하고, 자동 재개하거나 사용자에게 알린 뒤
+  정리합니다. 프로세스를 종료할 때는 `/proc` 으로 정말 우리 프로세스인지
+  확인합니다 — 재활용된 PID 를 잘못 종료하는 사고를 막기 위함입니다.
+
+  자동 재개(`RESUME_ON_RESTART=true`)를 켜면 검색이 살아있는 동안 코레일
+  비밀번호가 **암호화된 전용 키**(`resume_credentials:{chat_id}`)에 보관되고,
+  검색이 끝나거나 취소되면 즉시 삭제됩니다. 이미 좌석을 잡은 랜덤 배치
+  검색은 중복 예약을 피하려고 자동 재개하지 않습니다.
 - 배포 전 `./scripts/security-check.sh` 로 설정을 점검하세요.
 
 ## 개발 워크플로우

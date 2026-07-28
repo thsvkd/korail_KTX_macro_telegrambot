@@ -102,6 +102,9 @@ logger.info(f"Admin commands: {'enabled' if settings.ADMIN_PASSWORD else 'disabl
 logger.info(
     f"Admin magic login: {'enabled' if settings.ADMIN_MAGIC_STRING else 'disabled'}"
 )
+logger.info(
+    f"Resume on restart: {'enabled' if settings.RESUME_ON_RESTART else 'disabled'}"
+)
 logger.info("="*60)
 
 # In polling mode the bot pulls its own updates instead of waiting for
@@ -111,6 +114,12 @@ logger.info("="*60)
 #
 # The Flask reloader executes this module in two processes, which would give
 # the bot token two competing consumers and earn a 409 from Telegram.
+# A search lives in a child process, so anything recorded by a previous run of
+# this app is now unattended. Resume it or tell the user, before new updates
+# start arriving and /status has a chance to lie about it.
+if not is_running_from_reloader():
+    reservation_service.reconcile_after_restart()
+
 poller = None
 if settings.RECEIVE_MODE == 'polling' and not is_running_from_reloader():
     poller = TelegramPoller(

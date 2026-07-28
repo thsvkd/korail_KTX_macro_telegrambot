@@ -133,6 +133,61 @@ class RedisStorage(StorageInterface):
                     continue
         return reservations
 
+    # ==================== Resume Credentials Management ====================
+
+    def save_resume_credentials(self, chat_id: int, username: str, password: str) -> None:
+        """
+        Store the credentials needed to restart an interrupted search.
+
+        Kept apart from the user session and encrypted: this is the one place
+        a Korail password outlives the request that carried it, so it exists
+        only while a search is actually running.
+        """
+        key = f"resume_credentials:{chat_id}"
+        box = get_secret_box()
+        data = json.dumps({
+            "username": box.encrypt(username),
+            "password": box.encrypt(password)
+        })
+        self.redis.setex(key, settings.RESUME_TTL_SECONDS, data)
+        logger.debug(f"Saved resume credentials for chat_id={chat_id}")
+
+    def get_resume_credentials(self, chat_id: int) -> Optional[tuple]:
+        """
+        Get the credentials of an interrupted search.
+
+        Returns:
+            (username, password), or None when absent or undecryptable - the
+            latter happens when SESSION_SECRET changed, and the caller then
+            treats the search as unrecoverable.
+        """
+        data = self.redis.get(f"resume_credentials:{chat_id}")
+        if not data:
+            return None
+
+        try:
+            stored = json.loads(data)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to deserialize resume credentials: {e}")
+            return None
+
+        box = get_secret_box()
+        username = box.decrypt(stored.get("username"))
+        password = box.decrypt(stored.get("password"))
+
+        if not username or not password:
+            logger.warning(
+                f"Resume credentials for chat_id={chat_id} could not be read - "
+                f"the encryption key changed"
+            )
+            return None
+
+        return username, password
+
+    def delete_resume_credentials(self, chat_id: int) -> None:
+        """Forget the credentials of a search that is over."""
+        self.redis.delete(f"resume_credentials:{chat_id}")
+
     # ==================== Payment Status Management ====================
 
     def get_payment_status(self, chat_id: int) -> Optional[PaymentStatus]:
@@ -505,6 +560,7 @@ class RedisStorage(StorageInterface):
             "chat_id": reservation.chat_id,
             "process_id": reservation.process_id,
             "korail_id": reservation.korail_id,
+            "run_id": reservation.run_id,
             "search_params": {
                 "dep_date": reservation.search_params.dep_date,
                 "src_locate": reservation.search_params.src_locate,
@@ -537,7 +593,10 @@ class RedisStorage(StorageInterface):
             chat_id=data["chat_id"],
             process_id=data["process_id"],
             korail_id=data["korail_id"],
-            search_params=search_params
+            search_params=search_params,
+            # Records written before restart recovery existed have no run id,
+            # which correctly marks them as belonging to an earlier run.
+            run_id=data.get("run_id", "")
         )
 
     def _serialize_payment_status(self, status: PaymentStatus) -> dict:

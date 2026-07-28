@@ -47,7 +47,8 @@ class ReservationService:
         chat_id: int,
         username: str,
         password: str,
-        search_params: TrainSearchParams
+        search_params: TrainSearchParams,
+        resumed: bool = False
     ) -> bool:
         """
         Start a background reservation process.
@@ -57,6 +58,8 @@ class ReservationService:
             username: Korail username
             password: Korail password
             search_params: Train search parameters
+            resumed: True when picking up a search a restart interrupted, which
+                     only changes what the user and subscribers are told
 
         Returns:
             True if process started successfully
@@ -94,14 +97,21 @@ class ReservationService:
                 f"Started reservation process for chat_id={chat_id}, pid={proc.pid}"
             )
 
-            # Save running reservation
+            # Save running reservation, stamped with this run so that a later
+            # start can tell whether the process is still around.
             reservation = RunningReservation(
                 chat_id=chat_id,
                 process_id=proc.pid,
                 korail_id=username,
-                search_params=search_params
+                search_params=search_params,
+                run_id=settings.RUN_ID
             )
             self.storage.save_running_reservation(reservation)
+
+            # Keep what a restart would need to log in again. Deleted as soon
+            # as the search ends, whichever way it ends.
+            if settings.RESUME_ON_RESTART:
+                self.storage.save_resume_credentials(chat_id, username, password)
 
             # Update user session
             session = self.storage.get_user_session(chat_id)
@@ -109,17 +119,207 @@ class ReservationService:
                 session.process_id = proc.pid
                 self.storage.save_user_session(session)
 
-            # Notify subscribers
-            self._notify_subscribers_start(username, search_params)
+            if resumed:
+                self.telegram.send_message(
+                    chat_id,
+                    MessageTemplates.RESERVATION_RESUMED.format(
+                        srcLocate=search_params.src_locate,
+                        dstLocate=search_params.dst_locate,
+                        depDate=search_params.dep_date
+                    )
+                )
+            else:
+                # Notify subscribers
+                self._notify_subscribers_start(username, search_params)
 
-            # Send confirmation to user
-            self.telegram.send_message(chat_id, MessageTemplates.reservation_started())
+                # Send confirmation to user
+                self.telegram.send_message(
+                    chat_id, MessageTemplates.reservation_started()
+                )
 
             return True
 
         except Exception as e:
             logger.error(f"Failed to start reservation process: {e}")
             return False
+
+    # The placeholder PID used for reservations that never had a process.
+    _NO_PROCESS = 9999999
+
+    def _owns_process(self, pid: int) -> bool:
+        """
+        Check that a PID really belongs to one of our search processes.
+
+        PIDs get recycled. A record left behind by an earlier run can point at
+        a PID the kernel has since handed to something else entirely, and
+        signalling that would kill an innocent process.
+
+        Returns:
+            True when the PID may be signalled
+        """
+        if not os.path.isdir("/proc"):
+            # No way to verify here; keep the previous behaviour rather than
+            # silently refusing to cancel anything.
+            return True
+
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as handle:
+                return b"telebotBackProcess" in handle.read()
+        except (FileNotFoundError, ProcessLookupError):
+            return False
+        except OSError as e:
+            logger.warning(f"Could not inspect process {pid}: {e}")
+            return False
+
+    def _terminate_search_process(self, pid: int) -> bool:
+        """
+        Stop a search process, if it is still ours to stop.
+
+        Args:
+            pid: Process ID recorded for the reservation
+
+        Returns:
+            True if a signal was delivered
+        """
+        if pid == self._NO_PROCESS:
+            return False
+
+        if not self._owns_process(pid):
+            logger.info(
+                f"Process {pid} is gone or no longer one of ours - not signalling it"
+            )
+            return False
+
+        try:
+            os.kill(pid, signal.SIGTERM)
+            logger.info(f"Killed process {pid}")
+            return True
+        except ProcessLookupError:
+            logger.warning(f"Process {pid} not found")
+        except OSError as e:
+            logger.error(f"Failed to signal process {pid}: {e}")
+
+        return False
+
+    def reconcile_after_restart(self) -> dict:
+        """
+        Deal with searches left behind by a previous run of the application.
+
+        The search runs in a child process, so restarting the app abandons it
+        while its record stays in Redis - /status would report a search that
+        nothing is performing. Every record from an earlier run is either
+        resumed or cleaned up and reported.
+
+        Returns:
+            Counts keyed 'resumed', 'interrupted' and 'failed'
+        """
+        from telegramBot.messages import Messages
+
+        summary = {'resumed': 0, 'interrupted': 0, 'failed': 0}
+
+        try:
+            reservations = self.storage.get_all_running_reservations()
+        except Exception as e:
+            logger.error(f"Could not read running reservations: {e}", exc_info=True)
+            return summary
+
+        stale = [r for r in reservations if r.is_stale(settings.RUN_ID)]
+        if not stale:
+            return summary
+
+        logger.info(f"Found {len(stale)} reservation(s) left over from an earlier run")
+
+        for reservation in stale:
+            chat_id = reservation.chat_id
+            try:
+                # A previous run may have left the process alive - a bare
+                # restart of the app does not kill its children.
+                self._terminate_search_process(reservation.process_id)
+
+                if self._resume(reservation):
+                    summary['resumed'] += 1
+                    continue
+
+                self._abandon(reservation, Messages)
+                summary['interrupted'] += 1
+            except Exception as e:
+                logger.error(
+                    f"Failed to reconcile reservation for chat_id={chat_id}: {e}",
+                    exc_info=True
+                )
+                summary['failed'] += 1
+
+        logger.info(
+            f"Restart recovery: {summary['resumed']} resumed, "
+            f"{summary['interrupted']} interrupted, {summary['failed']} failed"
+        )
+        return summary
+
+    def _resume(self, reservation: RunningReservation) -> bool:
+        """
+        Try to pick an interrupted search back up.
+
+        Args:
+            reservation: Record left behind by an earlier run
+
+        Returns:
+            True when a new search process was started
+        """
+        chat_id = reservation.chat_id
+
+        if not settings.RESUME_ON_RESTART:
+            return False
+
+        # Random seating reserves one seat at a time. Restarting that search
+        # from the beginning would try to book seats the user already holds,
+        # so it is left to the user to decide.
+        if self.storage.get_partial_reservations(chat_id):
+            logger.info(
+                f"Not resuming chat_id={chat_id}: seats are already reserved"
+            )
+            return False
+
+        credentials = self.storage.get_resume_credentials(chat_id)
+        if not credentials:
+            logger.info(f"Not resuming chat_id={chat_id}: no usable credentials")
+            return False
+
+        username, password = credentials
+        logger.info(f"Resuming interrupted search for chat_id={chat_id}")
+
+        return self.start_reservation_process(
+            chat_id=chat_id,
+            username=username,
+            password=password,
+            search_params=reservation.search_params,
+            resumed=True
+        )
+
+    def _abandon(self, reservation: RunningReservation, messages) -> None:
+        """Tell the user their search is over and drop every trace of it."""
+        chat_id = reservation.chat_id
+        params = reservation.search_params
+
+        if self.storage.get_partial_reservations(chat_id):
+            text = messages.RESERVATION_INTERRUPTED_PARTIAL.format(
+                paymentUrl=settings.KORAIL_PAYMENT_URL
+            )
+        else:
+            text = messages.RESERVATION_INTERRUPTED.format(
+                srcLocate=params.src_locate,
+                dstLocate=params.dst_locate,
+                depDate=params.dep_date
+            )
+
+        self.telegram.send_message(chat_id, text)
+
+        self.storage.delete_running_reservation(chat_id)
+        self.storage.delete_resume_credentials(chat_id)
+
+        session = self.storage.get_user_session(chat_id)
+        if session:
+            session.reset()
+            self.storage.save_user_session(session)
 
     def cancel_reservation(self, chat_id: int) -> bool:
         """
@@ -138,16 +338,11 @@ class ReservationService:
                 logger.warning(f"No running reservation found for chat_id={chat_id}")
                 return False
 
-            # Kill process
-            try:
-                if reservation.process_id != 9999999:
-                    os.kill(reservation.process_id, signal.SIGTERM)
-                    logger.info(f"Killed process {reservation.process_id}")
-            except ProcessLookupError:
-                logger.warning(f"Process {reservation.process_id} not found")
+            self._terminate_search_process(reservation.process_id)
 
             # Clean up storage
             self.storage.delete_running_reservation(chat_id)
+            self.storage.delete_resume_credentials(chat_id)
 
             # Reset user session
             session = self.storage.get_user_session(chat_id)
@@ -180,10 +375,8 @@ class ReservationService:
 
         for reservation in reservations:
             try:
-                # Kill process
-                if reservation.process_id != 9999999:
-                    os.kill(reservation.process_id, signal.SIGTERM)
-                    logger.info(f"Killed process {reservation.process_id}")
+                self._terminate_search_process(reservation.process_id)
+                self.storage.delete_resume_credentials(reservation.chat_id)
 
                 # Notify user
                 self.telegram.send_message(

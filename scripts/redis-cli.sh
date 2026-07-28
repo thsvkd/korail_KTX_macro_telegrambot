@@ -53,4 +53,11 @@ if [[ "${1:-}" == "--keys" ]]; then
     exit 0
 fi
 
-exec docker exec -it "$CONTAINER" redis-cli -a "$PASSWORD" --no-auth-warning "$@"
+# -t only when there is a terminal to allocate: with piped stdin, docker
+# refuses outright with "the input device is not a TTY", which makes this
+# script unusable from a script or a pipeline.
+DOCKER_FLAGS=(-i)
+[[ -t 0 ]] && DOCKER_FLAGS+=(-t)
+
+exec docker exec "${DOCKER_FLAGS[@]}" "$CONTAINER" \
+    redis-cli -a "$PASSWORD" --no-auth-warning "$@"

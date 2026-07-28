@@ -2,6 +2,9 @@
 #
 # Run the bot locally against a reachable Redis.
 #
+# RECEIVE_MODE in .env decides how updates arrive: 'polling' (default) pulls
+# them and needs no public address, 'webhook' waits for Telegram to call in.
+#
 # Usage:
 #   scripts/run.sh              # start the Flask app
 #   scripts/run.sh --debug      # start with DEBUG logging (not Flask debug)
@@ -11,7 +14,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 for arg in "$@"; do
     case "$arg" in
         --debug) export LOG_LEVEL=DEBUG ;;
-        -h|--help) sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "Unknown option: $arg" ;;
     esac
 done
@@ -38,8 +41,24 @@ if [[ "${REDIS_HOST:-}" == "redis" ]]; then
 fi
 
 [[ -n "${BOTTOKEN:-}" ]] || die "BOTTOKEN is not set in .env"
-[[ -n "${TELEGRAM_WEBHOOK_SECRET:-}" ]] || \
-    die "TELEGRAM_WEBHOOK_SECRET is not set. Run 'scripts/gen-secrets.sh'."
+
+# Mirrors the default in src/config/settings.py, which also lowercases it.
+export RECEIVE_MODE="$(printf '%s' "${RECEIVE_MODE:-polling}" | tr '[:upper:]' '[:lower:]')"
+case "$RECEIVE_MODE" in
+    polling)
+        info "Receive mode: polling (updates are pulled - no public address needed)"
+        ;;
+    webhook)
+        info "Receive mode: webhook (Telegram must reach this host over HTTPS)"
+        # Without the secret anyone who can reach /telebot could forge updates,
+        # so the app refuses to start - fail here with something actionable.
+        [[ -n "${TELEGRAM_WEBHOOK_SECRET:-}" ]] || \
+            die "TELEGRAM_WEBHOOK_SECRET is not set. Run 'scripts/gen-secrets.sh'."
+        ;;
+    *)
+        die "RECEIVE_MODE must be 'polling' or 'webhook' (got '${RECEIVE_MODE}')"
+        ;;
+esac
 
 if [[ "${FLASK_DEBUG:-False}" =~ ^([Tt]rue|1|[Yy]es|[Oo]n)$ ]]; then
     warn "FLASK_DEBUG is enabled - the Werkzeug debugger allows remote code"

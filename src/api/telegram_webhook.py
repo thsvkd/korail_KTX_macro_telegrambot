@@ -4,9 +4,8 @@ from flask_restful import Resource
 
 from api.auth import verify_internal_request, verify_telegram_request
 from storage.base import StorageInterface
-from services import TelegramService, ReservationService, PaymentReminderService, MultiReservationReminderService
-from handlers import CommandHandler, ConversationHandler
-from models import PaymentStatus
+from services import TelegramService, ReservationService, PaymentReminderService
+from handlers import TelegramUpdateProcessor
 from utils.logger import get_logger
 from utils.privacy import mask_phone
 
@@ -43,16 +42,14 @@ class TelegramWebhook(Resource):
         self.reservation = reservation_service
         self.payment_reminder = payment_reminder_service
 
-        # Initialize multi-reservation reminder service (singleton for thread tracking)
-        self.multi_reminder = MultiReservationReminderService(storage, telegram_service)
-
-        # Initialize handlers
-        self.command_handler = CommandHandler(
+        # The routing itself is shared with the poller, so it lives outside
+        # this resource and knows nothing about Flask.
+        self.processor = TelegramUpdateProcessor(
             storage, telegram_service, reservation_service, payment_reminder_service
         )
-        self.conversation_handler = ConversationHandler(
-            storage, telegram_service, reservation_service
-        )
+        # The GET callback needs the same reminder service instance the
+        # processor uses, so that its thread bookkeeping stays consistent.
+        self.multi_reminder = self.processor.multi_reminder
 
     def post(self):
         """
@@ -66,119 +63,18 @@ class TelegramWebhook(Resource):
             return make_response("Forbidden", 403)
 
         try:
-            data = request.json
-
-            # Ignore edited messages and chat member updates
-            if "edited_message" in data or "my_chat_member" in data:
-                return make_response("OK")
-
-            # Extract message
-            try:
-                message = data['message']
-                text = message['text'].strip()
-                chat_id = int(message['chat']['id'])
-            except (KeyError, ValueError) as e:
-                logger.error(f"Invalid message format: {e}")
-                return make_response("OK")
-
-            logger.info(f"Received message from chat_id={chat_id}: {text}")
-
-            # Get user session to check progress
-            session = self.storage.get_user_session(chat_id)
-            in_progress = session.in_progress if session else False
-            progress_num = session.last_action if session else 0
-
-            logger.debug(
-                f"chat_id={chat_id}, in_progress={in_progress}, "
-                f"progress={progress_num}"
-            )
-
-            # Check for payment reminder active state (single reservation)
-            payment_status = self.storage.get_payment_status(chat_id)
-            if payment_status and payment_status.reminder_active and not payment_status.completed:
-                # User sent any non-command message during payment reminder
-                if text and not text.startswith('/'):
-                    self.payment_reminder.confirm_payment(chat_id)
-                    return make_response("OK")
-
-            # Check for multi-reservation reminder active state (no current_seat_index set)
-            # This handles the case when ALL seats are reserved but waiting for final payment
-            multi_status = self.storage.get_multi_reservation_status(chat_id)
-            if multi_status and multi_status.should_show_reminder():
-                # Check if we're NOT in middle of random seating (no current_seat_index)
-                current_seat = self.storage.get_current_seat_index(chat_id)
-                if current_seat is None:
-                    # All seats reserved, just waiting for payment confirmation
-                    if text and not text.startswith('/'):
-                        # Mark all as paid and stop reminders
-                        self.multi_reminder.mark_all_paid(chat_id)
-
-                        # Send confirmation
-                        self.telegram.send_message(
-                            chat_id,
-                            "✅ 결제 완료 확인!\n\n모든 좌석의 결제 알림이 중단되었습니다."
-                        )
-                        return make_response("OK")
-
-            # Handle /cancel command first (works in any state)
-            if text == "/cancel":
-                self.command_handler.handle_cancel(chat_id)
-                return make_response("OK")
-
-            # Route commands BEFORE checking random seating state
-            # This allows users to use /help, /status even during payment waiting
-            if self.command_handler.is_command(text):
-                self.command_handler.route_command(chat_id, text)
-                return make_response("OK")
-
-            # Check if random seating in progress (waiting for payment confirmation)
-            current_seat = self.storage.get_current_seat_index(chat_id)
-            if current_seat is not None:  # Random seating in progress
-                # ANY message confirms payment and proceeds to next seat
-                logger.info(f"Payment confirmed for seat {current_seat} by user message, chat_id={chat_id}")
-
-                # Mark payment ready for background process
-                self.storage.mark_payment_ready(chat_id, current_seat)
-
-                # DON'T stop reminders - they should continue running for remaining seats
-                # The reminder service will automatically update when new seats are added
-                logger.info(f"Payment confirmed, reminders will continue for remaining seats")
-
-                # Send confirmation
-                self.telegram.send_message(
-                    chat_id,
-                    f"✅ {current_seat + 1}번째 좌석 결제 확인!\n\n"
-                    f"다음 좌석 예약을 시작합니다..."
-                )
-
-                return make_response("OK")
-
-            # Check if waiting for admin password (takes priority over everything)
-            if self.storage.is_waiting_for_admin_password(chat_id):
-                # User is waiting to enter admin password
-                if self.command_handler.handle_admin_password(chat_id, text):
-                    # Successfully authenticated
-                    return make_response("OK")
-                else:
-                    # Failed authentication
-                    return make_response("OK")
-
-            # Handle conversation flow (non-command messages)
-            if in_progress:
-                # Handle conversation flow
-                self.conversation_handler.handle_message(chat_id, text)
-            else:
-                # No active session and not a command
-                self.telegram.send_message(
-                    chat_id,
-                    "[진행중인 예약프로세스가 없습니다]\n/start 를 입력하여 작업을 시작하세요."
-                )
-
+            update = request.json
+        except Exception as e:
+            # A body we cannot parse will not become parseable on a retry, so
+            # acknowledge it instead of making Telegram resend it forever.
+            logger.error(f"Malformed webhook body: {e}")
             return make_response("OK")
 
-        except Exception as e:
-            logger.error(f"Error handling webhook: {e}", exc_info=True)
-            return make_response("OK")  # Still return OK to Telegram
+        self.processor.process(update)
+
+        # Always OK: Telegram retries anything else, and a retry cannot fix a
+        # failure that happened while handling the update.
+        return make_response("OK")
 
     def get(self):
         """

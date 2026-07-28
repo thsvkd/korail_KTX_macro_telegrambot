@@ -28,6 +28,21 @@ is_placeholder() {
     [[ "$1" =~ ^your_.*_here$ ]]
 }
 
+# check_required <KEY> - report a secret the app refuses to start without
+check_required() {
+    local key="$1"
+    local value
+    value="$(env_value "$key")"
+
+    if is_placeholder "$value"; then
+        fail_check "${key} still holds the .env.example placeholder"
+    elif [[ -n "$value" ]]; then
+        pass_check "${key} is set"
+    else
+        fail_check "${key} is empty - the app will refuse to start"
+    fi
+}
+
 echo "Configuration"
 
 if [[ -f "$ENV_FILE" ]]; then
@@ -40,16 +55,24 @@ if [[ -f "$ENV_FILE" ]]; then
         warn_check ".env permissions are ${perms} - tighten with 'chmod 600 .env'"
     fi
 
-    for key in BOTTOKEN TELEGRAM_WEBHOOK_SECRET; do
-        value="$(env_value "$key")"
-        if is_placeholder "$value"; then
-            fail_check "${key} still holds the .env.example placeholder"
-        elif [[ -n "$value" ]]; then
-            pass_check "${key} is set"
-        else
-            fail_check "${key} is empty - the app will refuse to start"
-        fi
-    done
+    check_required BOTTOKEN
+
+    # The webhook secret is what keeps forged updates out of /telebot. In
+    # polling mode there is no such endpoint to protect, so demanding one
+    # would only train people to ignore this output.
+    receive_mode="$(env_value RECEIVE_MODE)"
+    receive_mode="${receive_mode:-polling}"
+    case "$receive_mode" in
+        webhook)
+            check_required TELEGRAM_WEBHOOK_SECRET
+            ;;
+        polling)
+            pass_check "RECEIVE_MODE=polling - no webhook endpoint is exposed"
+            ;;
+        *)
+            fail_check "RECEIVE_MODE=${receive_mode} is neither 'polling' nor 'webhook' - the app will refuse to start"
+            ;;
+    esac
 
     # Telegram tokens look like <bot_id>:<35 chars>. Catching a mangled one
     # here beats discovering it when the first message fails to send.

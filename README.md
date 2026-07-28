@@ -12,10 +12,9 @@ cd korail_KTX_macro_telegrambot
 # .env 생성 + 시크릿 발급 + 의존성 설치 (처음 한 번만)
 ./scripts/setup.sh
 
-# .env 에 BOTTOKEN 입력 후 웹훅 등록
-./scripts/set-webhook.sh https://your.domain/telebot
+# .env 에 BOTTOKEN 입력
 
-# 실행
+# 실행 (기본값인 폴링 모드는 공인 IP·HTTPS 없이 바로 동작합니다)
 ./scripts/run.sh
 ```
 
@@ -42,13 +41,28 @@ cd korail_KTX_macro_telegrambot
 
 # 2. .env 를 열어 BOTTOKEN 입력
 
-# 3. 웹훅 등록 (TELEGRAM_WEBHOOK_SECRET 과 함께 등록됩니다)
-./scripts/set-webhook.sh https://your.domain/telebot
-
-# 4. 개발용 Redis 기동 후 실행
+# 3. 개발용 Redis 기동 후 실행
 ./scripts/dev-redis.sh
 ./scripts/run.sh
 ```
+
+### 업데이트 수신 방식 (`RECEIVE_MODE`)
+
+| 값 | 동작 | 언제 |
+|----|------|------|
+| `polling` (기본) | 봇이 텔레그램에 직접 업데이트를 요청 | 공유기 뒤 라즈베리파이, 로컬 개발 등 외부에서 접근할 주소가 없을 때 |
+| `webhook` | 텔레그램이 공개 HTTPS 엔드포인트로 전달 | 도메인과 인증서가 준비된 배포 환경 |
+
+웹훅 모드일 때만 `TELEGRAM_WEBHOOK_SECRET` 과 웹훅 등록이 필요합니다.
+
+```bash
+# .env 에 RECEIVE_MODE=webhook 설정 후
+./scripts/set-webhook.sh https://your.domain/telebot
+```
+
+봇 토큰 하나는 소비자를 하나만 가질 수 있습니다. 폴링은 시작할 때 등록된
+웹훅을 해제하며, 같은 토큰으로 두 인스턴스를 띄우면 텔레그램이 409 를
+돌려줍니다.
 
 > compose 의 Redis 는 보안상 호스트에 포트를 열지 않습니다. 앱을 호스트에서
 > 직접 실행할 때는 `dev-redis.sh` 가 띄우는 127.0.0.1 전용 인스턴스를
@@ -85,7 +99,8 @@ make requirements
 | 변수명 | 필수 | 설명 |
 |--------|------|------|
 | `BOTTOKEN` | ✅ | 텔레그램 봇 토큰 |
-| `TELEGRAM_WEBHOOK_SECRET` | ✅ | 웹훅 인증용 시크릿. 없으면 앱이 기동하지 않습니다 |
+| `RECEIVE_MODE` | ❌ | 업데이트 수신 방식. `polling`(기본) 또는 `webhook` |
+| `TELEGRAM_WEBHOOK_SECRET` | ⚠️ | 웹훅 인증용 시크릿. 웹훅 모드에서는 없으면 앱이 기동하지 않습니다 |
 | `SESSION_SECRET` | ⚠️ | 코레일 로그인 정보 암호화 키. 없으면 임시 키를 쓰며 재시작 시 세션이 무효화됩니다 |
 | `REDIS_PASSWORD` | ⚠️ | Redis AUTH 비밀번호. docker compose 사용 시 필수 |
 | `ADMIN_PASSWORD` | ❌ | 관리자 명령 비밀번호. 미설정 시 관리자 명령 전체 비활성화. **코레일 비밀번호와 달라야 합니다** |
@@ -101,9 +116,10 @@ make requirements
 
 ## 보안
 
-- **웹훅 인증**: `/telebot` POST 는 Telegram 이 보내는
+- **웹훅 인증**: 웹훅 모드에서 `/telebot` POST 는 Telegram 이 보내는
   `X-Telegram-Bot-Api-Secret-Token` 헤더를 검증합니다. 시크릿을 바꾸면
-  `./scripts/set-webhook.sh` 로 재등록해야 합니다.
+  `./scripts/set-webhook.sh` 로 재등록해야 합니다. 폴링 모드에서는 업데이트가
+  우리가 연 아웃바운드 연결로만 들어오므로 이 경로가 아예 쓰이지 않습니다.
 - **내부 콜백**: 백그라운드 예약 프로세스가 쓰는 `/telebot` GET 과
   `/check_payment` 는 루프백 주소 + 프로세스 시작 시 생성되는 토큰을 함께
   요구합니다.

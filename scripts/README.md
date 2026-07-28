@@ -5,9 +5,14 @@
 
 ```bash
 scripts/setup.sh            # 최초 1회
-scripts/set-webhook.sh https://your.domain/telebot
 scripts/dev-redis.sh        # 로컬 개발용 Redis
 scripts/run.sh
+```
+
+웹훅 모드(`RECEIVE_MODE=webhook`)로 운영할 때만 웹훅 등록이 추가로 필요합니다.
+
+```bash
+scripts/set-webhook.sh https://your.domain/telebot
 ```
 
 ## 개발
@@ -42,10 +47,16 @@ scripts/run.sh
 
 ## 알아둘 점
 
-- **웹훅 시크릿은 필수입니다.** `TELEGRAM_WEBHOOK_SECRET` 없이는 앱이 기동하지
-  않습니다. 이 값이 없으면 `/telebot` 에 도달할 수 있는 누구나 임의 사용자의
-  메시지를 위조할 수 있기 때문입니다. 값을 바꾸면 `set-webhook.sh` 를 다시
-  실행해야 합니다.
+- **`RECEIVE_MODE` 이 업데이트 수신 방식을 정합니다.** 기본값 `polling` 은
+  봇이 텔레그램에 직접 물어보는 방식이라 공인 IP·HTTPS·포트포워딩이 필요
+  없습니다(공유기 뒤 라즈베리파이). `webhook` 은 텔레그램이 공개 HTTPS
+  엔드포인트로 밀어넣는 방식입니다. 봇 토큰 하나당 소비자는 하나뿐이라,
+  폴링 시작 시 등록된 웹훅은 자동으로 해제됩니다.
+- **웹훅 모드에서는 웹훅 시크릿이 필수입니다.** `TELEGRAM_WEBHOOK_SECRET`
+  없이는 앱이 기동하지 않습니다. 이 값이 없으면 `/telebot` 에 도달할 수 있는
+  누구나 임의 사용자의 메시지를 위조할 수 있기 때문입니다. 값을 바꾸면
+  `set-webhook.sh` 를 다시 실행해야 합니다. 폴링 모드에서는 노출되는
+  엔드포인트가 없으므로 이 값을 요구하지 않습니다.
 - **`SESSION_SECRET` 을 바꾸면** 저장된 세션을 복호화할 수 없어 사용자들이
   코레일 로그인 정보를 다시 입력해야 합니다.
 - **`ADMIN_PASSWORD` 는 코레일 비밀번호와 달라야 합니다.** 텔레그램으로

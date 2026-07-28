@@ -3,7 +3,10 @@ Flask application entry point for Korail KTX Telegram Bot.
 
 This is the refactored version using the new service-oriented architecture.
 """
+import atexit
+import signal
 import sys
+import threading
 from flask import Flask
 from flask_restful import Api
 from flask_cors import CORS
@@ -133,11 +136,73 @@ if settings.RECEIVE_MODE == 'polling' and not is_running_from_reloader():
     )
     poller.start()
 
+
+_shutdown_lock = threading.Lock()
+_shutdown_done = False
+
+
+def shutdown() -> None:
+    """
+    Stop polling and take the running searches down with the app.
+
+    Runs at most once, from whichever of the signal handler, the exit hook or
+    the main loop gets here first.
+    """
+    global _shutdown_done
+    with _shutdown_lock:
+        if _shutdown_done:
+            return
+        _shutdown_done = True
+
+    logger.info("Shutting down...")
+
+    if poller:
+        poller.stop()
+
+    try:
+        reservation_service.shutdown()
+    except Exception as e:
+        logger.error(f"Error while stopping search processes: {e}", exc_info=True)
+
+    logger.info("Shutdown complete")
+
+
+def _handle_stop_signal(signum, _frame):
+    """
+    Leave the main loop so the exit path runs.
+
+    Without a handler here SIGTERM is fatal on the spot, and the searches this
+    process started are left behind with nowhere to report to. In a container
+    it is worse than that: the app is PID 1, and PID 1 ignores every signal it
+    has not explicitly asked for - 'docker stop' would wait out its whole
+    timeout and then SIGKILL the app.
+    """
+    logger.info(f"Received {signal.Signals(signum).name}")
+    raise SystemExit(0)
+
+
+# The reloader runs this module in two processes; only the one that owns the
+# poller and the search processes should be tearing anything down.
+if not is_running_from_reloader():
+    atexit.register(shutdown)
+    try:
+        signal.signal(signal.SIGTERM, _handle_stop_signal)
+        signal.signal(signal.SIGINT, _handle_stop_signal)
+    except ValueError:
+        # Only the main thread may install handlers. A WSGI server that
+        # imports this module from a worker thread does its own signal
+        # handling; the exit hook above still runs when it tears the worker
+        # down.
+        logger.debug("Not the main thread - leaving signal handling alone")
+
 if __name__ == '__main__':
     logger.info("Starting Flask application...")
-    application.run(
-        debug=settings.FLASK_DEBUG,
-        host=settings.FLASK_HOST,
-        port=settings.FLASK_PORT,
-        threaded=True
-    )
+    try:
+        application.run(
+            debug=settings.FLASK_DEBUG,
+            host=settings.FLASK_HOST,
+            port=settings.FLASK_PORT,
+            threaded=True
+        )
+    finally:
+        shutdown()

@@ -7,7 +7,9 @@ not signalling a PID that is no longer ours.
 
 They run without Redis or a network.
 """
+import contextlib
 import os
+import signal
 from unittest.mock import Mock, patch
 
 import pytest
@@ -207,13 +209,12 @@ class TestProcessSafety:
         kill.assert_not_called()
 
     def test_our_own_process_is_signalled(self, service):
-        with patch('os.path.isdir', return_value=True), \
-             patch('builtins.open',
-                   side_effect=lambda *a, **k: _cmdline(b"python\x00-m\x00telegramBot.telebotBackProcess\x00")), \
-             patch('os.kill') as kill:
+        process = _FakeProcess()
+
+        with _ours(), patch('os.kill', process.kill):
             assert service._terminate_search_process(4242) is True
 
-        kill.assert_called_once()
+        assert process.signals == [signal.SIGTERM]
 
     def test_dead_pid_is_not_signalled(self, service):
         with patch('os.path.isdir', return_value=True), \
@@ -231,10 +232,127 @@ class TestProcessSafety:
 
     def test_without_proc_the_signal_is_still_sent(self, service):
         """On systems without /proc there is nothing to verify against."""
-        with patch('os.path.isdir', return_value=False), patch('os.kill') as kill:
+        process = _FakeProcess()
+
+        with patch('os.path.isdir', return_value=False), patch('os.kill', process.kill):
             assert service._terminate_search_process(4242) is True
 
-        kill.assert_called_once()
+        assert process.signals == [signal.SIGTERM]
+
+
+class TestTermination:
+    """
+    A search that will not stop has to be made to.
+
+    It keeps asking Korail for seats and reports what it finds to an endpoint
+    that dies with the app, so a reservation it wins would expire unpaid
+    without the user ever being told.
+    """
+
+    def test_a_process_ignoring_sigterm_is_killed(self, service):
+        process = _FakeProcess(dies_on=None)  # only SIGKILL gets through
+
+        with _ours(), patch('os.kill', process.kill), \
+             patch.object(service, '_TERMINATE_GRACE_SECONDS', 0.05):
+            assert service._terminate_search_process(4242) is True
+
+        assert process.signals == [signal.SIGTERM, signal.SIGKILL]
+        assert 4242 in process.dead
+
+    def test_a_process_that_stops_is_not_killed(self, service):
+        process = _FakeProcess()
+
+        with _ours(), patch('os.kill', process.kill), \
+             patch.object(service, '_TERMINATE_GRACE_SECONDS', 0.05):
+            service._terminate_search_process(4242)
+
+        assert signal.SIGKILL not in process.signals
+
+    def test_a_finished_child_is_never_killed(self, service):
+        """
+        A child that exited but has not been collected still answers kill(),
+        so liveness is read off the process handle rather than the signal.
+        Counting that zombie as alive would earn it a pointless SIGKILL.
+        """
+        service._children[4242] = _FakeChild(4242, returncode=0)
+        process = _FakeProcess()
+
+        with _ours(), patch('os.kill', process.kill), \
+             patch.object(service, '_TERMINATE_GRACE_SECONDS', 5):
+            service._terminate_search_process(4242)
+
+        assert process.signals == [signal.SIGTERM]
+        assert 4242 not in service._children
+
+    def test_finished_children_are_collected(self, service):
+        service._children[1] = _FakeChild(1, returncode=0)
+        service._children[2] = _FakeChild(2, returncode=None)
+
+        service._reap_children()
+
+        assert list(service._children) == [2]
+
+
+class TestShutdown:
+    """Stopping the app stops the searches it started."""
+
+    def _shutdown(self, service, process):
+        with _ours(), patch('os.kill', process.kill), \
+             patch.object(service, '_TERMINATE_GRACE_SECONDS', 0.05):
+            service.shutdown()
+
+    def test_every_running_search_is_stopped(self, service):
+        process = _FakeProcess()
+        service._children[4242] = process.child(4242)
+        service._children[4243] = process.child(4243)
+
+        self._shutdown(service, process)
+
+        assert process.signals == [signal.SIGTERM, signal.SIGTERM]
+        assert process.dead == {4242, 4243}
+
+    def test_the_records_survive_so_the_searches_can_be_resumed(self, service):
+        process = _FakeProcess()
+        service._children[4242] = process.child(4242)
+
+        self._shutdown(service, process)
+
+        service.storage.delete_running_reservation.assert_not_called()
+        service.storage.delete_resume_credentials.assert_not_called()
+
+    def test_a_search_that_already_finished_is_not_signalled(self, service):
+        service._children[4242] = _FakeChild(4242, returncode=0)
+
+        with _ours(), patch('os.kill') as kill:
+            service.shutdown()
+
+        kill.assert_not_called()
+
+    def test_nothing_to_stop_is_not_an_error(self, service):
+        with patch('os.kill') as kill:
+            service.shutdown()
+
+        kill.assert_not_called()
+
+
+class TestSearchIsolation:
+    """The bot is the only thing that ends a search."""
+
+    def test_the_search_runs_in_a_session_of_its_own(self, service, search_params):
+        """
+        Otherwise a Ctrl-C in the terminal running the bot reaches the search
+        directly, killing it mid-request behind the bot's back.
+        """
+        with patch('subprocess.Popen') as popen:
+            popen.return_value.pid = 4242
+            service.start_reservation_process(
+                chat_id=555,
+                username=USERNAME,
+                password=PASSWORD,
+                search_params=search_params
+            )
+
+        assert popen.call_args.kwargs['start_new_session'] is True
 
 
 class _cmdline:
@@ -251,3 +369,58 @@ class _cmdline:
 
     def read(self):
         return self.content
+
+
+@contextlib.contextmanager
+def _ours():
+    """Make /proc report the PID under test as one of our search processes."""
+    cmdline = b"python\x00-m\x00telegramBot.telebotBackProcess\x00"
+    with patch('os.path.isdir', return_value=True), \
+         patch('builtins.open', side_effect=lambda *a, **k: _cmdline(cmdline)):
+        yield
+
+
+class _FakeProcess:
+    """
+    Stands in for the processes signals are sent to, one entry per PID.
+
+    Signal 0 is the liveness probe and never kills anything; `dies_on` is the
+    signal these processes act on, or None for one that ignores everything
+    SIGKILL does not enforce.
+    """
+
+    def __init__(self, dies_on=signal.SIGTERM):
+        self.dies_on = dies_on
+        self.dead = set()
+        self.signals = []
+
+    def kill(self, pid, sig):
+        if pid in self.dead:
+            raise ProcessLookupError(pid)
+        if sig == 0:
+            return
+        self.signals.append(sig)
+        if sig == signal.SIGKILL or sig == self.dies_on:
+            self.dead.add(pid)
+
+    def child(self, pid):
+        """A Popen stand-in for this PID, which exits when the PID dies."""
+        return _FakeChild(pid, process=self)
+
+
+class _FakeChild:
+    """Stand-in for the Popen handle on a search process."""
+
+    def __init__(self, pid, returncode=None, process=None):
+        self.pid = pid
+        self._returncode = returncode
+        self._process = process
+
+    @property
+    def returncode(self):
+        return self.poll()
+
+    def poll(self):
+        if self._process is not None and self.pid in self._process.dead:
+            return 0
+        return self._returncode

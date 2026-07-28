@@ -3,7 +3,8 @@ import json
 import subprocess
 import signal
 import os
-from typing import Optional
+import time
+from typing import Dict, Optional
 from korail2 import TrainType, ReserveOption
 
 from config.settings import settings
@@ -41,6 +42,10 @@ class ReservationService:
         """
         self.storage = storage
         self.telegram = telegram_service
+        # Handles on the search processes this run started, keyed by PID.
+        # Kept so that a finished search can be collected instead of lingering
+        # as a zombie, and so shutdown knows exactly what to stop.
+        self._children: Dict[int, subprocess.Popen] = {}
 
     def start_reservation_process(
         self,
@@ -65,6 +70,8 @@ class ReservationService:
             True if process started successfully
         """
         try:
+            self._reap_children()
+
             # Credentials are deliberately absent from argv: anything passed on
             # a command line is world-readable through `ps` and /proc. They are
             # written to the child's stdin instead.
@@ -81,9 +88,18 @@ class ReservationService:
                 search_params.seat_strategy
             ]
 
-            # Start background process
+            # Start background process.
+            #
+            # start_new_session puts the search in a session of its own, so a
+            # Ctrl-C in the terminal running the bot reaches the bot alone.
+            # Otherwise the search dies from the same keystroke, in the middle
+            # of whatever it was doing and without the bot ever knowing - and
+            # a search stopped that way behaves differently from one stopped by
+            # /cancel or by a service manager. Ending a search is the bot's job,
+            # and this leaves it the only way it happens.
             cmd = ['python', '-m', 'telegramBot.telebotBackProcess'] + arguments
-            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, start_new_session=True)
+            self._children[proc.pid] = proc
 
             # Hand over credentials and close the pipe so the child stops waiting.
             credentials = json.dumps({"username": username, "password": password})
@@ -171,15 +187,90 @@ class ReservationService:
             logger.warning(f"Could not inspect process {pid}: {e}")
             return False
 
+    # How long a search process is given to act on SIGTERM before it is
+    # killed outright, and how often it is checked in the meantime.
+    _TERMINATE_GRACE_SECONDS = 3.0
+    _TERMINATE_POLL_SECONDS = 0.05
+
+    def _reap_children(self) -> None:
+        """
+        Collect the search processes that have already finished.
+
+        A finished child stays in the process table until its parent picks up
+        its exit status. The bot runs for weeks at a time and starts a process
+        per search, so nothing may be left uncollected.
+        """
+        for pid, child in list(self._children.items()):
+            if child.poll() is not None:
+                del self._children[pid]
+                logger.debug(f"Search process {pid} exited with {child.returncode}")
+
+    def _forget_child(self, pid: int) -> None:
+        """
+        Drop our handle on a search process, collecting it on the way out.
+
+        Dropping the handle without polling it first would strand a process
+        that has exited but not yet been collected: nothing would be left that
+        could ever collect it.
+        """
+        child = self._children.pop(pid, None)
+        if child is not None:
+            child.poll()
+
+    def _is_running(self, pid: int) -> bool:
+        """
+        Check whether a signalled process is still executing.
+
+        Our own children are asked through their process handle: a child that
+        exited but has not been collected yet is still a process as far as
+        kill() is concerned, and treating that zombie as alive would earn it a
+        pointless SIGKILL.
+        """
+        child = self._children.get(pid)
+        if child is not None:
+            if child.poll() is None:
+                return True
+            del self._children[pid]
+            return False
+
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
+
+    def _wait_for_exit(self, pid: int, timeout: float) -> bool:
+        """
+        Wait up to `timeout` seconds for a process to go away.
+
+        Returns:
+            True if it exited within the timeout
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            if not self._is_running(pid):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(self._TERMINATE_POLL_SECONDS)
+
     def _terminate_search_process(self, pid: int) -> bool:
         """
         Stop a search process, if it is still ours to stop.
+
+        SIGTERM is a request, and a search blocked on a Korail request that
+        never answers may not get around to it. A search left running is not
+        harmless: it keeps asking Korail for seats, and it reports what it
+        finds to an HTTP endpoint that may no longer exist, so the reservation
+        it wins would expire unpaid without the user ever hearing about it.
+        That is worth escalating to SIGKILL for.
 
         Args:
             pid: Process ID recorded for the reservation
 
         Returns:
-            True if a signal was delivered
+            True if the process was stopped (or was already gone after being
+            signalled)
         """
         if pid == self._NO_PROCESS:
             return False
@@ -188,18 +279,61 @@ class ReservationService:
             logger.info(
                 f"Process {pid} is gone or no longer one of ours - not signalling it"
             )
+            self._forget_child(pid)
             return False
 
         try:
             os.kill(pid, signal.SIGTERM)
-            logger.info(f"Killed process {pid}")
-            return True
+            logger.info(f"Asked search process {pid} to stop")
         except ProcessLookupError:
             logger.warning(f"Process {pid} not found")
+            self._forget_child(pid)
+            return False
         except OSError as e:
             logger.error(f"Failed to signal process {pid}: {e}")
+            return False
 
-        return False
+        if self._wait_for_exit(pid, self._TERMINATE_GRACE_SECONDS):
+            logger.info(f"Search process {pid} stopped")
+            return True
+
+        logger.warning(
+            f"Search process {pid} did not stop within "
+            f"{self._TERMINATE_GRACE_SECONDS:.0f}s - killing it"
+        )
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError as e:
+            logger.error(f"Failed to kill process {pid}: {e}")
+            return False
+
+        self._wait_for_exit(pid, self._TERMINATE_GRACE_SECONDS)
+        return True
+
+    def shutdown(self) -> None:
+        """
+        Stop every search this run started.
+
+        A search reports back to an HTTP endpoint served by this very process,
+        so one that outlives the app is worse than useless: it goes on asking
+        Korail for seats, and the reservation it eventually wins is announced
+        to nobody and expires unpaid. The records in Redis are left in place -
+        they are what the next start reads to pick the searches back up.
+        """
+        self._reap_children()
+
+        running = [pid for pid in list(self._children) if self._is_running(pid)]
+        if not running:
+            return
+
+        logger.info(f"Stopping {len(running)} running search process(es)")
+        for pid in running:
+            try:
+                self._terminate_search_process(pid)
+            except Exception as e:
+                logger.error(f"Failed to stop search process {pid}: {e}")
 
     def reconcile_after_restart(self) -> dict:
         """
@@ -420,6 +554,8 @@ class ReservationService:
         Returns:
             Status message
         """
+        self._reap_children()
+
         reservations = self.storage.get_all_running_reservations()
         total = len(reservations)
         mine = next((r for r in reservations if r.chat_id == chat_id), None)

@@ -4,6 +4,7 @@ Integration tests for reservation service.
 Tests process management, cancellation, and state management.
 """
 import pytest
+import signal
 import time
 from unittest.mock import Mock, patch
 
@@ -246,12 +247,24 @@ class TestReservationService:
         self.service.start_reservation_process(22222, "010-2222-2222", "pass2", search_params)
 
         # Cancel all. See above: the PIDs are mocks, so ownership is forced.
-        with patch('os.kill') as mock_kill, \
+        # os.kill has to behave like the real thing too - cancelling checks
+        # that the search actually went away, and a kill() that never fails
+        # describes a process nothing can stop.
+        stopped = set()
+
+        def kill(pid, sig):
+            if pid in stopped:
+                raise ProcessLookupError(pid)
+            if sig != 0:  # signal 0 only asks whether the process is there
+                stopped.add(pid)
+
+        with patch('os.kill', side_effect=kill) as mock_kill, \
              patch.object(ReservationService, '_owns_process', return_value=True):
             count = self.service.cancel_all_reservations(99999)
 
             assert count == 2
-            assert mock_kill.call_count == 2
+            delivered = [c.args[1] for c in mock_kill.call_args_list if c.args[1] != 0]
+            assert delivered == [signal.SIGTERM, signal.SIGTERM]
 
             # All should be cleaned up
             all_reservations = self.storage.get_all_running_reservations()

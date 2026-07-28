@@ -8,6 +8,7 @@ Search parameters arrive on argv; Korail credentials arrive as a single
 JSON line on stdin, because argv is readable by every process on the host.
 """
 import json
+import signal
 import sys
 import time
 import requests
@@ -32,6 +33,43 @@ logger = get_logger(__name__)
 
 # Set recursion limit
 sys.setrecursionlimit(settings.RECURSION_LIMIT)
+
+
+class SearchStopped(SystemExit):
+    """
+    Raised inside the search process when it is asked to stop.
+
+    Deriving from SystemExit keeps it a BaseException, so it travels through
+    the `except Exception` blocks of the search loop untouched and never
+    turns into an error report to the user: whoever sent the signal already
+    knows the search is over. The exit status stays 0 - being told to stop is
+    not a failure.
+    """
+
+    def __init__(self, signum: int):
+        super().__init__(0)
+        self.signal_name = signal.Signals(signum).name
+
+
+def install_shutdown_handlers() -> None:
+    """
+    Turn a stop signal into an orderly exit.
+
+    A search spends nearly all of its life asleep between requests, so a stop
+    signal almost always lands somewhere in the middle of the loop. Without a
+    handler that is either an instant death with nothing in the log (SIGTERM,
+    which is how /cancel and the app shutting down stop a search) or a
+    traceback on the terminal that reads like a crash (SIGINT).
+
+    The handler does no work of its own beyond raising; the signal it fired on
+    travels with the exception and is logged once the stack has unwound to
+    somewhere the process is not halfway through something else.
+    """
+    def stop(signum, _frame):
+        raise SearchStopped(signum)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, stop)
 
 
 class BackgroundReservationProcess:
@@ -820,5 +858,16 @@ class BackgroundReservationProcess:
 
 
 if __name__ == "__main__":
-    process = BackgroundReservationProcess()
-    process.run()
+    install_shutdown_handlers()
+    try:
+        process = BackgroundReservationProcess()
+        process.run()
+    except SearchStopped as stopped:
+        # The record in Redis is deliberately left alone: either the bot
+        # removed it before signalling (/cancel), or it is shutting down and
+        # will resume the search from that record on its next start.
+        logger.info(f"Search stopped by {stopped.signal_name} - exiting")
+    except KeyboardInterrupt:
+        # Only reachable if the interrupt arrives before the handlers are in
+        # place. Same outcome, without the traceback.
+        logger.info("Search interrupted - exiting")

@@ -51,6 +51,17 @@ if [[ -f "$ENV_FILE" ]]; then
         fi
     done
 
+    # Telegram tokens look like <bot_id>:<35 chars>. Catching a mangled one
+    # here beats discovering it when the first message fails to send.
+    bottoken="$(env_value BOTTOKEN)"
+    if [[ -n "$bottoken" ]] && ! is_placeholder "$bottoken"; then
+        if [[ "$bottoken" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]; then
+            pass_check "BOTTOKEN has the expected <bot_id>:<token> shape"
+        else
+            fail_check "BOTTOKEN is malformed - expected <digits>:<token>"
+        fi
+    fi
+
     for key in SESSION_SECRET REDIS_PASSWORD; do
         if [[ -n "$(env_value "$key")" ]]; then
             pass_check "${key} is set"

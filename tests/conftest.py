@@ -30,6 +30,10 @@ def pytest_configure(config):
     os.environ["REDIS_HOST"] = _redis_container.get_container_host_ip()
     os.environ["REDIS_PORT"] = str(_redis_container.get_exposed_port(6379))
     os.environ["REDIS_DB"] = "0"
+    # The throwaway container runs without auth. A REDIS_PASSWORD inherited
+    # from .env (pipenv loads it automatically) would make every connection
+    # fail with "AUTH called without any password configured".
+    os.environ.pop("REDIS_PASSWORD", None)
 
 
 def pytest_unconfigure(config):

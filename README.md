@@ -45,10 +45,14 @@ cd korail_KTX_macro_telegrambot
 # 3. 웹훅 등록 (TELEGRAM_WEBHOOK_SECRET 과 함께 등록됩니다)
 ./scripts/set-webhook.sh https://your.domain/telebot
 
-# 4. Redis 기동 후 실행
-./scripts/docker-up.sh redis
+# 4. 개발용 Redis 기동 후 실행
+./scripts/dev-redis.sh
 ./scripts/run.sh
 ```
+
+> compose 의 Redis 는 보안상 호스트에 포트를 열지 않습니다. 앱을 호스트에서
+> 직접 실행할 때는 `dev-redis.sh` 가 띄우는 127.0.0.1 전용 인스턴스를
+> 사용하세요.
 
 **사용 가능한 명령어:** `make help` 또는 [scripts/README.md](scripts/README.md)
 

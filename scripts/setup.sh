@@ -36,8 +36,44 @@ info "Generating missing secrets"
 # ------------------------------------------------------------- dependencies
 if [[ "$INSTALL_DEPS" -eq 1 ]]; then
     require_cmd pipenv "Install it with 'pip install --user pipenv' or 'brew install pipenv'."
+
+    if ! PYTHON_BIN="$(find_python)"; then
+        err "No usable Python interpreter found (3.9 or newer is required)."
+        err "Install one, then re-run this script. For example:"
+        err "  apt install python3.11        # Debian/Ubuntu"
+        err "  brew install python@3.11      # macOS"
+        die "Or create the environment yourself: pipenv install --dev --python <path>"
+    fi
+
+    PYTHON_VERSION="$(python_version_of "$PYTHON_BIN")"
+    REQUIRED_VERSION="$(required_python)"
+
+    # pipenv otherwise looks for the Pipfile version and gives up when it is
+    # missing, which is the common case now that 3.9 is end-of-life.
+    if [[ -n "$REQUIRED_VERSION" && "$PYTHON_VERSION" != "$REQUIRED_VERSION" ]]; then
+        warn "Pipfile targets Python ${REQUIRED_VERSION}, which is not installed."
+        warn "Using ${PYTHON_BIN} (${PYTHON_VERSION}) instead."
+        warn "Docker images still build on ${REQUIRED_VERSION}, so verify there before release."
+    else
+        info "Using ${PYTHON_BIN} (${PYTHON_VERSION})"
+    fi
+
+    # Pipfile.lock pins hashes from the index it was built against (PyPI).
+    # Distro pip configs sometimes add another index - Raspberry Pi OS ships
+    # /etc/pip.conf with piwheels - whose rebuilt wheels have different
+    # hashes, so the install dies with "PACKAGES DO NOT MATCH THE HASHES".
+    # Point the extra index back at the Pipfile's own source to neutralise it.
+    # (An empty value does not work: pip then falls back to its config file.)
+    if [[ -z "${PIP_EXTRA_INDEX_URL+x}" ]]; then
+        export PIP_EXTRA_INDEX_URL="$(pipfile_index_url)"
+    fi
+
     info "Installing Python dependencies (this can take a while)"
-    pipenv install --dev
+    if ! pipenv install --dev --python "$PYTHON_BIN"; then
+        err "Dependency installation failed."
+        err "If the lock file cannot be resolved on this Python version, try:"
+        die "  pipenv install --dev --skip-lock --python ${PYTHON_BIN}"
+    fi
     ok "Dependencies installed"
 else
     info "Skipping dependency installation (--no-deps)"

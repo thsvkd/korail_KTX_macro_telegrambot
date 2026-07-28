@@ -13,6 +13,10 @@
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
+case "${1:-}" in
+    -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
 require_cmd docker
 
 cd "$ROOT_DIR"

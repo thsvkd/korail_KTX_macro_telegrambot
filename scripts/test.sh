@@ -22,6 +22,10 @@ done
 
 cd "$ROOT_DIR"
 
+# Tests must not depend on the developer's .env - pipenv would otherwise
+# inject it (a REDIS_PASSWORD there fails against the throwaway container).
+export PIPENV_DONT_LOAD_ENV=1
+
 if ! docker info >/dev/null 2>&1; then
     warn "Docker does not look available."
     warn "The suite needs it to start a temporary Redis (testcontainers)."
@@ -40,9 +44,13 @@ if [[ ${#PYTEST_ARGS[@]} -eq 0 ]]; then
 fi
 
 info "Running pytest ${PYTEST_ARGS[*]}"
-if command -v pipenv >/dev/null 2>&1 && pipenv --venv >/dev/null 2>&1; then
+if has_venv; then
     pipenv run pytest "${PYTEST_ARGS[@]}"
-else
+elif python3 -c 'import pytest' >/dev/null 2>&1; then
     warn "No pipenv virtualenv found - falling back to the system pytest"
     python3 -m pytest "${PYTEST_ARGS[@]}"
+else
+    err "pytest is not available: there is no project virtualenv and the"
+    err "system Python does not have pytest installed."
+    die "Run 'scripts/setup.sh' to create the environment first."
 fi

@@ -17,6 +17,10 @@ install:		## Install dependencies with pipenv
 run:			## Run the application locally
 	./scripts/run.sh
 
+.PHONY: dev-redis
+dev-redis:		## Start the local development Redis (127.0.0.1:6379)
+	./scripts/dev-redis.sh
+
 .PHONY: shell
 shell:			## Open pipenv shell
 	pipenv shell

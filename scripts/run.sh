@@ -17,7 +17,19 @@ for arg in "$@"; do
 done
 
 cd "$ROOT_DIR"
+
+# This script loads .env itself and adjusts some values (REDIS_HOST below).
+# pipenv would re-read .env on top of the exported environment and undo those
+# adjustments, so tell it not to.
+export PIPENV_DONT_LOAD_ENV=1
+
 load_env
+
+# Fail with something actionable instead of a traceback from src/app.py.
+if ! can_import flask; then
+    err "The application dependencies are not installed for $(python_runner)."
+    die "Run 'scripts/setup.sh' first."
+fi
 
 # Local runs talk to Redis on the host, not to the compose service name.
 if [[ "${REDIS_HOST:-}" == "redis" ]]; then
@@ -50,7 +62,7 @@ except OSError as exc:
     sys.exit(1)
 PY
 then
-    die "Redis is not reachable. Start one with 'scripts/docker-up.sh redis'."
+    die "Redis is not reachable. Start one with 'scripts/dev-redis.sh'."
 fi
 ok "Redis reachable"
 

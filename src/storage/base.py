@@ -109,6 +109,26 @@ class StorageInterface(ABC):
         pass
 
     @abstractmethod
+    def register_admin_auth_failure(self, chat_id: int) -> int:
+        """Record a failed admin password attempt and return the failure count."""
+        pass
+
+    @abstractmethod
+    def get_admin_auth_failures(self, chat_id: int) -> int:
+        """Get the number of recent failed admin password attempts."""
+        pass
+
+    @abstractmethod
+    def get_admin_lockout_remaining(self, chat_id: int) -> int:
+        """Get seconds remaining before failed attempts are forgotten."""
+        pass
+
+    @abstractmethod
+    def clear_admin_auth_failures(self, chat_id: int) -> None:
+        """Reset the failed admin password attempt counter."""
+        pass
+
+    @abstractmethod
     def get_pending_admin_command(self, chat_id: int) -> Optional[str]:
         """Get pending admin command waiting for authentication."""
         pass

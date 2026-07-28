@@ -15,6 +15,14 @@ _redis_container = None
 def pytest_configure(config):
     """Set up Redis container before test collection."""
     global _redis_container
+
+    # Secrets the application expects. Set before any project module is
+    # imported so that config.settings picks them up.
+    os.environ.setdefault("BOTTOKEN", "test-bot-token")
+    os.environ.setdefault("TELEGRAM_WEBHOOK_SECRET", "test-webhook-secret")
+    os.environ.setdefault("SESSION_SECRET", "test-session-secret")
+    os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password")
+
     _redis_container = RedisContainer("redis:7-alpine")
     _redis_container.start()
 

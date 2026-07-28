@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   app:
     image: geunsam2/korailbot:latest
@@ -23,19 +21,24 @@ services:
   redis:
     image: redis:7-alpine
     container_name: korail_redis
-    ports:
-      - "6379:6379"
+    # Deliberately not published to the host: Redis holds user sessions and
+    # encrypted credentials, and only the app container needs to reach it.
+    expose:
+      - "6379"
     volumes:
       - redis_data:/data
+    env_file:
+      - .env
     command: >
       redis-server
+      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
       --appendonly yes
       --maxmemory 512mb
       --maxmemory-policy allkeys-lru
       --save 60 1000
       --loglevel notice
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 5

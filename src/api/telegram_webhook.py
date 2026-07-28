@@ -2,11 +2,13 @@
 from flask import request, make_response
 from flask_restful import Resource
 
+from api.auth import verify_internal_request, verify_telegram_request
 from storage.base import StorageInterface
 from services import TelegramService, ReservationService, PaymentReminderService, MultiReservationReminderService
 from handlers import CommandHandler, ConversationHandler
 from models import PaymentStatus
 from utils.logger import get_logger
+from utils.privacy import mask_phone
 
 logger = get_logger(__name__)
 
@@ -58,6 +60,11 @@ class TelegramWebhook(Resource):
 
         This is called when users send messages to the bot.
         """
+        # Reject anything that cannot prove it came from Telegram, otherwise
+        # anyone reaching this port could impersonate any chat_id.
+        if not verify_telegram_request():
+            return make_response("Forbidden", 403)
+
         try:
             data = request.json
 
@@ -178,8 +185,12 @@ class TelegramWebhook(Resource):
         Handle GET request for callbacks from background processes.
 
         This is used by the background reservation process to notify
-        the bot about reservation results.
+        the bot about reservation results. It can send arbitrary text to
+        arbitrary chats, so it is restricted to our own processes.
         """
+        if not verify_internal_request():
+            return make_response("Forbidden", 403)
+
         try:
             # Extract parameters
             chat_id = request.args.get('chatId')
@@ -256,7 +267,7 @@ class TelegramWebhook(Resource):
                 # Notify subscribers
                 subscribers = self.storage.get_all_subscribers()
                 if session and session.credentials:
-                    user_id = session.credentials.korail_id
+                    user_id = mask_phone(session.credentials.korail_id)
                     self.telegram.send_to_multiple(
                         subscribers,
                         f"{user_id}의 예약이 종료되었습니다."

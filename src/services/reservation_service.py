@@ -1,4 +1,5 @@
 """Reservation orchestration service."""
+import json
 import subprocess
 import signal
 import os
@@ -11,6 +12,7 @@ from storage.base import StorageInterface
 from services.korail_service import KorailService
 from services.telegram_service import TelegramService, MessageTemplates
 from utils.logger import get_logger
+from utils.privacy import mask_phone, mask_phones
 
 logger = get_logger(__name__)
 
@@ -60,10 +62,10 @@ class ReservationService:
             True if process started successfully
         """
         try:
-            # Prepare subprocess arguments
+            # Credentials are deliberately absent from argv: anything passed on
+            # a command line is world-readable through `ps` and /proc. They are
+            # written to the child's stdin instead.
             arguments = [
-                username,
-                password,
                 search_params.dep_date,
                 search_params.src_locate,
                 search_params.dst_locate,
@@ -78,7 +80,15 @@ class ReservationService:
 
             # Start background process
             cmd = ['python', '-m', 'telegramBot.telebotBackProcess'] + arguments
-            proc = subprocess.Popen(cmd)
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+
+            # Hand over credentials and close the pipe so the child stops waiting.
+            credentials = json.dumps({"username": username, "password": password})
+            try:
+                proc.stdin.write(credentials.encode('utf-8') + b"\n")
+                proc.stdin.flush()
+            finally:
+                proc.stdin.close()
 
             logger.info(
                 f"Started reservation process for chat_id={chat_id}, pid={proc.pid}"
@@ -195,7 +205,7 @@ class ReservationService:
                 logger.error(f"Error cancelling reservation {reservation.chat_id}: {e}")
 
         # Notify admin
-        korail_ids = [r.korail_id for r in reservations]
+        korail_ids = mask_phones(r.korail_id for r in reservations)
         self.telegram.send_message(
             admin_chat_id,
             f"총 {count}개의 진행중인 예약을 종료했습니다. 이용중이던 사용자 : {korail_ids}"
@@ -205,7 +215,11 @@ class ReservationService:
 
     def get_status(self, chat_id: int) -> str:
         """
-        Get status of all running reservations.
+        Get reservation status for the requesting user.
+
+        /status is open to every user, so it reports only the caller's own
+        reservation plus an aggregate count. Other users' Korail IDs are
+        phone numbers and are never disclosed here.
 
         Args:
             chat_id: Chat ID requesting status
@@ -214,16 +228,35 @@ class ReservationService:
             Status message
         """
         reservations = self.storage.get_all_running_reservations()
-        count = len(reservations)
-        korail_ids = [r.korail_id for r in reservations]
+        total = len(reservations)
+        mine = next((r for r in reservations if r.chat_id == chat_id), None)
 
-        return f"총 {count}개의 예약이 실행중입니다. 이용중인 사용자 : {korail_ids}"
+        if not mine:
+            return (
+                "진행중인 예약이 없습니다.\n"
+                f"(현재 서버 전체 실행중인 예약: {total}개)\n\n"
+                "/start 를 입력하여 예약을 시작하세요."
+            )
+
+        params = mine.search_params
+        return (
+            "🔎 예약 검색이 진행중입니다.\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"출발일: {params.dep_date}\n"
+            f"구간: {params.src_locate} → {params.dst_locate}\n"
+            f"검색 시작 시각: {params.dep_time[:4]}\n"
+            f"최대 출발 시각: {params.max_dep_time}\n"
+            f"인원: {params.passenger_count}명\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"(현재 서버 전체 실행중인 예약: {total}개)\n\n"
+            "중단하려면 /cancel 을 입력하세요."
+        )
 
     def _notify_subscribers_start(self, username: str, params: TrainSearchParams) -> None:
         """Notify subscribers about reservation start."""
         subscribers = self.storage.get_all_subscribers()
         message = (
-            f"{username}의 {params.src_locate}에서 {params.dst_locate}로 "
+            f"{mask_phone(username)}의 {params.src_locate}에서 {params.dst_locate}로 "
             f"{params.dep_date}에 출발하는 열차 예약이 시작되었습니다."
         )
         self.telegram.send_to_multiple(subscribers, message)
@@ -231,5 +264,5 @@ class ReservationService:
     def _notify_subscribers_end(self, username: str) -> None:
         """Notify subscribers about reservation end."""
         subscribers = self.storage.get_all_subscribers()
-        message = f"{username}의 예약이 종료되었습니다."
+        message = f"{mask_phone(username)}의 예약이 종료되었습니다."
         self.telegram.send_to_multiple(subscribers, message)

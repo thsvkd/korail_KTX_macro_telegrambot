@@ -8,6 +8,7 @@ from korail2 import (
 
 from config.settings import settings
 from utils.logger import get_logger
+from utils.privacy import mask_phone
 
 logger = get_logger(__name__)
 
@@ -48,13 +49,13 @@ class KorailService:
                 self._username = username
                 self._password = password
                 self._last_login_time = time.time()
-                logger.info(f"Korail login successful for user: {username}")
+                logger.info(f"Korail login successful for user: {mask_phone(username)}")
             else:
-                logger.warning(f"Korail login failed for user: {username}")
+                logger.warning(f"Korail login failed for user: {mask_phone(username)}")
 
             return self._logged_in
         except Exception as e:
-            logger.error(f"Korail login error for user {username}: {e}")
+            logger.error(f"Korail login error for user {mask_phone(username)}: {e}")
             return False
 
     def _relogin(self) -> bool:

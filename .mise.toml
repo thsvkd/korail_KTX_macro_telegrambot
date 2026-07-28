@@ -1,11 +1,10 @@
 # mise configuration
 #
-# Environment variables loading order:
-# 1. .env.default (default values, committed to git)
-# 2. .env (local overrides, not committed)
+# .env holds every setting, including secrets, and is not committed.
+# Create it with: ./scripts/setup.sh
 
 [env]
-_.file = [".env.default", ".env"]
+_.file = ".env"
 
 [tools]
 python = "3.9"

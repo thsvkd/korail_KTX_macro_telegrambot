@@ -7,6 +7,7 @@ from storage.base import StorageInterface
 from services import TelegramService, KorailService, ReservationService, MessageTemplates
 from utils.validators import InputValidator
 from utils.logger import get_logger
+from utils.privacy import mask_phone
 
 logger = get_logger(__name__)
 
@@ -93,8 +94,10 @@ class ConversationHandler:
 
     def _handle_start_confirmation(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle initial start confirmation (Y/N)."""
-        # Check for magic admin login
-        if text == settings.ADMIN_MAGIC_STRING:
+        # Optional shortcut that logs in with the operator's own Korail
+        # account. Disabled unless ADMIN_MAGIC_STRING is configured - a
+        # value committed to the repository would let any reader use it.
+        if settings.ADMIN_MAGIC_STRING and text == settings.ADMIN_MAGIC_STRING:
             self._handle_admin_login(chat_id, session)
             return
 
@@ -151,7 +154,7 @@ class ConversationHandler:
             subscribers = self.storage.get_all_subscribers()
             self.telegram.send_to_multiple(
                 subscribers,
-                f"{text}가 구독자 목록에 없어서 실행에 실패했음."
+                f"{mask_phone(text)}가 구독자 목록에 없어서 실행에 실패했음."
             )
 
             session.reset()
@@ -422,12 +425,21 @@ class ConversationHandler:
         self.storage.save_user_session(session)
 
         # Start reservation
+        username = session.credentials.korail_id
+        password = session.credentials.korail_pw
+
         success = self.reservation.start_reservation_process(
             chat_id=chat_id,
-            username=session.credentials.korail_id,
-            password=session.credentials.korail_pw,
+            username=username,
+            password=password,
             search_params=search_params
         )
+
+        if success:
+            # The background process now owns the password; there is no reason
+            # to keep a copy at rest for the lifetime of the search.
+            session.credentials.korail_pw = ""
+            self.storage.save_user_session(session)
 
         if not success:
             logger.error(f"Failed to start reservation for chat_id={chat_id}")

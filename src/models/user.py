@@ -25,12 +25,20 @@ class UserSession:
     search_params: Optional['TrainSearchParams'] = None  # Search parameters for train reservation
 
     def reset(self) -> None:
-        """Reset user session to initial state."""
+        """
+        Reset user session to initial state.
+
+        Credentials are dropped as well: a finished or cancelled flow has no
+        further use for the user's Korail password, and keeping it around only
+        widens the window in which it can leak.
+        """
         self.in_progress = False
         self.last_action = 0
         self.train_info = {}
         self.process_id = 9999999
         self.search_params = None
+        if self.credentials:
+            self.credentials.korail_pw = ""
 
 
 @dataclass

@@ -1,7 +1,8 @@
 """Payment status check API endpoint."""
-from flask import request
+from flask import request, make_response
 from flask_restful import Resource
 
+from api.auth import verify_internal_request
 from storage.base import StorageInterface
 from utils.logger import get_logger
 
@@ -35,6 +36,10 @@ class PaymentCheckAPI(Resource):
         Returns:
             JSON: {"completed": bool}
         """
+        # Internal endpoint: it exposes per-user payment state.
+        if not verify_internal_request():
+            return make_response("Forbidden", 403)
+
         try:
             chat_id_str = request.args.get('chatId')
 

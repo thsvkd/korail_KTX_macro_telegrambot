@@ -13,6 +13,8 @@ from models import UserSession, UserProgress, PaymentStatus
 from flask import Flask
 from flask_restful import Api
 
+from config.settings import settings
+
 
 class TestTelegramWebhook:
     """Test Telegram webhook handling."""
@@ -41,6 +43,13 @@ class TestTelegramWebhook:
 
         self.client = self.app.test_client()
 
+        # Telegram proves itself with the registered secret token; the
+        # background process uses the internal callback token.
+        self.auth_headers = {
+            'X-Telegram-Bot-Api-Secret-Token': settings.TELEGRAM_WEBHOOK_SECRET
+        }
+        self.internal_token = settings.INTERNAL_CALLBACK_TOKEN
+
     def teardown_method(self):
         """Clean up after each test."""
         self.storage.redis.flushdb()
@@ -54,7 +63,7 @@ class TestTelegramWebhook:
             }
         }
 
-        response = self.client.post('/telebot', json=payload)
+        response = self.client.post('/telebot', json=payload, headers=self.auth_headers)
 
         assert response.status_code == 200
 
@@ -86,7 +95,7 @@ class TestTelegramWebhook:
             }
         }
 
-        response = self.client.post('/telebot', json=payload)
+        response = self.client.post('/telebot', json=payload, headers=self.auth_headers)
 
         assert response.status_code == 200
 
@@ -116,7 +125,7 @@ class TestTelegramWebhook:
             }
         }
 
-        response = self.client.post('/telebot', json=payload)
+        response = self.client.post('/telebot', json=payload, headers=self.auth_headers)
 
         assert response.status_code == 200
 
@@ -132,7 +141,7 @@ class TestTelegramWebhook:
             }
         }
 
-        response = self.client.post('/telebot', json=payload)
+        response = self.client.post('/telebot', json=payload, headers=self.auth_headers)
 
         assert response.status_code == 200
 
@@ -148,7 +157,7 @@ class TestTelegramWebhook:
             }
         }
 
-        response = self.client.post('/telebot', json=payload)
+        response = self.client.post('/telebot', json=payload, headers=self.auth_headers)
 
         assert response.status_code == 200
 
@@ -164,7 +173,7 @@ class TestTelegramWebhook:
             }
         }
 
-        response = self.client.post('/telebot', json=payload)
+        response = self.client.post('/telebot', json=payload, headers=self.auth_headers)
 
         assert response.status_code == 200  # Still returns OK
 
@@ -179,7 +188,7 @@ class TestTelegramWebhook:
             }
         }
 
-        response = self.client.post('/telebot', json=payload)
+        response = self.client.post('/telebot', json=payload, headers=self.auth_headers)
 
         assert response.status_code == 200
 
@@ -207,7 +216,7 @@ class TestTelegramWebhook:
             }
         }
 
-        response = self.client.post('/telebot', json=payload)
+        response = self.client.post('/telebot', json=payload, headers=self.auth_headers)
 
         assert response.status_code == 200
 
@@ -235,6 +244,7 @@ class TestTelegramWebhook:
         response = self.client.get(
             '/telebot',
             query_string={
+                'token': self.internal_token,
                 'chatId': str(chat_id),
                 'msg': '예약 성공!',
                 'status': '0',
@@ -263,6 +273,7 @@ class TestTelegramWebhook:
         response = self.client.get(
             '/telebot',
             query_string={
+                'token': self.internal_token,
                 'chatId': str(chat_id),
                 'msg': '예약 실패',
                 'status': '1'
@@ -281,6 +292,7 @@ class TestTelegramWebhook:
         response = self.client.get(
             '/telebot',
             query_string={
+                'token': self.internal_token,
                 'chatId': str(chat_id),
                 'msg': '1번째 좌석 예약 완료',
                 'status': '2',
@@ -303,6 +315,7 @@ class TestTelegramWebhook:
         response = self.client.get(
             '/telebot',
             query_string={
+                'token': self.internal_token,
                 'chatId': '12345'
                 # Missing msg and status
             }
@@ -326,7 +339,7 @@ class TestTelegramWebhook:
         }
 
         with patch('config.settings.settings.ADMIN_PASSWORD', 'admin_password'):
-            response = self.client.post('/telebot', json=payload)
+            response = self.client.post('/telebot', json=payload, headers=self.auth_headers)
 
         assert response.status_code == 200
 
@@ -338,7 +351,7 @@ class TestTelegramWebhook:
         chat_id = 12345
 
         # Set current seat index (random seating in progress)
-        self.storage.save_current_seat_index(chat_id, 0)
+        self.storage.set_current_seat_index(chat_id, 0)
 
         payload = {
             "message": {
@@ -347,7 +360,7 @@ class TestTelegramWebhook:
             }
         }
 
-        response = self.client.post('/telebot', json=payload)
+        response = self.client.post('/telebot', json=payload, headers=self.auth_headers)
 
         assert response.status_code == 200
 
@@ -360,7 +373,8 @@ class TestTelegramWebhook:
         response = self.client.post(
             '/telebot',
             data='invalid json',
-            content_type='application/json'
+            content_type='application/json',
+            headers=self.auth_headers
         )
 
         # Should still return OK (Telegram requirement)
@@ -393,6 +407,11 @@ class TestWebhookCommandRouting:
 
         self.client = self.app.test_client()
 
+        self.auth_headers = {
+            'X-Telegram-Bot-Api-Secret-Token': settings.TELEGRAM_WEBHOOK_SECRET
+        }
+        self.internal_token = settings.INTERNAL_CALLBACK_TOKEN
+
     def teardown_method(self):
         """Clean up after each test."""
         self.storage.redis.flushdb()
@@ -408,7 +427,7 @@ class TestWebhookCommandRouting:
             }
         }
 
-        response = self.client.post('/telebot', json=payload)
+        response = self.client.post('/telebot', json=payload, headers=self.auth_headers)
 
         assert response.status_code == 200
         self.reservation.get_status.assert_called_once_with(12345)
@@ -422,7 +441,7 @@ class TestWebhookCommandRouting:
             }
         }
 
-        response = self.client.post('/telebot', json=payload)
+        response = self.client.post('/telebot', json=payload, headers=self.auth_headers)
 
         assert response.status_code == 200
         self.telegram.send_message.assert_called_once()
@@ -438,13 +457,79 @@ class TestWebhookCommandRouting:
             }
         }
 
-        response = self.client.post('/telebot', json=payload)
+        response = self.client.post('/telebot', json=payload, headers=self.auth_headers)
 
         assert response.status_code == 200
 
         # Should ask for password
         self.telegram.send_message.assert_called()
         assert self.storage.is_waiting_for_admin_password(chat_id)
+
+    # ==================== Request authentication ====================
+
+    def test_webhook_post_without_secret_token_rejected(self):
+        """An unauthenticated POST must not be able to impersonate a user."""
+        payload = {
+            "message": {
+                "chat": {"id": 12345},
+                "text": "/start"
+            }
+        }
+
+        response = self.client.post('/telebot', json=payload)
+
+        assert response.status_code == 403
+        # The message must not have been processed at all.
+        assert self.storage.get_user_session(12345) is None
+        self.telegram.send_message.assert_not_called()
+
+    def test_webhook_post_with_wrong_secret_token_rejected(self):
+        """A guessed token must not work either."""
+        payload = {
+            "message": {
+                "chat": {"id": 12345},
+                "text": "/start"
+            }
+        }
+
+        response = self.client.post(
+            '/telebot',
+            json=payload,
+            headers={'X-Telegram-Bot-Api-Secret-Token': 'not-the-secret'}
+        )
+
+        assert response.status_code == 403
+        assert self.storage.get_user_session(12345) is None
+
+    def test_webhook_get_without_internal_token_rejected(self):
+        """Without the token the callback would be an open message relay."""
+        response = self.client.get(
+            '/telebot',
+            query_string={
+                'chatId': '12345',
+                'msg': '아무 메시지나 보낼 수 있음',
+                'status': '0'
+            }
+        )
+
+        assert response.status_code == 403
+        self.telegram.send_message.assert_not_called()
+
+    def test_webhook_get_from_remote_address_rejected(self):
+        """Even with the token, the callback only comes from loopback."""
+        response = self.client.get(
+            '/telebot',
+            query_string={
+                'token': self.internal_token,
+                'chatId': '12345',
+                'msg': '외부에서 보낸 메시지',
+                'status': '0'
+            },
+            environ_base={'REMOTE_ADDR': '203.0.113.7'}
+        )
+
+        assert response.status_code == 403
+        self.telegram.send_message.assert_not_called()
 
 
 if __name__ == "__main__":

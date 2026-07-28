@@ -10,6 +10,7 @@ from models import (
 )
 from storage.base import StorageInterface
 from config.settings import settings
+from utils.crypto import get_secret_box
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -61,10 +62,15 @@ class RedisStorage(StorageInterface):
             return None
 
     def save_user_session(self, session: UserSession) -> None:
-        """Save or update user session."""
+        """
+        Save or update user session.
+
+        Sessions carry credentials, so they expire instead of living forever.
+        The TTL is refreshed on every save, i.e. it counts from last activity.
+        """
         key = f"user_session:{session.chat_id}"
         data = json.dumps(self._serialize_user_session(session))
-        self.redis.set(key, data)
+        self.redis.setex(key, settings.SESSION_TTL_SECONDS, data)
         logger.debug(f"Saved user session for chat_id={session.chat_id}")
 
     def delete_user_session(self, chat_id: int) -> None:
@@ -200,10 +206,42 @@ class RedisStorage(StorageInterface):
         """Set admin authentication status for chat ID."""
         key = f"admin_authenticated:{chat_id}"
         if authenticated:
-            # Set with TTL (1 hour)
-            self.redis.setex(key, 3600, "1")
+            self.redis.setex(key, settings.ADMIN_SESSION_TTL_SECONDS, "1")
         else:
             self.redis.delete(key)
+
+    def register_admin_auth_failure(self, chat_id: int) -> int:
+        """
+        Record a failed admin password attempt.
+
+        The counter expires after the lockout window, so attempts spread out
+        over time do not accumulate into a permanent lockout.
+
+        Args:
+            chat_id: Telegram chat ID
+
+        Returns:
+            Number of failures recorded within the current window
+        """
+        key = f"admin_auth_failures:{chat_id}"
+        failures = self.redis.incr(key)
+        if failures == 1:
+            self.redis.expire(key, settings.ADMIN_LOCKOUT_SECONDS)
+        return int(failures)
+
+    def get_admin_auth_failures(self, chat_id: int) -> int:
+        """Get the number of recent failed admin password attempts."""
+        value = self.redis.get(f"admin_auth_failures:{chat_id}")
+        return int(value) if value else 0
+
+    def get_admin_lockout_remaining(self, chat_id: int) -> int:
+        """Get seconds remaining before failed attempts are forgotten."""
+        ttl = self.redis.ttl(f"admin_auth_failures:{chat_id}")
+        return ttl if ttl and ttl > 0 else 0
+
+    def clear_admin_auth_failures(self, chat_id: int) -> None:
+        """Reset the failed admin password attempt counter."""
+        self.redis.delete(f"admin_auth_failures:{chat_id}")
 
     def is_waiting_for_admin_password(self, chat_id: int) -> bool:
         """Check if user is waiting to enter admin password."""
@@ -404,7 +442,8 @@ class RedisStorage(StorageInterface):
             "train_info": session.train_info,
             "credentials": {
                 "korail_id": session.credentials.korail_id,
-                "korail_pw": session.credentials.korail_pw
+                # Encrypted at rest: Redis must never hold a usable password.
+                "korail_pw": get_secret_box().encrypt(session.credentials.korail_pw)
             } if session.credentials else None,
             "search_params": {
                 "dep_date": session.search_params.dep_date,
@@ -426,9 +465,11 @@ class RedisStorage(StorageInterface):
         credentials = None
         if data.get("credentials"):
             c = data["credentials"]
+            # An unreadable password (rotated key, tampered value) decrypts to
+            # None; the user is then asked to enter it again.
             credentials = UserCredentials(
                 korail_id=c["korail_id"],
-                korail_pw=c["korail_pw"]
+                korail_pw=get_secret_box().decrypt(c.get("korail_pw")) or ""
             )
 
         search_params = None

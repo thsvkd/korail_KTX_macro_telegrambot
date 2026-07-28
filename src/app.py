@@ -29,6 +29,10 @@ except ValueError as e:
     logger.error(f"Configuration error: {e}")
     sys.exit(1)
 
+# Surface non-fatal misconfiguration (weak secrets, disabled protections)
+for warning in settings.warnings():
+    logger.warning(f"⚠️  {warning}")
+
 # Set recursion limit
 sys.setrecursionlimit(settings.RECURSION_LIMIT)
 
@@ -86,6 +90,11 @@ logger.info(f"Redis: {settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS
 logger.info(f"Search interval: {settings.KORAIL_SEARCH_INTERVAL}s")
 logger.info(f"Payment timeout: {settings.PAYMENT_TIMEOUT_MINUTES}min")
 logger.info(f"Reminder interval: {settings.PAYMENT_REMINDER_INTERVAL_SECONDS}s")
+logger.info("Webhook secret: configured")  # validate() guarantees this
+logger.info(f"Admin commands: {'enabled' if settings.ADMIN_PASSWORD else 'disabled'}")
+logger.info(
+    f"Admin magic login: {'enabled' if settings.ADMIN_MAGIC_STRING else 'disabled'}"
+)
 logger.info("="*60)
 
 if __name__ == '__main__':

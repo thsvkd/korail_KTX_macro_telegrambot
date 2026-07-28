@@ -273,6 +273,17 @@ class Messages:
     ADMIN_AUTH_REQUIRED = "🔐 관리자 인증이 필요합니다.\n관리자 비밀번호를 입력해주세요."
     ADMIN_AUTH_SUCCESS = "✅ 관리자 인증 성공!"
     ADMIN_AUTH_FAILED = "❌ 관리자 인증 실패\n올바른 비밀번호를 입력해주세요."
+    ADMIN_AUTH_FAILED_REMAINING = """❌ 관리자 인증 실패
+
+남은 시도 횟수: {remaining}회
+초과 시 {lockout_minutes}분간 인증이 차단됩니다."""
+    ADMIN_AUTH_LOCKED = """🚫 관리자 인증이 일시적으로 차단되었습니다.
+
+인증 실패 횟수를 초과했습니다.
+{remaining_minutes}분 후에 다시 시도해주세요."""
+    ADMIN_DISABLED = """🚫 관리자 기능이 비활성화되어 있습니다.
+
+서버에 ADMIN_PASSWORD 환경변수가 설정되지 않았습니다."""
 
     # ========== Backward Compatibility Methods for MessageTemplates ==========
     # These methods provide compatibility with the old MessageTemplates interface

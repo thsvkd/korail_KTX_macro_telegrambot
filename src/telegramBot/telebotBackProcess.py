@@ -2,9 +2,12 @@
 Background process for train reservation.
 
 This module is executed as a subprocess to continuously search for
-and attempt to reserve trains. It has been refactored to use the new
-service architecture while maintaining backward compatibility.
+and attempt to reserve trains.
+
+Search parameters arrive on argv; Korail credentials arrive as a single
+JSON line on stdin, because argv is readable by every process on the host.
 """
+import json
 import sys
 import time
 import requests
@@ -23,6 +26,7 @@ from services import KorailService, TelegramService, PaymentReminderService, Mul
 from services.korail_service import DuplicateReservationError
 from models import MultiReservationStatus, SingleReservationInfo, ReservationPaymentStatus
 from utils.logger import get_logger, LoggerFactory
+from utils.privacy import mask_phone
 
 logger = get_logger(__name__)
 
@@ -34,25 +38,24 @@ class BackgroundReservationProcess:
     """Background process for train reservation."""
 
     def __init__(self):
-        """Initialize from command line arguments."""
-        if len(sys.argv) < 11:
+        """Initialize from command line arguments and credentials on stdin."""
+        if len(sys.argv) < 9:
             logger.error("Insufficient arguments")
             sys.exit(1)
 
-        self.username = sys.argv[1]
-        self.password = sys.argv[2]
-        self.dep_date = sys.argv[3]
-        self.src_locate = sys.argv[4]
-        self.dst_locate = sys.argv[5]
-        self.dep_time = sys.argv[6]
-        self.train_type_str = sys.argv[7]
-        self.special_info_str = sys.argv[8]
-        self.chat_id = sys.argv[9]
-        self.max_dep_time = sys.argv[10]
+        self.username, self.password = self._read_credentials()
+        self.dep_date = sys.argv[1]
+        self.src_locate = sys.argv[2]
+        self.dst_locate = sys.argv[3]
+        self.dep_time = sys.argv[4]
+        self.train_type_str = sys.argv[5]
+        self.special_info_str = sys.argv[6]
+        self.chat_id = sys.argv[7]
+        self.max_dep_time = sys.argv[8]
 
-        # New parameters with defaults for backward compatibility
-        self.passenger_count = int(sys.argv[11]) if len(sys.argv) > 11 else 1
-        self.seat_strategy = sys.argv[12] if len(sys.argv) > 12 else "consecutive"
+        # Optional parameters with defaults
+        self.passenger_count = int(sys.argv[9]) if len(sys.argv) > 9 else 1
+        self.seat_strategy = sys.argv[10] if len(sys.argv) > 10 else "consecutive"
 
         # Parse train type
         self.train_type = self._parse_train_type(self.train_type_str)
@@ -76,7 +79,7 @@ class BackgroundReservationProcess:
         logger.info(f"Background Process Initialized")
         logger.info(f"========================================")
         logger.info(f"  chat_id: {self.chat_id}")
-        logger.info(f"  username: {self.username}")
+        logger.info(f"  username: {mask_phone(self.username)}")
         logger.info(f"  dep_date: '{self.dep_date}'")
         logger.info(f"  src_locate: '{self.src_locate}'")
         logger.info(f"  dst_locate: '{self.dst_locate}'")
@@ -87,6 +90,45 @@ class BackgroundReservationProcess:
         logger.info(f"  passenger_count: {self.passenger_count}")
         logger.info(f"  seat_strategy: '{self.seat_strategy}'")
         logger.info(f"========================================")
+
+    @staticmethod
+    def _read_credentials() -> tuple:
+        """
+        Read Korail credentials from the first line of stdin.
+
+        The parent writes a single JSON object and closes the pipe. Reading
+        them here keeps the password out of argv, where any local process
+        could see it.
+
+        Returns:
+            Tuple of (username, password)
+        """
+        try:
+            raw = sys.stdin.readline()
+        except Exception as e:
+            logger.error(f"Failed to read credentials from stdin: {e}")
+            sys.exit(1)
+
+        if not raw or not raw.strip():
+            logger.error(
+                "No credentials received on stdin. This process is started by "
+                "the bot and cannot be launched manually without them."
+            )
+            sys.exit(1)
+
+        try:
+            payload = json.loads(raw)
+            username = payload["username"]
+            password = payload["password"]
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            logger.error(f"Malformed credentials payload on stdin: {type(e).__name__}")
+            sys.exit(1)
+
+        if not username or not password:
+            logger.error("Empty Korail credentials received")
+            sys.exit(1)
+
+        return username, password
 
     def _parse_train_type(self, train_type_str: str) -> TrainType:
         """Parse train type from string."""
@@ -134,7 +176,7 @@ class BackgroundReservationProcess:
     def run(self):
         """Run the reservation process."""
         try:
-            logger.info(f"Logging in as {self.username}...")
+            logger.info(f"Logging in as {mask_phone(self.username)}...")
 
             # Login
             if not self.korail.login(self.username, self.password):
@@ -374,7 +416,7 @@ class BackgroundReservationProcess:
 """
             self._send_callback(message, status=1)
 
-        logger.info(f"Reservation process ended for {self.username}")
+        logger.info(f"Reservation process ended for {mask_phone(self.username)}")
 
     def _update_multi_reservation_status(self, seat_index: int, reservation, total_seats: int) -> None:
         """
@@ -502,11 +544,13 @@ class BackgroundReservationProcess:
                 "status": status,
                 "isMulti": "1" if is_multi else "0",
                 "totalSeats": str(total_seats),
-                "seatStrategy": seat_strategy
+                "seatStrategy": seat_strategy,
+                # Inherited from the parent process via the environment.
+                "token": settings.INTERNAL_CALLBACK_TOKEN
             }
 
             session = requests.session()
-            response = session.get(callback_url, params=params, verify=False, timeout=10)
+            response = session.get(callback_url, params=params, timeout=10)
 
             if response.status_code == 200:
                 logger.debug(f"Callback sent successfully: status={status}, is_multi={is_multi}")

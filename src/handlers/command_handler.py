@@ -1,4 +1,5 @@
 """Command handler for Telegram bot commands."""
+import hmac
 from typing import Optional
 
 from config.settings import settings
@@ -6,6 +7,7 @@ from models import UserSession, UserProgress, UserCredentials
 from storage.base import StorageInterface
 from services import TelegramService, ReservationService, MessageTemplates, KorailService, PaymentReminderService
 from utils.logger import get_logger, LoggerFactory
+from utils.privacy import mask_phone
 
 logger = get_logger(__name__)
 
@@ -188,7 +190,7 @@ class CommandHandler:
 
         for session in sessions:
             if session.credentials:
-                user_ids.append(session.credentials.korail_id)
+                user_ids.append(mask_phone(session.credentials.korail_id))
             else:
                 user_ids.append(f"chat_{session.chat_id}")
 
@@ -342,6 +344,24 @@ class CommandHandler:
 
         return True
 
+    def _is_locked_out(self, chat_id: int) -> bool:
+        """Check whether admin authentication is currently blocked."""
+        return (
+            self.storage.get_admin_auth_failures(chat_id)
+            >= settings.ADMIN_MAX_AUTH_FAILURES
+        )
+
+    def _send_lockout_message(self, chat_id: int) -> None:
+        """Tell the user how long the lockout lasts."""
+        from telegramBot.messages import Messages
+
+        remaining_seconds = self.storage.get_admin_lockout_remaining(chat_id)
+        remaining_minutes = max(1, -(-remaining_seconds // 60))  # round up
+        self.telegram.send_message(
+            chat_id,
+            Messages.ADMIN_AUTH_LOCKED.format(remaining_minutes=remaining_minutes)
+        )
+
     def _handle_admin_command(self, chat_id: int, handler_func, command_name: str = "") -> None:
         """
         Handle admin command with authentication check.
@@ -351,20 +371,43 @@ class CommandHandler:
             handler_func: Function to call if authenticated
             command_name: Name of the command for tracking
         """
+        from telegramBot.messages import Messages
+
+        # No admin password configured means no admin surface at all.
+        if not settings.ADMIN_PASSWORD:
+            self.telegram.send_message(chat_id, Messages.ADMIN_DISABLED)
+            logger.warning(
+                f"Admin command {command_name} refused for chat_id={chat_id}: "
+                f"ADMIN_PASSWORD is not configured"
+            )
+            return
+
         if self.storage.is_admin_authenticated(chat_id):
             # Already authenticated, execute command
             handler_func(chat_id)
-        else:
-            # Request password and mark as waiting
-            from telegramBot.messages import Messages
-            self.storage.set_waiting_for_admin_password(chat_id, True)
-            self.storage.set_pending_admin_command(chat_id, command_name)
-            self.telegram.send_message(chat_id, Messages.ADMIN_AUTH_REQUIRED)
-            logger.info(f"Admin authentication required for chat_id={chat_id}, command={command_name}")
+            return
+
+        if self._is_locked_out(chat_id):
+            self._send_lockout_message(chat_id)
+            logger.warning(
+                f"Admin command {command_name} refused for chat_id={chat_id}: "
+                f"locked out after repeated failures"
+            )
+            return
+
+        # Request password and mark as waiting
+        self.storage.set_waiting_for_admin_password(chat_id, True)
+        self.storage.set_pending_admin_command(chat_id, command_name)
+        self.telegram.send_message(chat_id, Messages.ADMIN_AUTH_REQUIRED)
+        logger.info(f"Admin authentication required for chat_id={chat_id}, command={command_name}")
 
     def handle_admin_password(self, chat_id: int, password: str) -> bool:
         """
         Handle admin password input.
+
+        Attempts are rate limited: after ADMIN_MAX_AUTH_FAILURES failures the
+        chat is locked out for ADMIN_LOCKOUT_SECONDS, which turns an unlimited
+        online guessing channel into a bounded one.
 
         Args:
             chat_id: Telegram chat ID
@@ -382,7 +425,23 @@ class CommandHandler:
         self.storage.set_waiting_for_admin_password(chat_id, False)
         self.storage.set_pending_admin_command(chat_id, None)
 
-        if password == settings.ADMIN_PASSWORD:
+        if not settings.ADMIN_PASSWORD:
+            self.telegram.send_message(chat_id, Messages.ADMIN_DISABLED)
+            return False
+
+        if self._is_locked_out(chat_id):
+            self._send_lockout_message(chat_id)
+            logger.warning(f"Admin authentication blocked (locked out): chat_id={chat_id}")
+            return False
+
+        # Constant-time comparison so the password cannot be recovered by
+        # timing individual characters. Compared as bytes because
+        # compare_digest rejects str inputs containing non-ASCII characters,
+        # and users do type Korean into this prompt.
+        if hmac.compare_digest(
+            password.encode('utf-8'), settings.ADMIN_PASSWORD.encode('utf-8')
+        ):
+            self.storage.clear_admin_auth_failures(chat_id)
             self.storage.set_admin_authenticated(chat_id, True)
             self.telegram.send_message(chat_id, Messages.ADMIN_AUTH_SUCCESS)
             logger.info(f"Admin authenticated: chat_id={chat_id}")
@@ -393,7 +452,23 @@ class CommandHandler:
                 self.route_command(chat_id, pending_command)
 
             return True
+
+        failures = self.storage.register_admin_auth_failure(chat_id)
+        remaining = settings.ADMIN_MAX_AUTH_FAILURES - failures
+        logger.warning(
+            f"Admin authentication failed: chat_id={chat_id}, "
+            f"failures={failures}/{settings.ADMIN_MAX_AUTH_FAILURES}"
+        )
+
+        if remaining <= 0:
+            self._send_lockout_message(chat_id)
         else:
-            self.telegram.send_message(chat_id, Messages.ADMIN_AUTH_FAILED)
-            logger.warning(f"Admin authentication failed: chat_id={chat_id}")
-            return False
+            self.telegram.send_message(
+                chat_id,
+                Messages.ADMIN_AUTH_FAILED_REMAINING.format(
+                    remaining=remaining,
+                    lockout_minutes=max(1, settings.ADMIN_LOCKOUT_SECONDS // 60)
+                )
+            )
+
+        return False

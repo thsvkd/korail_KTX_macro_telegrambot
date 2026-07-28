@@ -124,6 +124,7 @@ class TelegramWebhook(Resource):
                 logger.info(f"Reservation process failed for chat_id={chat_id}")
                 self.storage.delete_running_reservation(chat_id)
                 self.storage.delete_resume_credentials(chat_id)
+                self.storage.delete_app_session_start(chat_id)
 
                 session = self.storage.get_user_session(chat_id)
                 if session:
@@ -176,6 +177,7 @@ class TelegramWebhook(Resource):
                 # credentials kept for a restart have no reason to exist.
                 self.storage.delete_running_reservation(chat_id)
                 self.storage.delete_resume_credentials(chat_id)
+                self.storage.delete_app_session_start(chat_id)
 
                 # Notify subscribers
                 subscribers = self.storage.get_all_subscribers()

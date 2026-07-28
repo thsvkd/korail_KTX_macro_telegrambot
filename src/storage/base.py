@@ -66,6 +66,17 @@ class StorageInterface(ABC):
         """Forget the credentials of a search that is over."""
         pass
 
+    # Korail Client Identity
+    @abstractmethod
+    def get_or_create_app_session_start(self, chat_id: int) -> str:
+        """When this user's Korail app session began, in epoch milliseconds."""
+        pass
+
+    @abstractmethod
+    def delete_app_session_start(self, chat_id: int) -> None:
+        """Forget an app session, so the next search starts a new one."""
+        pass
+
     # Payment Status Management
     @abstractmethod
     def get_payment_status(self, chat_id: int) -> Optional[PaymentStatus]:

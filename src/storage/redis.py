@@ -188,6 +188,44 @@ class RedisStorage(StorageInterface):
         """Forget the credentials of a search that is over."""
         self.redis.delete(f"resume_credentials:{chat_id}")
 
+    # ==================== Korail Client Identity ====================
+
+    def get_or_create_app_session_start(self, chat_id: int) -> str:
+        """
+        When this user's Korail app session began, in epoch milliseconds.
+
+        The Korail client stamps every request with the moment its app was
+        started. A search lives in a child process, so without somewhere to
+        keep that moment every restart would announce a freshly launched app
+        for a search the user has had running since yesterday. It is created
+        once and handed back unchanged for as long as the search can be
+        resumed.
+
+        Returns:
+            The timestamp as a decimal string
+        """
+        key = f"app_session_start:{chat_id}"
+        now = str(int(time.time() * 1000))
+
+        # Created and returned in one step: two searches starting together
+        # must not each believe they made it.
+        if self.redis.set(key, now, nx=True, ex=settings.RESUME_TTL_SECONDS):
+            return now
+
+        stored = self.redis.get(key)
+        if not stored:
+            # Expired between the two calls. Rare, and a fresh one is right.
+            self.redis.setex(key, settings.RESUME_TTL_SECONDS, now)
+            return now
+
+        # Keep it for as long as the search that owns it can still be resumed.
+        self.redis.expire(key, settings.RESUME_TTL_SECONDS)
+        return stored
+
+    def delete_app_session_start(self, chat_id: int) -> None:
+        """Forget an app session, so the next search starts a new one."""
+        self.redis.delete(f"app_session_start:{chat_id}")
+
     # ==================== Payment Status Management ====================
 
     def get_payment_status(self, chat_id: int) -> Optional[PaymentStatus]:

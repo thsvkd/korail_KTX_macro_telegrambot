@@ -177,3 +177,57 @@ class TestRestartResumesTheSearch:
         popen.assert_not_called()
         assert storage.get_running_reservation(CHAT_ID) is None
         assert storage.get_resume_credentials(CHAT_ID) is None
+
+
+class TestAppSessionOutlivesTheRestart:
+    """
+    The Korail client stamps every request with when its app was started.
+
+    A search lives in a child process the bot restarts, and a restart of the
+    bot is not the user relaunching their app.
+    """
+
+    def test_a_resumed_search_keeps_the_app_session_it_began_with(
+        self, storage, search_params
+    ):
+        first = _service(storage)
+        with patch.object(settings, 'RUN_ID', FIRST_RUN):
+            child = _start(first, search_params)
+        # What the search process stamps its requests with.
+        before = storage.get_or_create_app_session_start(CHAT_ID)
+        _stop(first, child)
+
+        second = _service(storage)
+        with patch.object(settings, 'RUN_ID', SECOND_RUN), \
+             patch.object(second, '_owns_process', return_value=False), \
+             patch('subprocess.Popen') as popen:
+            popen.return_value.pid = 525252
+            summary = second.reconcile_after_restart()
+
+        assert summary['resumed'] == 1
+        assert storage.get_or_create_app_session_start(CHAT_ID) == before
+
+    def test_the_same_user_is_handed_the_same_session_back(self, storage):
+        first = storage.get_or_create_app_session_start(CHAT_ID)
+
+        assert storage.get_or_create_app_session_start(CHAT_ID) == first
+
+    def test_one_user_ending_their_search_leaves_the_others_alone(self, storage):
+        mine = storage.get_or_create_app_session_start(CHAT_ID)
+        storage.get_or_create_app_session_start(CHAT_ID + 1)
+
+        storage.delete_app_session_start(CHAT_ID + 1)
+
+        assert storage.redis.get(f"app_session_start:{CHAT_ID + 1}") is None
+        assert storage.get_or_create_app_session_start(CHAT_ID) == mine
+
+    def test_ending_the_search_ends_the_app_session(self, storage, search_params):
+        service = _service(storage)
+        with patch.object(settings, 'RUN_ID', FIRST_RUN):
+            _start(service, search_params)
+        storage.get_or_create_app_session_start(CHAT_ID)
+
+        with patch.object(service, '_owns_process', return_value=False):
+            assert service.cancel_reservation(CHAT_ID) is True
+
+        assert storage.redis.get(f"app_session_start:{CHAT_ID}") is None

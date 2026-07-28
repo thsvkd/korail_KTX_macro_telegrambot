@@ -2,6 +2,8 @@
 import random
 import time
 from typing import Optional, List
+
+import requests
 from korail2 import (
     Korail as K2MKorail, TrainType, ReserveOption, SoldOutError, NoResultsError,
     AdultPassenger
@@ -17,20 +19,66 @@ logger = get_logger(__name__)
 class KorailService:
     """Service for interacting with Korail API."""
 
-    def __init__(self):
-        """Initialize Korail service."""
+    def __init__(self, app_session_start: Optional[str] = None):
+        """
+        Initialize Korail service.
+
+        Args:
+            app_session_start: When this user's app session began, in epoch
+                               milliseconds. A search that a restart
+                               interrupted passes back the value it started
+                               with so it stays one session; None lets the
+                               client stamp the moment it was built.
+        """
         self._korail_instance: Optional[K2MKorail] = None
         self._logged_in = False
         self._search_interval = settings.KORAIL_SEARCH_INTERVAL
         self._search_jitter = settings.KORAIL_SEARCH_INTERVAL_JITTER
+        self._app_session_start = app_session_start
         self._username: Optional[str] = None
         self._password: Optional[str] = None
-        self._last_login_time: float = 0
-        self._relogin_interval: int = 30 * 60  # 30 minutes
+        self._relogin_interval = settings.KORAIL_RELOGIN_INTERVAL
+        self._relogin_jitter = settings.KORAIL_RELOGIN_INTERVAL_JITTER
+        self._relogin_due_at: float = 0.0
         self._relogin_count: int = 0
 
         # Log class methods to verify correct version is loaded
         logger.debug(f"KorailService initialized with methods: {[m for m in dir(self) if not m.startswith('_')]}")
+
+    def _build_client(self, username: str, password: str) -> K2MKorail:
+        """
+        Build a Korail client that belongs to this service alone.
+
+        korail2 keeps its requests.Session on the class, so out of the box
+        every client in a process shares one cookie jar - two users answering
+        the password prompt at the same time would be handing each other their
+        Korail session. Each client gets a session of its own here, carrying
+        over the User-Agent the library set.
+
+        Args:
+            username: Korail username
+            password: Korail password
+
+        Returns:
+            A client that has not logged in yet
+        """
+        client = K2MKorail(username, password, auto_login=False)
+
+        user_agent = client._session.headers.get('User-Agent')
+        client._session = requests.Session()
+        if user_agent:
+            client._session.headers.update({'User-Agent': user_agent})
+
+        if settings.KORAIL_APP_VERSION:
+            client._version = settings.KORAIL_APP_VERSION
+
+        if self._app_session_start:
+            # Every request carries when the app was started. A search the
+            # bot restarted is the same session continuing, so it keeps the
+            # timestamp it began with rather than announcing a fresh launch.
+            client._engine.app_start_ts = self._app_session_start
+
+        return client
 
     def login(self, username: str, password: str) -> bool:
         """
@@ -44,13 +92,13 @@ class KorailService:
             True if login successful, False otherwise
         """
         try:
-            self._korail_instance = K2MKorail(username, password, auto_login=False)
+            self._korail_instance = self._build_client(username, password)
             self._logged_in = self._korail_instance.login()
 
             if self._logged_in:
                 self._username = username
                 self._password = password
-                self._last_login_time = time.time()
+                self._schedule_next_relogin()
                 logger.info(f"Korail login successful for user: {mask_phone(username)}")
             else:
                 logger.warning(f"Korail login failed for user: {mask_phone(username)}")
@@ -68,10 +116,9 @@ class KorailService:
 
         logger.debug("🔄 Session expired, attempting re-login...")
         try:
-            self._korail_instance = K2MKorail(self._username, self._password, auto_login=False)
+            self._korail_instance = self._build_client(self._username, self._password)
             self._logged_in = self._korail_instance.login()
             if self._logged_in:
-                self._last_login_time = time.time()
                 self._relogin_count += 1
                 logger.debug(f"✅ Re-login successful (total: {self._relogin_count})")
             else:
@@ -81,28 +128,57 @@ class KorailService:
             logger.error(f"❌ Re-login error: {e}")
             self._logged_in = False
             return False
+        finally:
+            # Whether or not it worked. A failed refresh that left the
+            # deadline in the past would try again on every pass of the search
+            # loop, which is a login attempt every couple of seconds; the
+            # session is renewed on demand anyway when Korail rejects it.
+            self._schedule_next_relogin()
+
+    def _schedule_next_relogin(self) -> None:
+        """
+        Decide when the session should be refreshed next.
+
+        Drawn again after every login rather than kept as a fixed period: a
+        search running for half a day would otherwise re-authenticate exactly
+        on the half hour, every half hour. A base interval of 0 turns the
+        refresh off, leaving the session to be renewed when Korail actually
+        rejects it.
+        """
+        if self._relogin_interval <= 0:
+            self._relogin_due_at = 0.0
+            return
+
+        delay = self._spread(self._relogin_interval, self._relogin_jitter)
+        self._relogin_due_at = time.time() + delay
+        logger.debug(f"🔄 Next session refresh in {delay:.0f}s")
 
     def _check_session_refresh(self):
-        """Proactively re-login if session is older than the relogin interval."""
-        if self._last_login_time and (time.time() - self._last_login_time) >= self._relogin_interval:
-            logger.debug(f"🔄 Session older than {self._relogin_interval}s, proactive re-login")
+        """Refresh the session before Korail gets around to expiring it."""
+        if self._relogin_due_at and time.time() >= self._relogin_due_at:
+            logger.debug("🔄 Session due for a refresh, re-logging in")
             self._relogin()
 
-    def jittered(self, seconds: float) -> float:
+    @staticmethod
+    def _spread(seconds: float, ratio: float) -> float:
         """
-        Spread a wait over seconds * (1 +/- jitter).
+        Draw a value from seconds * (1 +/- ratio).
 
         A fixed interval makes the search a metronome: every request lands the
         same number of seconds after the previous one, a pattern no person
         browsing the site would ever produce. Drawing each wait uniformly from
         a band around the configured value keeps the average rate but removes
-        that signature. With jitter at 0 the value is returned unchanged.
+        that signature. With ratio at 0 the value is returned unchanged.
         """
-        if self._search_jitter <= 0:
+        if ratio <= 0:
             return seconds
 
-        spread = seconds * self._search_jitter
+        spread = seconds * ratio
         return max(0.0, random.uniform(seconds - spread, seconds + spread))
+
+    def jittered(self, seconds: float) -> float:
+        """Spread a wait between requests over the configured search jitter."""
+        return self._spread(seconds, self._search_jitter)
 
     def next_interval(self, multiplier: float = 1.0) -> float:
         """

@@ -104,7 +104,11 @@ class BackgroundReservationProcess:
         self.telegram = TelegramService(settings.TELEGRAM_BOT_TOKEN)
         self.payment_reminder = PaymentReminderService(self.storage, self.telegram)
         self.multi_reminder = MultiReservationReminderService(self.storage, self.telegram)
-        self.korail = KorailService()
+        # A resumed search is the same app session the user started, not a
+        # freshly launched one, so it picks up the timestamp it began with.
+        self.korail = KorailService(
+            app_session_start=self.storage.get_or_create_app_session_start(self.chat_id)
+        )
 
         logger.info(f"Redis storage connected: {settings.REDIS_HOST}:{settings.REDIS_PORT}")
 

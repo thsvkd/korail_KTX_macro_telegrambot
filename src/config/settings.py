@@ -82,6 +82,18 @@ class Settings:
     # the search does not knock on the door on a metronome. 0 disables it and
     # restores the old fixed interval.
     KORAIL_SEARCH_INTERVAL_JITTER: float = _env_ratio('SEARCH_INTERVAL_JITTER', 0.4)
+    # Korail closes a login server-side after a while, and a search that runs
+    # for hours has to renew it. Drawn afresh after every login rather than
+    # kept as a fixed period, for the same reason the search interval is.
+    # 0 stops renewing ahead of time and waits for Korail to reject the
+    # session instead, which is when the client re-authenticates anyway.
+    KORAIL_RELOGIN_INTERVAL: float = float(os.environ.get('RELOGIN_INTERVAL', '1800'))
+    KORAIL_RELOGIN_INTERVAL_JITTER: float = _env_ratio('RELOGIN_INTERVAL_JITTER', 0.4)
+    # The mobile app build the client reports itself as. korail2 carries the
+    # build that was current when it was packaged; this is the escape hatch
+    # for when Korail stops serving that build and the library has not caught
+    # up yet. Unset means whatever the library ships.
+    KORAIL_APP_VERSION: Optional[str] = os.environ.get('KORAIL_APP_VERSION') or None
     KORAIL_STATION_LIST_URL: str = "http://www.letskorail.com/ebizprd/stationKtxList.do"
     KORAIL_PAYMENT_URL: str = "https://www.letskorail.com/ebizprd/EbizPrdTicketpr13500W_pr13510.do?"
 

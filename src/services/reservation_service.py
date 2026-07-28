@@ -449,6 +449,7 @@ class ReservationService:
 
         self.storage.delete_running_reservation(chat_id)
         self.storage.delete_resume_credentials(chat_id)
+        self.storage.delete_app_session_start(chat_id)
 
         session = self.storage.get_user_session(chat_id)
         if session:
@@ -477,6 +478,7 @@ class ReservationService:
             # Clean up storage
             self.storage.delete_running_reservation(chat_id)
             self.storage.delete_resume_credentials(chat_id)
+            self.storage.delete_app_session_start(chat_id)
 
             # Reset user session
             session = self.storage.get_user_session(chat_id)
@@ -511,6 +513,7 @@ class ReservationService:
             try:
                 self._terminate_search_process(reservation.process_id)
                 self.storage.delete_resume_credentials(reservation.chat_id)
+                self.storage.delete_app_session_start(reservation.chat_id)
 
                 # Notify user
                 self.telegram.send_message(

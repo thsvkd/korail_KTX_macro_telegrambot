@@ -127,8 +127,11 @@ class ConversationHandler:
             self.telegram.send_message(chat_id, Messages.ERROR_ADMIN_ENV)
             return
 
-        # Try login
-        korail = KorailService()
+        # Try login. The same app session the user's search will run under,
+        # so validating a password does not look like a separate device.
+        korail = KorailService(
+            app_session_start=self.storage.get_or_create_app_session_start(chat_id)
+        )
         if korail.login(username, password):
             session.credentials = UserCredentials(korail_id=username, korail_pw=password)
             session.last_action = UserProgress.PW_INPUT_SUCCESS
@@ -191,8 +194,11 @@ class ConversationHandler:
         session.credentials.korail_pw = password
         self.storage.save_user_session(session)
 
-        # Try login
-        korail = KorailService()
+        # Try login. The same app session the user's search will run under,
+        # so validating a password does not look like a separate device.
+        korail = KorailService(
+            app_session_start=self.storage.get_or_create_app_session_start(chat_id)
+        )
         if korail.login(username, password):
             session.last_action = UserProgress.PW_INPUT_SUCCESS
             self.storage.save_user_session(session)

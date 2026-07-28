@@ -25,9 +25,20 @@ require_env_file
 PASSWORD="$(env_value REDIS_PASSWORD)"
 [[ -n "$PASSWORD" ]] || die "REDIS_PASSWORD is not set in .env"
 
-CONTAINER="korail_redis"
-if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
-    die "Container '${CONTAINER}' is not running. Start it with 'scripts/docker-up.sh redis'."
+# Either the compose stack or the standalone instance scripts/dev-redis.sh
+# starts for host-side runs; whichever is up is the one to talk to.
+CONTAINER=""
+for candidate in korail_redis korail_dev_redis; do
+    if docker ps --format '{{.Names}}' | grep -qx "$candidate"; then
+        CONTAINER="$candidate"
+        break
+    fi
+done
+
+if [[ -z "$CONTAINER" ]]; then
+    err "No Redis container is running."
+    err "  compose stack:     scripts/docker-up.sh"
+    die "  local development: scripts/dev-redis.sh"
 fi
 
 if [[ "${1:-}" == "--keys" ]]; then

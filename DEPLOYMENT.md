@@ -45,19 +45,49 @@ wget https://raw.githubusercontent.com/your-repo/master/docker-compose.yml
 ```bash
 cd ~/korail_bot
 
+# 시크릿 생성 (로컬 저장소에서 실행 후 값을 복사)
+./scripts/gen-secrets.sh --print
+
 # .env 파일 생성
 cat > .env << 'EOF'
 BOTTOKEN=your_telegram_bot_token
+
+# 웹훅 인증 - 필수. 없으면 앱이 기동하지 않습니다.
+TELEGRAM_WEBHOOK_SECRET=generated_value
+# 코레일 로그인 정보 암호화 키
+SESSION_SECRET=generated_value
+# Redis AUTH - docker compose 가 --requirepass 로 기동합니다
+REDIS_PASSWORD=generated_value
+# 관리자 명령 비밀번호 - 코레일 비밀번호와 반드시 다르게
+ADMIN_PASSWORD=generated_value
+
+# 관리자 편의 로그인 (선택). ADMIN_MAGIC_STRING 이 비어 있으면 비활성화
 USERID=your_korail_id
 USERPW=your_korail_password
+ADMIN_MAGIC_STRING=
+
 ALLOW_LIST=010-1234-5678
 REDIS_HOST=redis
 REDIS_PORT=6379
 REDIS_DB=0
+FLASK_DEBUG=False
 EOF
 
 # 권한 설정 (보안)
 chmod 600 .env
+```
+
+### 5. 텔레그램 웹훅 등록
+
+`TELEGRAM_WEBHOOK_SECRET` 과 함께 등록해야 앱이 요청을 신뢰합니다.
+시크릿을 바꿀 때마다 다시 등록해야 합니다.
+
+```bash
+# 로컬 저장소에서 (.env 의 값을 사용)
+./scripts/set-webhook.sh https://your.domain/telebot
+
+# 확인
+./scripts/set-webhook.sh --info
 ```
 
 ---
@@ -256,19 +286,46 @@ chmod 600 .env
 ls -la .env
 ```
 
-### Redis 비밀번호 설정 (선택)
+### Redis 비밀번호 (필수)
+
+`docker-compose.yml` 은 Redis 를 `--requirepass` 로 기동하고 호스트에
+포트를 노출하지 않습니다. `.env` 에 `REDIS_PASSWORD` 가 없으면 compose 가
+기동을 거부합니다.
 
 ```bash
-# .env에 추가
-echo "REDIS_PASSWORD=your_strong_password" >> .env
-
-# docker-compose.yml 수정 필요 (Redis command에 --requirepass 추가)
+# 값 생성
+./scripts/gen-secrets.sh
 ```
+
+### 설정 점검
+
+배포 전후로 실행하세요. 시크릿 누락, 디버그 모드, Redis 노출, `.env` 커밋
+여부를 검사합니다.
+
+```bash
+./scripts/security-check.sh
+```
+
+### GitHub Actions Secrets
+
+자동 배포를 쓴다면 저장소에 다음 값이 있어야 합니다.
+
+| Secret | 설명 |
+| --- | --- |
+| `TELEGRAM_BOTTOKEN` | 봇 토큰 |
+| `TELEGRAM_WEBHOOK_SECRET` | 웹훅 시크릿 |
+| `SESSION_SECRET` | 자격증명 암호화 키 |
+| `ADMIN_COMMAND_PASSWORD` | 관리자 명령 비밀번호 (코레일 비밀번호와 별개) |
+| `REDIS_PASSWORD` | Redis AUTH |
+| `ADMIN_USERID` / `ADMIN_PASSWD` | 관리자 편의 로그인용 코레일 계정 (선택) |
+| `ADMIN_MAGIC_STRING` | 편의 로그인 트리거 (선택, 없으면 비활성화) |
+| `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` | 이미지 푸시 |
+| `SSH_USERNAME` / `SSH_PASSWORD` | 배포 서버 접속 |
 
 ### 방화벽 설정
 
 ```bash
-# Redis 포트는 외부 접근 차단 (Docker 네트워크 내부만)
+# 앱만 허용, Redis 는 컨테이너 네트워크 내부에서만 접근
 sudo ufw allow 8000/tcp     # 앱만 허용
 sudo ufw deny 6379/tcp      # Redis는 차단
 ```

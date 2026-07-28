@@ -9,11 +9,17 @@
 git clone https://github.com/GeunSam2/korail_KTX_macro_telegrambot.git
 cd korail_KTX_macro_telegrambot
 
-# 의존성 설치 및 실행
-make setup       # 처음 한 번만 (pipenv 설치)
-make install     # 패키지 설치
-make run         # 실행
+# .env 생성 + 시크릿 발급 + 의존성 설치 (처음 한 번만)
+./scripts/setup.sh
+
+# .env 에 BOTTOKEN 입력 후 웹훅 등록
+./scripts/set-webhook.sh https://your.domain/telebot
+
+# 실행
+./scripts/run.sh
 ```
+
+스크립트 전체 목록은 [scripts/README.md](scripts/README.md)를 참고하세요.
 
 ## 참고
 
@@ -30,59 +36,28 @@ make run         # 실행
 
 ### 로컬 개발 (macOS/Linux)
 
-#### 방법 1: mise 사용 (권장)
-
 ```bash
-# 1. mise 설치 (없는 경우)
-brew install mise
+# 1. .env 생성 + 시크릿 발급 + 의존성 설치
+./scripts/setup.sh
 
-# 2. 환경 변수 설정
-cp .env.default .env
-# .env 파일을 열어서 BOTTOKEN 등 실제 값으로 수정
+# 2. .env 를 열어 BOTTOKEN 입력
 
-# 3. mise 활성화 (자동으로 .env.default와 .env 로드)
-mise trust
-mise install
+# 3. 웹훅 등록 (TELEGRAM_WEBHOOK_SECRET 과 함께 등록됩니다)
+./scripts/set-webhook.sh https://your.domain/telebot
 
-# 4. 의존성 설치 및 실행
-pipenv install
-pipenv run python src/app.py
+# 4. Redis 기동 후 실행
+./scripts/docker-up.sh redis
+./scripts/run.sh
 ```
 
-**mise 환경변수 로딩 순서:**
-1. `.env.default` - 기본값 (git에 커밋됨)
-2. `.env` - 로컬 오버라이드 (git에 커밋되지 않음)
+**사용 가능한 명령어:** `make help` 또는 [scripts/README.md](scripts/README.md)
 
-#### 방법 2: pipenv 직접 사용
-
-```bash
-# 1. 개발 환경 설정 (처음 한 번만)
-make setup         # pipenv, pyenv 설치 (없는 경우)
-
-# 2. 환경 변수 설정
-export BOTTOKEN=your_telegram_bot_token
-
-# 3. 의존성 설치
-make install       # pipenv install 실행
-
-# 4. 실행
-make run           # 애플리케이션 실행
-
-# 또는 쉘에 진입하여 실행
-make shell         # pipenv shell 실행
-python src/app.py
-```
-
-**사용 가능한 명령어:**
-- `make help` - 사용 가능한 명령어 목록 확인
-- `make setup` - 개발 환경 설정
-- `make install` - 의존성 설치
-- `make run` - 애플리케이션 실행
-- `make shell` - pipenv shell 진입
-- `make test` - 전체 테스트 실행
-- `make test-api` - API 엔드포인트 테스트만 실행
-- `make test-logic` - Korail 로직 테스트만 실행
-- `make requirements` - requirements.txt 생성
+- `make setup` / `./scripts/setup.sh` - 개발 환경 설정
+- `make run` / `./scripts/run.sh` - 애플리케이션 실행
+- `make test` / `./scripts/test.sh` - 테스트 실행
+- `make secrets` / `./scripts/gen-secrets.sh` - 시크릿 발급 및 로테이션
+- `make security-check` / `./scripts/security-check.sh` - 설정 보안 점검
+- `make up` / `down` / `logs` - docker compose 스택 조작
 
 ### Docker 배포
 
@@ -91,61 +66,71 @@ python src/app.py
 make requirements
 
 # 2. Docker 이미지 빌드
-make build
+./scripts/docker-build.sh
 
-# 3. 실행
-docker run -dit \
-  -e BOTTOKEN=[텔레그램봇토큰] \
-  -e ALLOW_LIST=[허용할전화번호목록] \
-  -p 8080:8080 \
-  geunsam2/korailbot:v3
-
-# 또는 (관리자 편의 로그인 사용)
-docker run -dit \
-  -e BOTTOKEN=[텔레그램봇토큰] \
-  -e ALLOW_LIST=[허용할전화번호목록] \
-  -e USERID=[코레일ID] \
-  -e USERPW=[코레일비밀번호] \
-  -p 8080:8080 \
-  geunsam2/korailbot:v3
+# 3. .env 준비 후 스택 기동 (앱 + Redis)
+./scripts/docker-up.sh
 ```
+
+`docker-compose.yml` 은 Redis 를 호스트로 노출하지 않고 `--requirepass` 로
+띄웁니다. 따라서 `.env` 에 `REDIS_PASSWORD` 가 반드시 있어야 합니다
+(`./scripts/gen-secrets.sh` 가 채워줍니다).
 
 ### 환경변수
 
 | 변수명 | 필수 | 설명 |
 |--------|------|------|
 | `BOTTOKEN` | ✅ | 텔레그램 봇 토큰 |
+| `TELEGRAM_WEBHOOK_SECRET` | ✅ | 웹훅 인증용 시크릿. 없으면 앱이 기동하지 않습니다 |
+| `SESSION_SECRET` | ⚠️ | 코레일 로그인 정보 암호화 키. 없으면 임시 키를 쓰며 재시작 시 세션이 무효화됩니다 |
+| `REDIS_PASSWORD` | ⚠️ | Redis AUTH 비밀번호. docker compose 사용 시 필수 |
+| `ADMIN_PASSWORD` | ❌ | 관리자 명령 비밀번호. 미설정 시 관리자 명령 전체 비활성화. **코레일 비밀번호와 달라야 합니다** |
+| `ADMIN_MAGIC_STRING` | ❌ | 관리자 편의 로그인 트리거 문자열. 미설정 시 해당 기능 비활성화 |
+| `USERID` / `USERPW` | ❌ | 관리자 편의 로그인용 코레일 계정 |
 | `ALLOW_LIST` | ❌ | 허용할 사용자 전화번호 목록 (쉼표로 구분) |
-| `USERID` | ❌ | 관리자 편의 로그인용 코레일 ID |
-| `USERPW` | ❌ | 관리자 편의 로그인용 코레일 비밀번호 |
+| `SESSION_TTL_SECONDS` | ❌ | 세션 보관 기간 (기본 86400) |
+| `ADMIN_MAX_AUTH_FAILURES` | ❌ | 관리자 인증 실패 허용 횟수 (기본 5) |
+| `ADMIN_LOCKOUT_SECONDS` | ❌ | 인증 차단 시간 (기본 900) |
+| `FLASK_DEBUG` | ❌ | 기본 `False`. 외부에서 접근 가능한 호스트에서는 절대 켜지 마세요 |
+
+전체 목록과 설명은 [.env.example](.env.example) 을 참고하세요.
+
+## 보안
+
+- **웹훅 인증**: `/telebot` POST 는 Telegram 이 보내는
+  `X-Telegram-Bot-Api-Secret-Token` 헤더를 검증합니다. 시크릿을 바꾸면
+  `./scripts/set-webhook.sh` 로 재등록해야 합니다.
+- **내부 콜백**: 백그라운드 예약 프로세스가 쓰는 `/telebot` GET 과
+  `/check_payment` 는 루프백 주소 + 프로세스 시작 시 생성되는 토큰을 함께
+  요구합니다.
+- **로그인 정보**: 코레일 비밀번호는 Redis 에 암호화되어 저장되고, 예약
+  프로세스에 넘긴 직후 세션에서 지워집니다. 자식 프로세스에는 argv 가 아닌
+  stdin 으로 전달되므로 `ps` 에 노출되지 않습니다.
+- **개인정보**: 코레일 ID 는 전화번호이므로 로그와 알림 메시지에서
+  `010-****-5678` 형태로 마스킹됩니다. `/status` 는 본인 예약만 보여줍니다.
+- **관리자 인증**: 실패 횟수가 `ADMIN_MAX_AUTH_FAILURES` 를 넘으면
+  `ADMIN_LOCKOUT_SECONDS` 동안 차단됩니다.
+- 배포 전 `./scripts/security-check.sh` 로 설정을 점검하세요.
 
 ## 개발 워크플로우
 
 ### 테스트 실행
 
 ```bash
-# 전체 테스트 실행
+# 전체 테스트 실행 (testcontainers 가 Redis 를 띄우므로 Docker 필요)
 make test
 
-# API 엔드포인트 테스트만 실행
-make test-api
+# 단위 테스트만 (Redis 불필요)
+make test-unit
 
-# Korail 로직 테스트만 실행
-make test-logic
+# 특정 테스트만
+./scripts/test.sh -k credential
 ```
 
 **테스트 구성:**
-- `tests/test_api.py` - Flask API 엔드포인트 테스트
-  - `/telebot` 엔드포인트 존재 확인
-  - `/check_payment` 엔드포인트 존재 확인
-  - CORS 헤더 확인
-  - 404 에러 처리 확인
-
-- `tests/test_korail_logic.py` - Korail 예약 로직 테스트
-  - korail2 라이브러리 import 확인
-  - 필수 클래스 (Korail, TrainType, ReserveOption) 확인
-  - Flask 및 Telegram Bot 의존성 확인
-  - 결제 리마인더 시간 설정 (10분, 10초 간격) 확인
+- `tests/unit/` - 순수 단위 테스트 (입력 검증, 암호화, 마스킹, 자격증명 전달)
+- `tests/integration/` - Redis 와 서비스 계층 통합 테스트
+- `tests/e2e/` - 예약 플로우 전체 시나리오
 
 ### 의존성 추가 시
 ```bash

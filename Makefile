@@ -1,24 +1,37 @@
 IMAGE_NAME := geunsam2/korailbot:v3
 
+# Thin wrappers around scripts/ - see scripts/README.md for the full options.
+
 help:           ## Show this help.
 	@fgrep -h "##" $(MAKEFILE_LIST) | fgrep -v fgrep | sed -e 's/\\$$//' | sed -e 's/##//'
 
 .PHONY: setup
-setup:			## Setup development environment (install pipenv if needed)
-	@command -v pipenv >/dev/null 2>&1 || { echo "Installing pipenv..."; brew install pipenv; }
-	@command -v pyenv >/dev/null 2>&1 || { echo "Installing pyenv..."; brew install pyenv; }
+setup:			## Create .env, generate secrets, install dependencies
+	./scripts/setup.sh
 
 .PHONY: install
 install:		## Install dependencies with pipenv
-	pipenv install
+	pipenv install --dev
 
 .PHONY: run
 run:			## Run the application locally
-	pipenv run python src/app.py
+	./scripts/run.sh
 
 .PHONY: shell
 shell:			## Open pipenv shell
 	pipenv shell
+
+.PHONY: secrets
+secrets:		## Generate any missing secrets in .env
+	./scripts/gen-secrets.sh
+
+.PHONY: webhook
+webhook:		## Show the current Telegram webhook status
+	./scripts/set-webhook.sh --info
+
+.PHONY: security-check
+security-check:	## Check the local configuration for security mistakes
+	./scripts/security-check.sh
 
 .PHONY: requirements
 requirements:	## Generate requirements.txt from Pipfile.lock (for Docker)
@@ -27,20 +40,28 @@ requirements:	## Generate requirements.txt from Pipfile.lock (for Docker)
 
 .PHONY: test
 test:			## Run all tests with pytest
-	pipenv run pytest tests/ -v
+	./scripts/test.sh
 
-.PHONY: test-api
-test-api:		## Run API endpoint tests only
-	pipenv run pytest tests/test_api.py -v
-
-.PHONY: test-logic
-test-logic:		## Run Korail logic tests only
-	pipenv run pytest tests/test_korail_logic.py -v
+.PHONY: test-unit
+test-unit:		## Run the unit tests only
+	./scripts/test.sh tests/unit -v
 
 .PHONY: build
 build:			## Build Docker Image
-	docker build -t ${IMAGE_NAME} .
+	./scripts/docker-build.sh ${IMAGE_NAME}
+
+.PHONY: up
+up:				## Start the stack with docker compose
+	./scripts/docker-up.sh
+
+.PHONY: down
+down:			## Stop the stack
+	./scripts/docker-down.sh
+
+.PHONY: logs
+logs:			## Follow container logs
+	./scripts/docker-logs.sh
 
 .PHONY: publish
-publish: build	## Publish Docker Image
-	docker push ${IMAGE_NAME}
+publish:		## Build and publish the Docker image
+	./scripts/docker-push.sh ${IMAGE_NAME}

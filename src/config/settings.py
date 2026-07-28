@@ -9,6 +9,11 @@ import secrets
 from typing import Optional
 
 
+def _digits(value: str) -> str:
+    """Keep only the digits of a value, so phone formats stop mattering."""
+    return ''.join(character for character in value if character.isdigit())
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     """Read a boolean environment variable."""
     raw = os.environ.get(name)
@@ -203,10 +208,17 @@ class Settings:
 
     @classmethod
     def is_user_allowed(cls, phone_number: str) -> bool:
-        """Check if user phone number is in allow list."""
+        """
+        Check if user phone number is in allow list.
+
+        Compared digit by digit so that '010-1234-5678' and '01012345678'
+        are the same number, whichever form the list happens to use.
+        """
         if not cls.ALLOW_LIST or cls.ALLOW_LIST == ['']:
             return True  # No restriction if ALLOW_LIST is empty
-        return phone_number in cls.ALLOW_LIST
+
+        allowed = {_digits(entry) for entry in cls.ALLOW_LIST if _digits(entry)}
+        return _digits(phone_number) in allowed
 
 
 # Singleton instance

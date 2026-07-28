@@ -51,17 +51,22 @@ class Messages:
     REQUEST_PHONE = """📱 코레일 로그인 정보 입력을 시작합니다.
 
 현재 휴대폰 번호 로그인만 지원됩니다.
+(코레일 회원번호나 이메일로는 로그인할 수 없습니다)
 
 휴대전화번호를 입력해 주세요.
-예시: 010-1234-5678
+예시: 010-1234-5678 또는 01012345678
 
-⚠️ 하이픈(-)을 반드시 포함하여 입력해주세요.
+💡 하이픈(-)은 있어도 없어도 됩니다.
 💡 취소를 원하시면 /cancel을 입력하세요.
 """
 
-    REQUEST_PASSWORD = """✅ 아이디 입력 완료
+    REQUEST_PASSWORD = """✅ 휴대폰 번호 입력 완료
 
-🔒 비밀번호를 입력해주세요.
+🔒 코레일 계정 비밀번호를 입력해주세요.
+(코레일톡·홈페이지 로그인에 쓰는 그 비밀번호입니다)
+
+⚠️ 입력한 비밀번호는 이 대화 기록에 남습니다.
+   입력 후 해당 메시지를 삭제하시는 것을 권합니다.
 """
 
     LOGIN_SUCCESS = """✅ 로그인 성공!
@@ -243,12 +248,16 @@ class Messages:
     ERROR_ADMIN_ENV = "⚠️ 서버 환경변수가 설정되지 않았습니다."
     ERROR_ADMIN_LOGIN = "⚠️ 관리자 계정 로그인에 실패했습니다."
     ERROR_RESERVATION_START_FAILED = "❌ 예약 프로세스 시작에 실패했습니다.\n다시 시도해주세요."
-    ERROR_NOT_SUBSCRIBER = """⚠️ 구독이 필요한 서비스입니다.
+    # Self-hosted deployments are the norm for this bot, so this must not
+    # point users at anyone else's paid service.
+    ERROR_NOT_SUBSCRIBER = """🚫 사용 권한이 없습니다.
 
-2024년부터 본 서비스가 유료화되었습니다.
-구독을 원하시면 텔레그램 @dubidum으로 문의해주세요.
+입력하신 번호가 이 봇의 허용 목록(ALLOW_LIST)에 없습니다.
 
-예약을 취소합니다.
+이 봇을 직접 운영하신다면 .env 의 ALLOW_LIST 에 번호를 추가하거나,
+제한 없이 열려면 값을 비워두세요.
+
+그 외에는 봇 운영자에게 문의해주세요.
 """
     # ========== 취소 및 완료 메시지 ==========
     CANCELLED = "✅ 예약이 취소되었습니다."

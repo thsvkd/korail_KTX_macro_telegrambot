@@ -8,9 +8,50 @@ class InputValidator:
     """Validator for user inputs in the reservation flow."""
 
     @staticmethod
+    def normalize_phone_number(phone: str) -> Optional[str]:
+        """
+        Put a Korean mobile number into the hyphenated form Korail expects.
+
+        People type their number every way imaginable - '01012345678',
+        '010 1234 5678', '010.1234.5678'. Korail wants '010-1234-5678', so
+        the input is reduced to digits and rebuilt rather than rejected.
+
+        Args:
+            phone: Phone number as typed
+
+        Returns:
+            Normalized number, or None when it is not a mobile number
+        """
+        if not phone:
+            return None
+
+        # Only separators may be dropped. Stripping anything else would turn
+        # a typo into a different, valid-looking number: '010-1234-567a'
+        # would silently become '010-123-4567'.
+        if not re.fullmatch(r'[0-9\s.\-()+]+', phone.strip()):
+            return None
+
+        digits = ''.join(character for character in phone if character.isdigit())
+
+        if not digits.startswith('01'):
+            return None
+
+        # 010-1234-5678 (11 digits) and the older 011-123-4567 (10 digits)
+        if len(digits) == 11:
+            return f"{digits[:3]}-{digits[3:7]}-{digits[7:]}"
+        if len(digits) == 10:
+            return f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
+
+        return None
+
+    @staticmethod
     def validate_phone_number(phone: str) -> Tuple[bool, Optional[str]]:
         """
-        Validate Korean phone number format with enhanced security.
+        Validate a Korean mobile number, in whatever shape it was typed.
+
+        Hyphens are optional: the number is normalized first and only the
+        result has to look like a mobile number. Rejecting '01012345678' for
+        punctuation would be pedantry, not validation.
 
         Args:
             phone: Phone number string
@@ -18,40 +59,17 @@ class InputValidator:
         Returns:
             Tuple of (is_valid, error_message)
         """
-        if not phone:
+        if not phone or not phone.strip():
             return False, "전화번호를 입력해주세요."
 
-        # Trim whitespace
         phone = phone.strip()
 
-        if not phone:
-            return False, "전화번호를 입력해주세요."
+        # Anything that is not a digit or common separator is not a typo.
+        if not re.fullmatch(r'[0-9\s.\-()+]+', phone):
+            return False, "전화번호는 숫자로만 입력해주세요. (예: 010-1234-5678)"
 
-        # Check for suspicious patterns (SQL injection, script injection, etc.)
-        suspicious_patterns = ['<', '>', ';', '--', '/*', '*/', 'script', 'SELECT', 'DROP', 'INSERT', 'UPDATE', 'DELETE']
-        if any(pattern.lower() in phone.lower() for pattern in suspicious_patterns):
-            return False, "유효하지 않은 문자가 포함되어 있습니다."
-
-        # Check for minimum length
-        if len(phone) < 10:
-            return False, "전화번호가 너무 짧습니다."
-
-        # Check for maximum length
-        if len(phone) > 13:
-            return False, "전화번호가 너무 깁니다."
-
-        if "-" not in phone:
-            return False, "'-'를 포함한 전화번호를 입력해주세요. (예: 010-1234-5678)"
-
-        # Pattern: 010-xxxx-xxxx or 01x-xxx-xxxx or 01x-xxxx-xxxx
-        pattern = r'^01[0-9]-\d{3,4}-\d{4}$'
-        if not re.match(pattern, phone):
+        if InputValidator.normalize_phone_number(phone) is None:
             return False, "올바른 전화번호 형식이 아닙니다. (예: 010-1234-5678)"
-
-        # Additional validation: check that only digits and hyphens are present
-        clean_phone = phone.replace('-', '')
-        if not clean_phone.isdigit():
-            return False, "전화번호는 숫자와 '-'만 포함해야 합니다."
 
         return True, None
 
@@ -399,9 +417,12 @@ class InputValidator:
         if len(password) > 50:
             return False, "비밀번호가 너무 깁니다."
 
-        # Check for suspicious patterns
-        suspicious_patterns = ['<script', 'javascript:', 'onerror=', 'onclick=', 'SELECT', 'DROP', 'INSERT']
-        if any(pattern.lower() in password.lower() for pattern in suspicious_patterns):
-            return False, "유효하지 않은 문자가 포함되어 있습니다."
+        # No pattern blocklist here on purpose. This value is only ever
+        # encrypted and posted to Korail's login endpoint - it reaches neither
+        # SQL nor a page - so screening it for 'SELECT' or 'DROP' cannot
+        # prevent an injection. It only rejects real passwords: anything
+        # containing 'drop' ("Raindrop2024") was refused as malicious.
+        if any(character in password for character in ('\n', '\r', '\t')):
+            return False, "비밀번호에 줄바꿈이나 탭을 포함할 수 없습니다."
 
         return True, None

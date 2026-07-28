@@ -22,11 +22,11 @@ class TestPhoneNumberValidation:
         valid, _ = InputValidator.validate_phone_number("011-123-4567")
         assert valid is True
 
-    def test_invalid_phone_without_hyphens(self):
-        """Test phone number without hyphens is invalid."""
+    def test_valid_phone_without_hyphens(self):
+        """Hyphens are optional; the number is normalized instead."""
         valid, error = InputValidator.validate_phone_number("01012345678")
-        assert valid is False
-        assert "'-'" in error or "하이픈" in error
+        assert valid is True, error
+        assert InputValidator.normalize_phone_number("01012345678") == "010-1234-5678"
 
     def test_invalid_phone_short(self):
         """Test phone number that's too short."""
@@ -416,15 +416,20 @@ class TestPasswordValidation:
         valid, error = InputValidator.validate_password("")
         assert valid is False
 
-    def test_invalid_suspicious_script(self):
-        """Test password with script injection."""
+    def test_script_like_password_is_accepted(self):
+        """
+        The password is encrypted and posted to Korail's login endpoint; it
+        reaches neither SQL nor a rendered page. Screening it here blocked
+        real passwords (anything containing 'drop') without preventing any
+        injection.
+        """
         valid, error = InputValidator.validate_password("<script>alert('xss')</script>")
-        assert valid is False
+        assert valid is True, error
 
-    def test_invalid_suspicious_sql(self):
-        """Test password with SQL keywords."""
+    def test_sql_like_password_is_accepted(self):
+        """See above: a password is a secret to forward, not a query."""
         valid, error = InputValidator.validate_password("password'; DROP TABLE users--")
-        assert valid is False
+        assert valid is True, error
 
 
 class TestPhoneNumberEnhancedValidation:

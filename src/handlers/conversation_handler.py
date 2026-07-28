@@ -148,6 +148,10 @@ class ConversationHandler:
             self.telegram.send_message(chat_id, error + " 다시 입력 바랍니다.")
             return
 
+        # Store the canonical form: Korail expects the hyphenated number, and
+        # everything downstream (allow list, logs, masking) compares against it.
+        text = InputValidator.normalize_phone_number(text) or text
+
         # Check allow list
         if not settings.is_user_allowed(text):
             # Notify subscribers

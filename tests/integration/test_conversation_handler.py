@@ -87,7 +87,12 @@ class TestConversationHandler:
         assert "비밀번호" in call_args[0][1] or "password" in call_args[0][1].lower()
 
     def test_phone_input_invalid_format(self):
-        """Test invalid phone number format."""
+        """
+        Test invalid phone number format.
+
+        '01012345678' used to be the example here; hyphens are optional now,
+        so this needs a number that is genuinely malformed.
+        """
         chat_id = 12345
         session = UserSession(
             chat_id=chat_id,
@@ -96,7 +101,7 @@ class TestConversationHandler:
         )
         self.storage.save_user_session(session)
 
-        self.handler.handle_message(chat_id, "01012345678")
+        self.handler.handle_message(chat_id, "010-12-34")
 
         updated_session = self.storage.get_user_session(chat_id)
         # Should stay in same state

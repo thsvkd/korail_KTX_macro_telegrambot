@@ -119,6 +119,17 @@ if [[ -f "$ENV_FILE" ]]; then
         warn_check "ADMIN_PASSWORD is empty - admin commands are disabled"
     fi
 
+    # The sample list locks the owner out of their own bot with a confusing
+    # "권한이 없습니다", which is not obviously a config problem.
+    allow_list="$(env_value ALLOW_LIST)"
+    if [[ -z "$allow_list" ]]; then
+        warn_check "ALLOW_LIST is empty - anyone who finds the bot can use it"
+    elif [[ "$allow_list" == *"010-1234-5678"* || "$allow_list" == *"010-9876-5432"* ]]; then
+        fail_check "ALLOW_LIST still holds the .env.example sample numbers - real users will be refused"
+    else
+        pass_check "ALLOW_LIST is configured"
+    fi
+
     debug_value="$(env_value FLASK_DEBUG)"
     if [[ -z "$debug_value" || "$debug_value" =~ ^([Ff]alse|0|[Nn]o|[Oo]ff)$ ]]; then
         pass_check "FLASK_DEBUG is off"

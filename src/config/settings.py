@@ -22,6 +22,18 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in ('true', '1', 'yes', 'on')
 
 
+def _env_ratio(name: str, default: float) -> float:
+    """Read a ratio between 0 and 1, falling back on anything unusable."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return min(max(value, 0.0), 1.0)
+
+
 def _internal_callback_token() -> str:
     """
     Token shared between the Flask app and its background reservation processes.
@@ -64,7 +76,12 @@ class Settings:
     # Korail Configuration
     KORAIL_ADMIN_USER_ID: Optional[str] = os.environ.get('USERID')
     KORAIL_ADMIN_PASSWORD: Optional[str] = os.environ.get('USERPW')
-    KORAIL_SEARCH_INTERVAL: int = int(os.environ.get('SEARCH_INTERVAL', '1'))  # seconds
+    KORAIL_SEARCH_INTERVAL: float = float(os.environ.get('SEARCH_INTERVAL', '1'))  # seconds
+    # Every wait between Korail requests is drawn from
+    # interval * (1 +/- jitter) instead of being a fixed number of seconds, so
+    # the search does not knock on the door on a metronome. 0 disables it and
+    # restores the old fixed interval.
+    KORAIL_SEARCH_INTERVAL_JITTER: float = _env_ratio('SEARCH_INTERVAL_JITTER', 0.4)
     KORAIL_STATION_LIST_URL: str = "http://www.letskorail.com/ebizprd/stationKtxList.do"
     KORAIL_PAYMENT_URL: str = "https://www.letskorail.com/ebizprd/EbizPrdTicketpr13500W_pr13510.do?"
 

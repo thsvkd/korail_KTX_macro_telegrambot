@@ -720,11 +720,11 @@ class BackgroundReservationProcess:
                     logger.debug(f"📊 Attempt #{attempts}: no trains found, retrying...")
             except Exception as e:
                 logger.error(f"❌ Search failed (attempt #{attempts}): {e}", exc_info=True)
-                time.sleep(self.korail._search_interval)
+                self.korail.wait_between_requests()
                 continue
 
             if not trains:
-                time.sleep(self.korail._search_interval)
+                self.korail.wait_between_requests()
                 continue
 
             # Try to reserve (trains found = rare, always log)
@@ -769,11 +769,11 @@ class BackgroundReservationProcess:
 
             # All trains in this search failed
             if duplicate_found:
-                logger.info(f"⚠️ Duplicate reservation detected, waiting 10s before retry...")
-                time.sleep(10)  # Wait 10 seconds when duplicate found
+                logger.info(f"⚠️ Duplicate reservation detected, waiting ~10s before retry...")
+                self.korail.wait_seconds(10)  # Around 10 seconds when duplicate found
             else:
                 logger.debug(f"All {len(trains)} trains sold out in attempt #{attempts}")
-                time.sleep(self.korail._search_interval)
+                self.korail.wait_between_requests()
 
     def _build_partial_reservation_message(self, seat_index: int, total_seats: int, reservation) -> str:
         """Build message for partial reservation success."""

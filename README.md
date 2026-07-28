@@ -107,6 +107,8 @@ make requirements
 | `ADMIN_MAGIC_STRING` | ❌ | 관리자 편의 로그인 트리거 문자열. 미설정 시 해당 기능 비활성화 |
 | `USERID` / `USERPW` | ❌ | 관리자 편의 로그인용 코레일 계정 |
 | `ALLOW_LIST` | ❌ | 허용할 사용자 전화번호 목록 (쉼표로 구분) |
+| `SEARCH_INTERVAL` | ❌ | 코레일 요청 사이의 기본 대기 시간(초, 기본 1) |
+| `SEARCH_INTERVAL_JITTER` | ❌ | 대기 시간 랜덤화 폭. 기본 `0.4` = 기본 간격의 ±40% 범위에서 매번 다시 뽑음. `0` 이면 고정 간격 |
 | `SESSION_TTL_SECONDS` | ❌ | 세션 보관 기간 (기본 86400) |
 | `RESUME_ON_RESTART` | ❌ | 재시작 시 중단된 검색 자동 재개 (기본 `true`). `SESSION_SECRET` 필요 |
 | `RESUME_TTL_SECONDS` | ❌ | 재개용 자격증명 보관 상한 (기본 259200 = 3일) |

@@ -1,4 +1,5 @@
 """Korail API service wrapper."""
+import random
 import time
 from typing import Optional, List
 from korail2 import (
@@ -21,6 +22,7 @@ class KorailService:
         self._korail_instance: Optional[K2MKorail] = None
         self._logged_in = False
         self._search_interval = settings.KORAIL_SEARCH_INTERVAL
+        self._search_jitter = settings.KORAIL_SEARCH_INTERVAL_JITTER
         self._username: Optional[str] = None
         self._password: Optional[str] = None
         self._last_login_time: float = 0
@@ -85,6 +87,46 @@ class KorailService:
         if self._last_login_time and (time.time() - self._last_login_time) >= self._relogin_interval:
             logger.debug(f"🔄 Session older than {self._relogin_interval}s, proactive re-login")
             self._relogin()
+
+    def jittered(self, seconds: float) -> float:
+        """
+        Spread a wait over seconds * (1 +/- jitter).
+
+        A fixed interval makes the search a metronome: every request lands the
+        same number of seconds after the previous one, a pattern no person
+        browsing the site would ever produce. Drawing each wait uniformly from
+        a band around the configured value keeps the average rate but removes
+        that signature. With jitter at 0 the value is returned unchanged.
+        """
+        if self._search_jitter <= 0:
+            return seconds
+
+        spread = seconds * self._search_jitter
+        return max(0.0, random.uniform(seconds - spread, seconds + spread))
+
+    def next_interval(self, multiplier: float = 1.0) -> float:
+        """
+        Draw the next wait between requests.
+
+        Args:
+            multiplier: Scales the base interval (e.g. 1.5 for a longer wait)
+
+        Returns:
+            The number of seconds to wait
+        """
+        return self.jittered(self._search_interval * multiplier)
+
+    def wait_between_requests(self, multiplier: float = 1.0) -> float:
+        """Sleep for a randomised interval and return how long it waited."""
+        delay = self.next_interval(multiplier)
+        time.sleep(delay)
+        return delay
+
+    def wait_seconds(self, seconds: float) -> float:
+        """Sleep for a randomised version of a fixed wait, in seconds."""
+        delay = self.jittered(seconds)
+        time.sleep(delay)
+        return delay
 
     def search_trains(
         self,
@@ -365,7 +407,7 @@ class KorailService:
             if not trains:
                 if is_summary:
                     logger.debug(f"📊 Attempt #{attempts}: no trains found, retrying...")
-                time.sleep(self._search_interval)
+                self.wait_between_requests()
                 continue
 
             # Try to reserve each train found (trains found = rare, always log)
@@ -392,7 +434,7 @@ class KorailService:
             logger.debug(f"All {len(trains)} trains sold out in attempt #{attempts}")
 
             # Wait before next search
-            time.sleep(self._search_interval)
+            self.wait_between_requests()
 
     def _search_and_reserve_random(
         self,
@@ -435,7 +477,7 @@ class KorailService:
             if not trains:
                 if is_summary:
                     logger.debug(f"📊 Attempt #{attempts}: no trains found, retrying...")
-                time.sleep(self._search_interval)
+                self.wait_between_requests()
                 continue
 
             # Try to reserve each train found (trains found = rare, always log)
@@ -484,14 +526,14 @@ class KorailService:
 
                     # Add delay between individual reservations to avoid rate limit
                     # Use longer interval for safety
-                    time.sleep(self._search_interval * 1.5)
+                    self.wait_between_requests(1.5)
                     break  # Found a train and reserved, restart search loop
 
                 else:
                     logger.debug("Reservation failed, continuing search...")
 
             # Wait before next search attempt
-            time.sleep(self._search_interval)
+            self.wait_between_requests()
 
         return reservations[0] if reservations else None
 

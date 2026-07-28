@@ -91,7 +91,16 @@ logger.info(f"Flask port: {settings.FLASK_PORT}")
 logger.info(f"Debug mode: {settings.FLASK_DEBUG}")
 logger.info(f"Log level: {settings.LOG_LEVEL}")
 logger.info(f"Redis: {settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}")
-logger.info(f"Search interval: {settings.KORAIL_SEARCH_INTERVAL}s")
+if settings.KORAIL_SEARCH_INTERVAL_JITTER > 0:
+    _jitter_spread = settings.KORAIL_SEARCH_INTERVAL * settings.KORAIL_SEARCH_INTERVAL_JITTER
+    logger.info(
+        f"Search interval: {settings.KORAIL_SEARCH_INTERVAL}s "
+        f"randomised over {settings.KORAIL_SEARCH_INTERVAL - _jitter_spread:.2f}"
+        f"-{settings.KORAIL_SEARCH_INTERVAL + _jitter_spread:.2f}s "
+        f"(jitter {settings.KORAIL_SEARCH_INTERVAL_JITTER:.0%})"
+    )
+else:
+    logger.info(f"Search interval: {settings.KORAIL_SEARCH_INTERVAL}s (fixed)")
 logger.info(f"Payment timeout: {settings.PAYMENT_TIMEOUT_MINUTES}min")
 logger.info(f"Reminder interval: {settings.PAYMENT_REMINDER_INTERVAL_SECONDS}s")
 if settings.RECEIVE_MODE == 'webhook':

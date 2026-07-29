@@ -8,14 +8,14 @@ These cover what the service overrides on top of it.
 
 They build clients but never log in, so they touch no network.
 """
+
 import time
 from unittest.mock import patch
 
 import pytest
 
-from config.settings import settings
-from services.korail_service import KorailService
-
+from korail_bot.config.settings import settings
+from korail_bot.services.korail_service import KorailService
 
 USERNAME = "010-1234-5678"
 PASSWORD = "korail-password"
@@ -68,16 +68,16 @@ class TestAppVersion:
     def test_the_library_build_is_used_when_nothing_is_configured(self, service):
         from korail2.korail2 import Korail as LibraryKorail
 
-        with patch.object(settings, 'KORAIL_APP_VERSION', None):
+        with patch.object(settings, "KORAIL_APP_VERSION", None):
             client = service._build_client(USERNAME, PASSWORD)
 
         assert client._version == LibraryKorail._version
 
     def test_a_configured_build_overrides_it(self, service):
-        with patch.object(settings, 'KORAIL_APP_VERSION', '260101001'):
+        with patch.object(settings, "KORAIL_APP_VERSION", "260101001"):
             client = service._build_client(USERNAME, PASSWORD)
 
-        assert client._version == '260101001'
+        assert client._version == "260101001"
 
 
 class TestAppSessionStart:
@@ -134,7 +134,7 @@ class TestSessionRefreshPacing:
 
         drawn = self._deadlines(service)
 
-        assert len(set(round(d, 3) for d in drawn)) > 1
+        assert len({round(d, 3) for d in drawn}) > 1
 
     def test_the_delay_stays_within_the_configured_band(self, service):
         service._relogin_interval = 1800
@@ -159,14 +159,14 @@ class TestSessionRefreshPacing:
         service._schedule_next_relogin()
 
         assert service._relogin_due_at == 0.0
-        with patch.object(service, '_relogin') as relogin:
+        with patch.object(service, "_relogin") as relogin:
             service._check_session_refresh()
         relogin.assert_not_called()
 
     def test_the_refresh_fires_once_the_deadline_passes(self, service):
         service._relogin_due_at = time.time() - 1
 
-        with patch.object(service, '_relogin') as relogin:
+        with patch.object(service, "_relogin") as relogin:
             service._check_session_refresh()
 
         relogin.assert_called_once()
@@ -174,7 +174,7 @@ class TestSessionRefreshPacing:
     def test_nothing_happens_before_the_deadline(self, service):
         service._relogin_due_at = time.time() + 600
 
-        with patch.object(service, '_relogin') as relogin:
+        with patch.object(service, "_relogin") as relogin:
             service._check_session_refresh()
 
         relogin.assert_not_called()
@@ -189,7 +189,7 @@ class TestSessionRefreshPacing:
         service._username, service._password = USERNAME, PASSWORD
         service._relogin_due_at = time.time() - 1
 
-        with patch.object(service, '_build_client', side_effect=RuntimeError("korail down")):
+        with patch.object(service, "_build_client", side_effect=RuntimeError("korail down")):
             assert service._relogin() is False
 
         assert service._relogin_due_at > time.time()

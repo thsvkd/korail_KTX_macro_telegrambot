@@ -3,10 +3,12 @@ Comprehensive tests for input validators.
 
 Tests all edge cases, boundary conditions, and error handling.
 """
-import pytest
+
 from datetime import datetime, timedelta
 
-from utils.validators import InputValidator
+import pytest
+
+from korail_bot.utils.validators import InputValidator
 
 
 class TestPhoneNumberValidation:

@@ -4,6 +4,7 @@ Unit tests for the polling receive mode.
 These run without Redis, Docker or a network: the HTTP session is replaced
 by a scripted stand-in.
 """
+
 import importlib
 import json
 import logging
@@ -14,31 +15,29 @@ from unittest.mock import Mock, patch
 import pytest
 import requests
 
-import config.settings
-from config.settings import Settings
-from services.telegram_poller import TelegramPoller
+import korail_bot.config.settings
+from korail_bot.config.settings import Settings
+from korail_bot.services.telegram_poller import TelegramPoller
 
 
 def make_response(status_code=200, payload=None):
     """Build a stand-in for a requests.Response."""
     response = Mock()
     response.status_code = status_code
-    response.json.return_value = (
-        payload if payload is not None else {'ok': True, 'result': []}
-    )
+    response.json.return_value = payload if payload is not None else {"ok": True, "result": []}
     return response
 
 
 def updates_response(*updates):
     """Build a successful getUpdates response carrying the given updates."""
-    return make_response(payload={'ok': True, 'result': list(updates)})
+    return make_response(payload={"ok": True, "result": list(updates)})
 
 
 def make_update(update_id, text="안녕하세요", chat_id=42):
     """Build a realistic Telegram message update."""
     return {
-        'update_id': update_id,
-        'message': {'chat': {'id': chat_id}, 'text': text},
+        "update_id": update_id,
+        "message": {"chat": {"id": chat_id}, "text": text},
     }
 
 
@@ -49,7 +48,7 @@ def build_poller(processor=None):
     The values are set on the instance so that they also apply to the reads
     inside the polling loop.
     """
-    poller = TelegramPoller('test-token', processor or Mock())
+    poller = TelegramPoller("test-token", processor or Mock())
     poller.INITIAL_BACKOFF_SECONDS = 0.01
     poller.MAX_BACKOFF_SECONDS = 0.04
     poller._backoff = poller.INITIAL_BACKOFF_SECONDS
@@ -73,9 +72,9 @@ def run_poller(poller, responses):
     calls = []
 
     def fake_get(url, **kwargs):
-        calls.append({'url': url, 'kwargs': kwargs, 'backoff': poller._backoff})
+        calls.append({"url": url, "kwargs": kwargs, "backoff": poller._backoff})
 
-        if url.endswith('/deleteWebhook'):
+        if url.endswith("/deleteWebhook"):
             return make_response()
 
         if not scripted:
@@ -94,7 +93,7 @@ def run_poller(poller, responses):
 
 def polls(calls):
     """Keep only the getUpdates requests out of a recorded call list."""
-    return [call for call in calls if call['url'].endswith('/getUpdates')]
+    return [call for call in calls if call["url"].endswith("/getUpdates")]
 
 
 class TestOffsetTracking:
@@ -104,15 +103,13 @@ class TestOffsetTracking:
         processor = Mock()
         poller = build_poller(processor)
 
-        calls = run_poller(poller, [updates_response(
-            make_update(100), make_update(101)
-        )])
+        calls = run_poller(poller, [updates_response(make_update(100), make_update(101))])
 
         assert processor.process.call_count == 2
         assert poller._offset == 102
 
         # The next poll acknowledges both updates.
-        assert polls(calls)[1]['kwargs']['params']['offset'] == 102
+        assert polls(calls)[1]["kwargs"]["params"]["offset"] == 102
 
     def test_first_poll_sends_no_offset(self):
         """
@@ -125,17 +122,17 @@ class TestOffsetTracking:
 
         calls = run_poller(poller, [updates_response(make_update(7))])
 
-        assert 'offset' not in polls(calls)[0]['kwargs']['params']
+        assert "offset" not in polls(calls)[0]["kwargs"]["params"]
 
     def test_poll_parameters(self):
         poller = build_poller()
 
         calls = run_poller(poller, [])
 
-        params = polls(calls)[0]['kwargs']['params']
-        assert params['timeout'] == Settings.TELEGRAM_POLL_TIMEOUT
+        params = polls(calls)[0]["kwargs"]["params"]
+        assert params["timeout"] == Settings.TELEGRAM_POLL_TIMEOUT
         # Telegram expects a JSON array, and this bot only handles messages.
-        assert json.loads(params['allowed_updates']) == ['message']
+        assert json.loads(params["allowed_updates"]) == ["message"]
 
     def test_request_timeout_exceeds_the_long_poll(self):
         """An idle long poll must not look like a hung connection."""
@@ -143,7 +140,7 @@ class TestOffsetTracking:
 
         calls = run_poller(poller, [])
 
-        assert polls(calls)[0]['kwargs']['timeout'] > poller.poll_timeout
+        assert polls(calls)[0]["kwargs"]["timeout"] > poller.poll_timeout
 
 
 class TestMalformedUpdates:
@@ -153,15 +150,18 @@ class TestMalformedUpdates:
         processor = Mock()
         poller = build_poller(processor)
 
-        run_poller(poller, [updates_response(
-            make_update(1),
-            {'message': {'chat': {'id': 42}, 'text': 'no update_id'}},
-            make_update(3),
-        )])
+        run_poller(
+            poller,
+            [
+                updates_response(
+                    make_update(1),
+                    {"message": {"chat": {"id": 42}, "text": "no update_id"}},
+                    make_update(3),
+                )
+            ],
+        )
 
-        processed_ids = [
-            call.args[0]['update_id'] for call in processor.process.call_args_list
-        ]
+        processed_ids = [call.args[0]["update_id"] for call in processor.process.call_args_list]
         assert processed_ids == [1, 3]
         assert poller._offset == 4
 
@@ -183,13 +183,18 @@ class TestMalformedUpdates:
         """
         poller = build_poller()
 
-        calls = polls(run_poller(poller, [
-            updates_response({'message': {'chat': {'id': 42}, 'text': 'no id'}}),
-        ]))
+        calls = polls(
+            run_poller(
+                poller,
+                [
+                    updates_response({"message": {"chat": {"id": 42}, "text": "no id"}}),
+                ],
+            )
+        )
 
         assert len(calls) >= 2
         # The poll after the unusable batch waited, so the backoff had grown.
-        assert calls[1]['backoff'] > poller.INITIAL_BACKOFF_SECONDS
+        assert calls[1]["backoff"] > poller.INITIAL_BACKOFF_SECONDS
 
     def test_empty_batch_does_not_back_off(self):
         """A long poll that simply timed out is not a failure."""
@@ -197,9 +202,7 @@ class TestMalformedUpdates:
 
         calls = polls(run_poller(poller, [updates_response(), updates_response()]))
 
-        assert all(
-            call['backoff'] == poller.INITIAL_BACKOFF_SECONDS for call in calls
-        )
+        assert all(call["backoff"] == poller.INITIAL_BACKOFF_SECONDS for call in calls)
 
     def test_failing_processor_does_not_abort_the_batch(self):
         processor = Mock()
@@ -221,16 +224,19 @@ class TestErrorHandling:
         processor = Mock()
         poller = build_poller(processor)
 
-        calls = run_poller(poller, [
-            make_response(status_code=500),
-            updates_response(make_update(1)),
-        ])
+        calls = run_poller(
+            poller,
+            [
+                make_response(status_code=500),
+                updates_response(make_update(1)),
+            ],
+        )
 
         recorded = polls(calls)
         # The failure grew the delay before the retry...
-        assert recorded[1]['backoff'] > recorded[0]['backoff']
+        assert recorded[1]["backoff"] > recorded[0]["backoff"]
         # ...and the successful retry reset it.
-        assert recorded[2]['backoff'] == poller.INITIAL_BACKOFF_SECONDS
+        assert recorded[2]["backoff"] == poller.INITIAL_BACKOFF_SECONDS
         assert processor.process.call_count == 1
 
     def test_backoff_grows_and_is_capped(self):
@@ -238,7 +244,7 @@ class TestErrorHandling:
 
         calls = run_poller(poller, [make_response(status_code=500)] * 8)
 
-        delays = [call['backoff'] for call in polls(calls)]
+        delays = [call["backoff"] for call in polls(calls)]
         assert delays[1] == pytest.approx(poller.INITIAL_BACKOFF_SECONDS * 2)
         # The last recorded poll is the one that stops the loop, so look at
         # the delay the eighth failure had to wait out.
@@ -248,11 +254,14 @@ class TestErrorHandling:
         processor = Mock()
         poller = build_poller(processor)
 
-        run_poller(poller, [
-            requests.ConnectionError("no route to host"),
-            requests.Timeout("read timed out"),
-            updates_response(make_update(1)),
-        ])
+        run_poller(
+            poller,
+            [
+                requests.ConnectionError("no route to host"),
+                requests.Timeout("read timed out"),
+                updates_response(make_update(1)),
+            ],
+        )
 
         assert processor.process.call_count == 1
 
@@ -271,10 +280,13 @@ class TestErrorHandling:
         processor = Mock()
         poller = build_poller(processor)
 
-        run_poller(poller, [
-            make_response(payload={'ok': False, 'description': 'Unauthorized'}),
-            updates_response(make_update(1)),
-        ])
+        run_poller(
+            poller,
+            [
+                make_response(payload={"ok": False, "description": "Unauthorized"}),
+                updates_response(make_update(1)),
+            ],
+        )
 
         assert processor.process.call_count == 1
 
@@ -298,10 +310,10 @@ class TestWebhookRemoval:
 
         calls = run_poller(poller, [updates_response()])
 
-        assert calls[0]['url'].endswith('/deleteWebhook')
+        assert calls[0]["url"].endswith("/deleteWebhook")
         # Pending updates are real user messages - keep them.
-        assert calls[0]['kwargs']['params']['drop_pending_updates'] == 'false'
-        assert calls[1]['url'].endswith('/getUpdates')
+        assert calls[0]["kwargs"]["params"]["drop_pending_updates"] == "false"
+        assert calls[1]["url"].endswith("/getUpdates")
 
     def test_failing_delete_webhook_does_not_stop_polling(self):
         processor = Mock()
@@ -309,7 +321,7 @@ class TestWebhookRemoval:
         scripted = [updates_response(make_update(1))]
 
         def fake_get(url, **kwargs):
-            if url.endswith('/deleteWebhook'):
+            if url.endswith("/deleteWebhook"):
                 raise requests.ConnectionError("no route to host")
             if not scripted:
                 poller.stop()
@@ -330,7 +342,7 @@ class TestLifecycle:
         polled = threading.Event()
 
         def fake_get(url, **kwargs):
-            if url.endswith('/getUpdates'):
+            if url.endswith("/getUpdates"):
                 polled.set()
             return updates_response()
 
@@ -377,34 +389,44 @@ class TestReceiveModeSettings:
     """
 
     def test_polling_mode_does_not_require_the_webhook_secret(self):
-        with patch.object(Settings, 'RECEIVE_MODE', 'polling'), \
-                patch.object(Settings, 'TELEGRAM_BOT_TOKEN', 'token'), \
-                patch.object(Settings, 'TELEGRAM_WEBHOOK_SECRET', ''):
+        with (
+            patch.object(Settings, "RECEIVE_MODE", "polling"),
+            patch.object(Settings, "TELEGRAM_BOT_TOKEN", "token"),
+            patch.object(Settings, "TELEGRAM_WEBHOOK_SECRET", ""),
+        ):
             Settings.validate()
 
     def test_webhook_mode_still_requires_the_webhook_secret(self):
-        with patch.object(Settings, 'RECEIVE_MODE', 'webhook'), \
-                patch.object(Settings, 'TELEGRAM_BOT_TOKEN', 'token'), \
-                patch.object(Settings, 'TELEGRAM_WEBHOOK_SECRET', ''):
+        with (
+            patch.object(Settings, "RECEIVE_MODE", "webhook"),
+            patch.object(Settings, "TELEGRAM_BOT_TOKEN", "token"),
+            patch.object(Settings, "TELEGRAM_WEBHOOK_SECRET", ""),
+        ):
             with pytest.raises(ValueError, match="TELEGRAM_WEBHOOK_SECRET"):
                 Settings.validate()
 
     def test_webhook_mode_accepts_a_configured_secret(self):
-        with patch.object(Settings, 'RECEIVE_MODE', 'webhook'), \
-                patch.object(Settings, 'TELEGRAM_BOT_TOKEN', 'token'), \
-                patch.object(Settings, 'TELEGRAM_WEBHOOK_SECRET', 'secret'):
+        with (
+            patch.object(Settings, "RECEIVE_MODE", "webhook"),
+            patch.object(Settings, "TELEGRAM_BOT_TOKEN", "token"),
+            patch.object(Settings, "TELEGRAM_WEBHOOK_SECRET", "secret"),
+        ):
             Settings.validate()
 
     def test_unknown_receive_mode_is_rejected(self):
-        with patch.object(Settings, 'RECEIVE_MODE', 'carrier-pigeon'), \
-                patch.object(Settings, 'TELEGRAM_BOT_TOKEN', 'token'), \
-                patch.object(Settings, 'TELEGRAM_WEBHOOK_SECRET', 'secret'):
+        with (
+            patch.object(Settings, "RECEIVE_MODE", "carrier-pigeon"),
+            patch.object(Settings, "TELEGRAM_BOT_TOKEN", "token"),
+            patch.object(Settings, "TELEGRAM_WEBHOOK_SECRET", "secret"),
+        ):
             with pytest.raises(ValueError, match="RECEIVE_MODE"):
                 Settings.validate()
 
     def test_missing_bot_token_is_still_rejected(self):
-        with patch.object(Settings, 'RECEIVE_MODE', 'polling'), \
-                patch.object(Settings, 'TELEGRAM_BOT_TOKEN', ''):
+        with (
+            patch.object(Settings, "RECEIVE_MODE", "polling"),
+            patch.object(Settings, "TELEGRAM_BOT_TOKEN", ""),
+        ):
             with pytest.raises(ValueError, match="BOTTOKEN"):
                 Settings.validate()
 
@@ -427,32 +449,34 @@ class TestFlaskHostDefault:
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
-            return importlib.reload(config.settings).Settings.FLASK_HOST
+            return importlib.reload(korail_bot.config.settings).Settings.FLASK_HOST
         finally:
             for key, value in original.items():
                 if value is None:
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
-            importlib.reload(config.settings)
+            importlib.reload(korail_bot.config.settings)
 
     def test_polling_binds_to_loopback(self):
-        host = self._reload_with({'RECEIVE_MODE': 'polling', 'FLASK_HOST': None})
+        host = self._reload_with({"RECEIVE_MODE": "polling", "FLASK_HOST": None})
 
-        assert host == '127.0.0.1'
+        assert host == "127.0.0.1"
 
     def test_webhook_binds_to_every_interface(self):
-        host = self._reload_with({'RECEIVE_MODE': 'webhook', 'FLASK_HOST': None})
+        host = self._reload_with({"RECEIVE_MODE": "webhook", "FLASK_HOST": None})
 
-        assert host == '0.0.0.0'
+        assert host == "0.0.0.0"
 
     def test_explicit_value_wins(self):
-        host = self._reload_with({
-            'RECEIVE_MODE': 'polling',
-            'FLASK_HOST': '192.0.2.10',
-        })
+        host = self._reload_with(
+            {
+                "RECEIVE_MODE": "polling",
+                "FLASK_HOST": "192.0.2.10",
+            }
+        )
 
-        assert host == '192.0.2.10'
+        assert host == "192.0.2.10"
 
 
 if __name__ == "__main__":

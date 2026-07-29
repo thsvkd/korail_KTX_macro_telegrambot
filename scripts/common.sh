@@ -167,65 +167,33 @@ compose() {
     fi
 }
 
-# has_venv - true when a pipenv virtualenv exists for this project
-has_venv() {
-    command -v pipenv >/dev/null 2>&1 && (cd "$ROOT_DIR" && pipenv --venv >/dev/null 2>&1)
-}
-
-# required_python - Python version requested by the Pipfile (e.g. "3.9")
-required_python() {
-    [[ -f "${ROOT_DIR}/Pipfile" ]] || return 0
-    sed -n 's/^python_version *= *"\(.*\)"/\1/p' "${ROOT_DIR}/Pipfile" | head -n 1
-}
-
-# pipfile_index_url - package index declared in the Pipfile
-pipfile_index_url() {
-    local url=""
-    [[ -f "${ROOT_DIR}/Pipfile" ]] && \
-        url="$(sed -n 's/^url *= *"\(.*\)"/\1/p' "${ROOT_DIR}/Pipfile" | head -n 1)"
-    echo "${url:-https://pypi.org/simple}"
-}
-
-# python_version_of <interpreter> - print its "major.minor"
-python_version_of() {
-    "$1" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null
-}
-
-# find_python - absolute path to an interpreter this project can run on
+# require_uv - abort unless uv is installed
 #
-# Prefers the version the Pipfile asks for. That version is often missing on
-# developer machines (and 3.9 is end-of-life), so any 3.9+ interpreter is
-# accepted rather than failing outright.
-find_python() {
-    local required candidate path
-    local candidates=()
+# uv owns the whole Python side now: it downloads the interpreter that
+# pyproject.toml asks for, creates .venv, and installs from uv.lock. That
+# replaces the interpreter search this file used to carry, which existed
+# because pipenv gave up when the Pipfile's Python was not already present.
+require_uv() {
+    require_cmd uv \
+        "Install it with 'curl -LsSf https://astral.sh/uv/install.sh | sh' or 'brew install uv'."
+}
 
-    required="$(required_python)"
-    [[ -n "$required" ]] && candidates+=("python${required}")
-    candidates+=(python3.13 python3.12 python3.11 python3.10 python3.9 python3)
-
-    for candidate in "${candidates[@]}"; do
-        path="$(command -v "$candidate" 2>/dev/null)" || continue
-        if "$path" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
-            echo "$path"
-            return 0
-        fi
-    done
-
-    return 1
+# has_venv - true when the project virtualenv exists
+has_venv() {
+    [[ -x "${ROOT_DIR}/.venv/bin/python" ]]
 }
 
 # python_runner - command prefix used to run project code
-# Prefers the pipenv virtualenv, falls back to the system interpreter.
+#
+# 'uv run --frozen' brings .venv in line with uv.lock before running, without
+# re-resolving, so there is no separate install step to forget. Unquoted at
+# the call sites on purpose: this expands to several words.
 python_runner() {
-    if has_venv; then
-        echo "pipenv run python"
-    else
-        echo "python3"
-    fi
+    require_uv
+    echo "uv run --frozen --project ${ROOT_DIR} python"
 }
 
-# can_import <module> - true when the chosen runner can import the module
+# can_import <module> - true when the project environment can import the module
 can_import() {
     # shellcheck disable=SC2046
     $(python_runner) -c "import $1" >/dev/null 2>&1

@@ -7,4 +7,6 @@
 _.file = ".env"
 
 [tools]
-python = "3.9"
+# uv installs the interpreter that pyproject.toml's requires-python asks for,
+# so this only needs to put uv itself on PATH.
+uv = "latest"

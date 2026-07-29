@@ -3,15 +3,16 @@ Integration tests for payment reminder service.
 
 Tests payment reminder timing, timeout, and confirmation.
 """
-import pytest
-import time
-from unittest.mock import Mock, patch, call
-from freezegun import freeze_time
-from datetime import datetime, timedelta
 
-from storage import RedisStorage
-from services import TelegramService, PaymentReminderService
-from models import PaymentStatus
+from datetime import datetime, timedelta
+from unittest.mock import Mock, patch
+
+import pytest
+from freezegun import freeze_time
+
+from korail_bot.models import PaymentStatus
+from korail_bot.services import PaymentReminderService, TelegramService
+from korail_bot.storage import RedisStorage
 
 
 class TestPaymentReminderService:
@@ -32,7 +33,7 @@ class TestPaymentReminderService:
         chat_id = 12345
 
         # Mock the reminder thread to not actually run
-        with patch.object(self.service, '_send_reminder_loop'):
+        with patch.object(self.service, "_send_reminder_loop"):
             self.service.start_reminders(chat_id)
 
         # Check payment status created
@@ -74,7 +75,7 @@ class TestPaymentReminderService:
         # Should send message
         self.telegram.send_message.assert_called_once()
 
-    @patch('threading.Thread')
+    @patch("threading.Thread")
     def test_reminder_thread_started(self, mock_thread):
         """Test that reminder thread is started."""
         chat_id = 12345
@@ -105,11 +106,7 @@ class TestPaymentReminderService:
         """Test that payment timeout is calculated correctly."""
         chat_id = 12345
 
-        status = PaymentStatus(
-            chat_id=chat_id,
-            completed=False,
-            reminder_active=True
-        )
+        status = PaymentStatus(chat_id=chat_id, completed=False, reminder_active=True)
         # Set created_at to 8 minutes ago
         status.created_at = datetime.now() - timedelta(minutes=8)
         self.storage.save_payment_status(status)
@@ -123,7 +120,7 @@ class TestPaymentReminderService:
         """Test multiple users can have simultaneous reminders."""
         chat_ids = [11111, 22222, 33333]
 
-        with patch.object(self.service, '_send_reminder_loop'):
+        with patch.object(self.service, "_send_reminder_loop"):
             for chat_id in chat_ids:
                 self.service.start_reminders(chat_id)
 
@@ -138,11 +135,7 @@ class TestPaymentReminderService:
         chat_id = 12345
 
         # Create completed payment status
-        status = PaymentStatus(
-            chat_id=chat_id,
-            completed=True,
-            reminder_active=False
-        )
+        status = PaymentStatus(chat_id=chat_id, completed=True, reminder_active=False)
         self.storage.save_payment_status(status)
 
         # Try to check if should send reminder
@@ -172,11 +165,7 @@ class TestPaymentReminderTiming:
         # Create status at specific time
         start_time = datetime(2025, 1, 1, 12, 0, 0)
         with freeze_time(start_time):
-            status = PaymentStatus(
-                chat_id=chat_id,
-                completed=False,
-                reminder_active=True
-            )
+            status = PaymentStatus(chat_id=chat_id, completed=False, reminder_active=True)
             self.storage.save_payment_status(status)
 
         # Move time forward by 11 minutes
@@ -194,11 +183,7 @@ class TestPaymentReminderTiming:
 
         start_time = datetime(2025, 1, 1, 12, 0, 0)
         with freeze_time(start_time):
-            status = PaymentStatus(
-                chat_id=chat_id,
-                completed=False,
-                reminder_active=True
-            )
+            status = PaymentStatus(chat_id=chat_id, completed=False, reminder_active=True)
             self.storage.save_payment_status(status)
 
         # Move time forward by 5 minutes
@@ -216,11 +201,7 @@ class TestPaymentReminderTiming:
 
         original_time = datetime(2025, 1, 1, 12, 30, 45)
         with freeze_time(original_time):
-            status = PaymentStatus(
-                chat_id=chat_id,
-                completed=False,
-                reminder_active=True
-            )
+            status = PaymentStatus(chat_id=chat_id, completed=False, reminder_active=True)
             self.storage.save_payment_status(status)
 
         # Retrieve and check

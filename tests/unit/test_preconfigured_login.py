@@ -5,17 +5,17 @@ When USERID/USERPW are set, the two prompts that ask for a phone number and
 a password have a known answer, so the conversation skips them. A wrong
 password there must not strand the user: the prompts come back.
 """
+
 from unittest.mock import Mock, patch
 
 import pytest
 
-from config.settings import Settings, settings
-from handlers.conversation_handler import ConversationHandler
-from models import UserSession, UserProgress
-from services import TelegramService, ReservationService
-from storage.base import StorageInterface
-from telegramBot.messages import Messages
-
+from korail_bot.config.settings import Settings, settings
+from korail_bot.handlers.conversation_handler import ConversationHandler
+from korail_bot.models import UserProgress, UserSession
+from korail_bot.services import ReservationService, TelegramService
+from korail_bot.storage.base import StorageInterface
+from korail_bot.telegramBot.messages import Messages
 
 CHAT_ID = 12345
 ENV_USER_ID = "010-1234-5678"
@@ -24,11 +24,7 @@ ENV_PASSWORD = "env-korail-pw"
 
 @pytest.fixture
 def session():
-    return UserSession(
-        chat_id=CHAT_ID,
-        in_progress=True,
-        last_action=UserProgress.STARTED
-    )
+    return UserSession(chat_id=CHAT_ID, in_progress=True, last_action=UserProgress.STARTED)
 
 
 @pytest.fixture
@@ -37,25 +33,17 @@ def handler(session):
     storage.get_user_session.return_value = session
     storage.get_or_create_app_session_start.return_value = 1700000000
     storage.get_all_subscribers.return_value = []
-    return ConversationHandler(
-        storage,
-        Mock(spec=TelegramService),
-        Mock(spec=ReservationService)
-    )
+    return ConversationHandler(storage, Mock(spec=TelegramService), Mock(spec=ReservationService))
 
 
 def _with_env_credentials(user_id=ENV_USER_ID, password=ENV_PASSWORD):
     """Patch the class, not the singleton: the check reads class attributes."""
-    return patch.multiple(
-        Settings,
-        KORAIL_ADMIN_USER_ID=user_id,
-        KORAIL_ADMIN_PASSWORD=password
-    )
+    return patch.multiple(Settings, KORAIL_ADMIN_USER_ID=user_id, KORAIL_ADMIN_PASSWORD=password)
 
 
 def _korail(login_succeeds: bool):
     """Patch KorailService so no request ever leaves the test."""
-    patcher = patch('handlers.conversation_handler.KorailService')
+    patcher = patch("korail_bot.handlers.conversation_handler.KorailService")
     korail_class = patcher.start()
     korail_class.return_value.login.return_value = login_succeeds
     return patcher, korail_class
@@ -97,9 +85,7 @@ class TestStartConfirmationWithEnvCredentials:
         finally:
             patcher.stop()
 
-        korail_class.return_value.login.assert_called_once_with(
-            ENV_USER_ID, ENV_PASSWORD
-        )
+        korail_class.return_value.login.assert_called_once_with(ENV_USER_ID, ENV_PASSWORD)
         assert session.last_action == UserProgress.PW_INPUT_SUCCESS
         assert session.credentials.korail_id == ENV_USER_ID
         assert session.credentials.korail_pw == ENV_PASSWORD
@@ -138,18 +124,14 @@ class TestStartConfirmationWithEnvCredentials:
             patcher.stop()
 
         # Korail expects the hyphenated form, whichever way .env spells it.
-        korail_class.return_value.login.assert_called_once_with(
-            "010-1234-5678", ENV_PASSWORD
-        )
+        korail_class.return_value.login.assert_called_once_with("010-1234-5678", ENV_PASSWORD)
         assert session.credentials.korail_id == "010-1234-5678"
 
     def test_allow_list_is_not_consulted(self, handler):
         """No phone number is typed, so there is nothing to filter on."""
         patcher, _ = _korail(login_succeeds=True)
         try:
-            with _with_env_credentials(), patch.object(
-                Settings, 'ALLOW_LIST', ['010-9999-9999']
-            ):
+            with _with_env_credentials(), patch.object(Settings, "ALLOW_LIST", ["010-9999-9999"]):
                 handler.handle_message(CHAT_ID, "Y")
         finally:
             patcher.stop()
@@ -198,7 +180,7 @@ class TestPreconfiguredLoginFailure:
     def test_the_typed_number_still_works_afterwards(self, handler, session):
         patcher, _ = _korail(login_succeeds=False)
         try:
-            with _with_env_credentials(), patch.object(Settings, 'ALLOW_LIST', []):
+            with _with_env_credentials(), patch.object(Settings, "ALLOW_LIST", []):
                 handler.handle_message(CHAT_ID, "Y")
                 handler.telegram.send_message.reset_mock()
                 handler.handle_message(CHAT_ID, "01098765432")

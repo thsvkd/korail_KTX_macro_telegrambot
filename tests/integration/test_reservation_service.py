@@ -3,14 +3,15 @@ Integration tests for reservation service.
 
 Tests process management, cancellation, and state management.
 """
-import pytest
+
 import signal
-import time
 from unittest.mock import Mock, patch
 
-from storage import RedisStorage
-from services import TelegramService, ReservationService
-from models import UserSession, TrainSearchParams, RunningReservation
+import pytest
+
+from korail_bot.models import RunningReservation, TrainSearchParams
+from korail_bot.services import ReservationService, TelegramService
+from korail_bot.storage import RedisStorage
 
 
 class TestReservationService:
@@ -30,12 +31,15 @@ class TestReservationService:
             try:
                 import os
                 import signal
+
                 os.kill(reservation.process_id, signal.SIGTERM)
-            except:
+            except OSError:
+                # Already gone, or not ours to signal - either way there is
+                # nothing left to clean up here.
                 pass
         self.storage.redis.flushdb()
 
-    @patch('subprocess.Popen')
+    @patch("subprocess.Popen")
     def test_start_reservation_process_success(self, mock_popen):
         """Test starting a reservation process successfully."""
         mock_process = Mock()
@@ -54,14 +58,14 @@ class TestReservationService:
             special_option="ReserveOption.GENERAL_FIRST",
             special_option_display="GENERAL_FIRST",
             passenger_count=1,
-            seat_strategy="consecutive"
+            seat_strategy="consecutive",
         )
 
         success = self.service.start_reservation_process(
             chat_id=chat_id,
             username="010-1234-5678",
             password="password123",
-            search_params=search_params
+            search_params=search_params,
         )
 
         assert success is True
@@ -92,8 +96,8 @@ class TestReservationService:
                 special_option="ReserveOption.GENERAL_FIRST",
                 special_option_display="GENERAL_FIRST",
                 passenger_count=1,
-                seat_strategy="consecutive"
-            )
+                seat_strategy="consecutive",
+            ),
         )
         self.storage.save_running_reservation(existing)
 
@@ -108,14 +112,14 @@ class TestReservationService:
             special_option="ReserveOption.GENERAL_FIRST",
             special_option_display="GENERAL_FIRST",
             passenger_count=1,
-            seat_strategy="consecutive"
+            seat_strategy="consecutive",
         )
 
         success = self.service.start_reservation_process(
             chat_id=chat_id,
             username="010-1234-5678",
             password="password123",
-            search_params=search_params
+            search_params=search_params,
         )
 
         # Should fail because one is already running
@@ -124,7 +128,7 @@ class TestReservationService:
         call_args = self.telegram.send_message.call_args
         assert "이미" in call_args[0][1] or "already" in call_args[0][1].lower()
 
-    @patch('subprocess.Popen')
+    @patch("subprocess.Popen")
     def test_cancel_reservation_success(self, mock_popen):
         """Test cancelling a running reservation."""
         # Start a reservation first
@@ -144,20 +148,22 @@ class TestReservationService:
             special_option="ReserveOption.GENERAL_FIRST",
             special_option_display="GENERAL_FIRST",
             passenger_count=1,
-            seat_strategy="consecutive"
+            seat_strategy="consecutive",
         )
 
         self.service.start_reservation_process(
             chat_id=chat_id,
             username="010-1234-5678",
             password="password123",
-            search_params=search_params
+            search_params=search_params,
         )
 
         # Now cancel it. The recorded PID is a mock, so the ownership check
         # that stops us signalling a recycled PID has to be satisfied here.
-        with patch('os.kill') as mock_kill, \
-             patch.object(ReservationService, '_owns_process', return_value=True):
+        with (
+            patch("os.kill") as mock_kill,
+            patch.object(ReservationService, "_owns_process", return_value=True),
+        ):
             self.service.cancel_reservation(chat_id)
 
             # Should have killed the process
@@ -207,8 +213,8 @@ class TestReservationService:
                 special_option="ReserveOption.GENERAL_FIRST",
                 special_option_display="GENERAL_FIRST",
                 passenger_count=1,
-                seat_strategy="consecutive"
-            )
+                seat_strategy="consecutive",
+            ),
         )
         self.storage.save_running_reservation(reservation)
 
@@ -218,7 +224,7 @@ class TestReservationService:
         assert "부산" in status
         assert "20991231" in status
 
-    @patch('subprocess.Popen')
+    @patch("subprocess.Popen")
     def test_cancel_all_reservations(self, mock_popen):
         """Test cancelling all reservations."""
         mock_process1 = Mock()
@@ -240,7 +246,7 @@ class TestReservationService:
             special_option="ReserveOption.GENERAL_FIRST",
             special_option_display="GENERAL_FIRST",
             passenger_count=1,
-            seat_strategy="consecutive"
+            seat_strategy="consecutive",
         )
 
         self.service.start_reservation_process(11111, "010-1111-1111", "pass1", search_params)
@@ -258,8 +264,10 @@ class TestReservationService:
             if sig != 0:  # signal 0 only asks whether the process is there
                 stopped.add(pid)
 
-        with patch('os.kill', side_effect=kill) as mock_kill, \
-             patch.object(ReservationService, '_owns_process', return_value=True):
+        with (
+            patch("os.kill", side_effect=kill) as mock_kill,
+            patch.object(ReservationService, "_owns_process", return_value=True),
+        ):
             count = self.service.cancel_all_reservations(99999)
 
             assert count == 2
@@ -289,8 +297,8 @@ class TestReservationService:
                 special_option="ReserveOption.GENERAL_FIRST",
                 special_option_display="GENERAL_FIRST",
                 passenger_count=1,
-                seat_strategy="consecutive"
-            )
+                seat_strategy="consecutive",
+            ),
         )
         self.storage.save_running_reservation(reservation)
 

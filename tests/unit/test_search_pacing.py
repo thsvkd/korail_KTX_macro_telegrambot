@@ -6,13 +6,14 @@ requests, so every request landed on a metronome. These tests pin down the
 band each wait is drawn from, that the average rate is preserved, and that
 setting the jitter to 0 brings the old fixed interval back.
 """
+
 import os
 from unittest.mock import patch
 
 import pytest
 
-from config.settings import Settings, _env_ratio
-from services.korail_service import KorailService
+from korail_bot.config.settings import Settings, _env_ratio
+from korail_bot.services.korail_service import KorailService
 
 
 def make_service(interval=3.0, jitter=0.4):
@@ -76,7 +77,7 @@ def test_wait_is_never_negative():
 def test_wait_between_requests_sleeps_for_what_it_returns():
     service = make_service(interval=3.0, jitter=0.4)
 
-    with patch('services.korail_service.time.sleep') as sleep:
+    with patch("korail_bot.services.korail_service.time.sleep") as sleep:
         delay = service.wait_between_requests()
 
     sleep.assert_called_once_with(delay)
@@ -87,7 +88,7 @@ def test_wait_seconds_randomises_a_fixed_wait():
     """The duplicate-reservation retry waits around 10s, not exactly 10s."""
     service = make_service(interval=3.0, jitter=0.4)
 
-    with patch('services.korail_service.time.sleep') as sleep:
+    with patch("korail_bot.services.korail_service.time.sleep") as sleep:
         delay = service.wait_seconds(10)
 
     sleep.assert_called_once_with(delay)
@@ -102,25 +103,26 @@ def test_service_takes_its_pacing_from_settings():
 
 
 @pytest.mark.parametrize(
-    'raw, expected',
+    "raw, expected",
     [
-        ('0.25', 0.25),
-        ('0', 0.0),
-        ('1', 1.0),
-        ('2.5', 1.0),      # clamped: a jitter above 1 would ask for negative waits
-        ('-0.5', 0.0),     # clamped
-        ('', 0.4),         # unset in practice
-        ('nonsense', 0.4),
+        ("0.25", 0.25),
+        ("0", 0.0),
+        ("1", 1.0),
+        ("2.5", 1.0),  # clamped: a jitter above 1 would ask for negative waits
+        ("-0.5", 0.0),  # clamped
+        ("", 0.4),  # unset in practice
+        ("nonsense", 0.4),
     ],
 )
 def test_jitter_setting_is_clamped_to_a_usable_ratio(raw, expected):
-    with patch.dict(os.environ, {'SEARCH_INTERVAL_JITTER': raw}):
-        assert _env_ratio('SEARCH_INTERVAL_JITTER', 0.4) == expected
+    with patch.dict(os.environ, {"SEARCH_INTERVAL_JITTER": raw}):
+        assert _env_ratio("SEARCH_INTERVAL_JITTER", 0.4) == expected
 
 
 def test_jitter_setting_defaults_when_absent():
-    environment = {key: value for key, value in os.environ.items()
-                   if key != 'SEARCH_INTERVAL_JITTER'}
+    environment = {
+        key: value for key, value in os.environ.items() if key != "SEARCH_INTERVAL_JITTER"
+    }
 
     with patch.dict(os.environ, environment, clear=True):
-        assert _env_ratio('SEARCH_INTERVAL_JITTER', 0.4) == 0.4
+        assert _env_ratio("SEARCH_INTERVAL_JITTER", 0.4) == 0.4

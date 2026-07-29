@@ -1,11 +1,16 @@
 """Integration tests for refactored application."""
+
 import pytest
 
-from config.settings import settings
-from storage import RedisStorage
-from services import TelegramService, KorailService, ReservationService, PaymentReminderService
-from handlers import CommandHandler, ConversationHandler
-from models import UserSession, UserProgress, UserCredentials
+from korail_bot.config.settings import settings
+from korail_bot.handlers import CommandHandler, ConversationHandler
+from korail_bot.models import UserCredentials, UserProgress, UserSession
+from korail_bot.services import (
+    PaymentReminderService,
+    ReservationService,
+    TelegramService,
+)
+from korail_bot.storage import RedisStorage
 
 
 class TestRefactoredArchitecture:
@@ -25,11 +30,7 @@ class TestRefactoredArchitecture:
 
     def test_storage_user_session(self):
         """Test storage can save and retrieve user sessions."""
-        session = UserSession(
-            chat_id=12345,
-            in_progress=True,
-            last_action=UserProgress.STARTED
-        )
+        session = UserSession(chat_id=12345, in_progress=True, last_action=UserProgress.STARTED)
 
         self.storage.save_user_session(session)
         retrieved = self.storage.get_user_session(12345)
@@ -41,7 +42,7 @@ class TestRefactoredArchitecture:
 
     def test_storage_payment_status(self):
         """Test storage can manage payment status."""
-        from models import PaymentStatus
+        from korail_bot.models import PaymentStatus
 
         status = PaymentStatus(chat_id=12345, completed=False)
         self.storage.save_payment_status(status)
@@ -76,10 +77,7 @@ class TestRefactoredArchitecture:
     def test_command_handler_initialization(self):
         """Test command handler can be initialized."""
         handler = CommandHandler(
-            self.storage,
-            self.telegram,
-            self.reservation,
-            self.payment_reminder
+            self.storage, self.telegram, self.reservation, self.payment_reminder
         )
 
         assert handler is not None
@@ -87,11 +85,7 @@ class TestRefactoredArchitecture:
 
     def test_conversation_handler_initialization(self):
         """Test conversation handler can be initialized."""
-        handler = ConversationHandler(
-            self.storage,
-            self.telegram,
-            self.reservation
-        )
+        handler = ConversationHandler(self.storage, self.telegram, self.reservation)
 
         assert handler is not None
         assert handler.storage == self.storage
@@ -99,14 +93,9 @@ class TestRefactoredArchitecture:
     def test_user_session_reset(self):
         """Test user session can be reset."""
         session = UserSession(
-            chat_id=12345,
-            in_progress=True,
-            last_action=UserProgress.FINDING_TICKET
+            chat_id=12345, in_progress=True, last_action=UserProgress.FINDING_TICKET
         )
-        session.credentials = UserCredentials(
-            korail_id="010-1234-5678",
-            korail_pw="password"
-        )
+        session.credentials = UserCredentials(korail_id="010-1234-5678", korail_pw="password")
         session.train_info = {"depDate": "20230101"}
 
         session.reset()
@@ -119,13 +108,13 @@ class TestRefactoredArchitecture:
     def test_settings_validation(self):
         """Test settings validation."""
         # Settings should have required attributes
-        assert hasattr(settings, 'TELEGRAM_BOT_TOKEN')
-        assert hasattr(settings, 'PAYMENT_TIMEOUT_MINUTES')
-        assert hasattr(settings, 'KORAIL_SEARCH_INTERVAL')
+        assert hasattr(settings, "TELEGRAM_BOT_TOKEN")
+        assert hasattr(settings, "PAYMENT_TIMEOUT_MINUTES")
+        assert hasattr(settings, "KORAIL_SEARCH_INTERVAL")
 
     def test_input_validators(self):
         """Test input validators."""
-        from utils.validators import InputValidator
+        from korail_bot.utils.validators import InputValidator
 
         # Phone number validation
         valid, error = InputValidator.validate_phone_number("010-1234-5678")
@@ -153,7 +142,7 @@ class TestRefactoredArchitecture:
 
     def test_message_templates(self):
         """Test message templates exist."""
-        from services.telegram_service import MessageTemplates
+        from korail_bot.services.telegram_service import MessageTemplates
 
         welcome = MessageTemplates.welcome_message()
         assert isinstance(welcome, str)

@@ -7,18 +7,17 @@ not signalling a PID that is no longer ours.
 
 They run without Redis or a network.
 """
+
 import contextlib
-import os
 import signal
 from unittest.mock import Mock, patch
 
 import pytest
 
-from config.settings import settings
-from models import RunningReservation, TrainSearchParams
-from services.reservation_service import ReservationService
-from storage.base import StorageInterface
-
+from korail_bot.config.settings import settings
+from korail_bot.models import RunningReservation, TrainSearchParams
+from korail_bot.services.reservation_service import ReservationService
+from korail_bot.storage.base import StorageInterface
 
 CURRENT_RUN = "run-current"
 PREVIOUS_RUN = "run-previous"
@@ -39,7 +38,7 @@ def search_params():
         special_option="ReserveOption.GENERAL_FIRST",
         special_option_display="GENERAL_FIRST",
         passenger_count=1,
-        seat_strategy="consecutive"
+        seat_strategy="consecutive",
     )
 
 
@@ -60,7 +59,7 @@ def make_reservation(search_params, run_id=PREVIOUS_RUN, pid=4242, chat_id=555):
         process_id=pid,
         korail_id=USERNAME,
         search_params=search_params,
-        run_id=run_id
+        run_id=run_id,
     )
 
 
@@ -84,10 +83,10 @@ class TestStaleDetection:
             make_reservation(search_params, run_id=CURRENT_RUN)
         ]
 
-        with patch.object(settings, 'RUN_ID', CURRENT_RUN):
+        with patch.object(settings, "RUN_ID", CURRENT_RUN):
             summary = service.reconcile_after_restart()
 
-        assert summary == {'resumed': 0, 'interrupted': 0, 'failed': 0}
+        assert summary == {"resumed": 0, "interrupted": 0, "failed": 0}
         service.storage.delete_running_reservation.assert_not_called()
 
 
@@ -98,9 +97,11 @@ class TestResume:
         service.storage.get_all_running_reservations.return_value = [
             make_reservation(search_params)
         ]
-        with patch.object(settings, 'RUN_ID', CURRENT_RUN), \
-             patch.object(settings, 'RESUME_ON_RESTART', resume_enabled), \
-             patch.object(service, 'start_reservation_process', return_value=True) as start:
+        with (
+            patch.object(settings, "RUN_ID", CURRENT_RUN),
+            patch.object(settings, "RESUME_ON_RESTART", resume_enabled),
+            patch.object(service, "start_reservation_process", return_value=True) as start,
+        ):
             summary = service.reconcile_after_restart()
         return summary, start
 
@@ -109,13 +110,13 @@ class TestResume:
 
         summary, start = self._reconcile(service, search_params)
 
-        assert summary['resumed'] == 1
+        assert summary["resumed"] == 1
         kwargs = start.call_args.kwargs
-        assert kwargs['username'] == USERNAME
-        assert kwargs['password'] == PASSWORD
-        assert kwargs['search_params'] is search_params
+        assert kwargs["username"] == USERNAME
+        assert kwargs["password"] == PASSWORD
+        assert kwargs["search_params"] is search_params
         # Marked as a resume so the user is not told a new search began.
-        assert kwargs['resumed'] is True
+        assert kwargs["resumed"] is True
 
     def test_record_survives_a_resume(self, service, search_params):
         service.storage.get_resume_credentials.return_value = (USERNAME, PASSWORD)
@@ -129,7 +130,7 @@ class TestResume:
 
         summary, start = self._reconcile(service, search_params)
 
-        assert summary['interrupted'] == 1
+        assert summary["interrupted"] == 1
         start.assert_not_called()
         service.storage.delete_running_reservation.assert_called_once_with(555)
         service.storage.delete_resume_credentials.assert_called_once_with(555)
@@ -139,7 +140,7 @@ class TestResume:
 
         summary, start = self._reconcile(service, search_params, resume_enabled=False)
 
-        assert summary['interrupted'] == 1
+        assert summary["interrupted"] == 1
         start.assert_not_called()
 
     def test_already_reserved_seats_are_never_rebooked(self, service, search_params):
@@ -154,7 +155,7 @@ class TestResume:
 
         summary, start = self._reconcile(service, search_params)
 
-        assert summary['interrupted'] == 1
+        assert summary["interrupted"] == 1
         start.assert_not_called()
 
     def test_user_is_told_when_the_search_was_abandoned(self, service, search_params):
@@ -190,20 +191,22 @@ class TestResume:
 
         service.storage.get_resume_credentials.side_effect = credentials
 
-        with patch.object(settings, 'RUN_ID', CURRENT_RUN):
+        with patch.object(settings, "RUN_ID", CURRENT_RUN):
             summary = service.reconcile_after_restart()
 
-        assert summary['failed'] == 1
-        assert summary['interrupted'] == 1
+        assert summary["failed"] == 1
+        assert summary["interrupted"] == 1
 
 
 class TestProcessSafety:
     """PIDs get recycled; signalling one blindly can kill a stranger."""
 
     def test_recorded_pid_of_another_program_is_not_signalled(self, service):
-        with patch('os.path.isdir', return_value=True), \
-             patch('builtins.open', side_effect=lambda *a, **k: _cmdline(b"/usr/bin/sshd\x00")), \
-             patch('os.kill') as kill:
+        with (
+            patch("os.path.isdir", return_value=True),
+            patch("builtins.open", side_effect=lambda *a, **k: _cmdline(b"/usr/bin/sshd\x00")),
+            patch("os.kill") as kill,
+        ):
             assert service._terminate_search_process(4242) is False
 
         kill.assert_not_called()
@@ -211,21 +214,23 @@ class TestProcessSafety:
     def test_our_own_process_is_signalled(self, service):
         process = _FakeProcess()
 
-        with _ours(), patch('os.kill', process.kill):
+        with _ours(), patch("os.kill", process.kill):
             assert service._terminate_search_process(4242) is True
 
         assert process.signals == [signal.SIGTERM]
 
     def test_dead_pid_is_not_signalled(self, service):
-        with patch('os.path.isdir', return_value=True), \
-             patch('builtins.open', side_effect=FileNotFoundError), \
-             patch('os.kill') as kill:
+        with (
+            patch("os.path.isdir", return_value=True),
+            patch("builtins.open", side_effect=FileNotFoundError),
+            patch("os.kill") as kill,
+        ):
             assert service._terminate_search_process(4242) is False
 
         kill.assert_not_called()
 
     def test_placeholder_pid_is_ignored(self, service):
-        with patch('os.kill') as kill:
+        with patch("os.kill") as kill:
             assert service._terminate_search_process(9999999) is False
 
         kill.assert_not_called()
@@ -234,7 +239,7 @@ class TestProcessSafety:
         """On systems without /proc there is nothing to verify against."""
         process = _FakeProcess()
 
-        with patch('os.path.isdir', return_value=False), patch('os.kill', process.kill):
+        with patch("os.path.isdir", return_value=False), patch("os.kill", process.kill):
             assert service._terminate_search_process(4242) is True
 
         assert process.signals == [signal.SIGTERM]
@@ -252,8 +257,11 @@ class TestTermination:
     def test_a_process_ignoring_sigterm_is_killed(self, service):
         process = _FakeProcess(dies_on=None)  # only SIGKILL gets through
 
-        with _ours(), patch('os.kill', process.kill), \
-             patch.object(service, '_TERMINATE_GRACE_SECONDS', 0.05):
+        with (
+            _ours(),
+            patch("os.kill", process.kill),
+            patch.object(service, "_TERMINATE_GRACE_SECONDS", 0.05),
+        ):
             assert service._terminate_search_process(4242) is True
 
         assert process.signals == [signal.SIGTERM, signal.SIGKILL]
@@ -262,8 +270,11 @@ class TestTermination:
     def test_a_process_that_stops_is_not_killed(self, service):
         process = _FakeProcess()
 
-        with _ours(), patch('os.kill', process.kill), \
-             patch.object(service, '_TERMINATE_GRACE_SECONDS', 0.05):
+        with (
+            _ours(),
+            patch("os.kill", process.kill),
+            patch.object(service, "_TERMINATE_GRACE_SECONDS", 0.05),
+        ):
             service._terminate_search_process(4242)
 
         assert signal.SIGKILL not in process.signals
@@ -277,8 +288,11 @@ class TestTermination:
         service._children[4242] = _FakeChild(4242, returncode=0)
         process = _FakeProcess()
 
-        with _ours(), patch('os.kill', process.kill), \
-             patch.object(service, '_TERMINATE_GRACE_SECONDS', 5):
+        with (
+            _ours(),
+            patch("os.kill", process.kill),
+            patch.object(service, "_TERMINATE_GRACE_SECONDS", 5),
+        ):
             service._terminate_search_process(4242)
 
         assert process.signals == [signal.SIGTERM]
@@ -297,8 +311,11 @@ class TestShutdown:
     """Stopping the app stops the searches it started."""
 
     def _shutdown(self, service, process):
-        with _ours(), patch('os.kill', process.kill), \
-             patch.object(service, '_TERMINATE_GRACE_SECONDS', 0.05):
+        with (
+            _ours(),
+            patch("os.kill", process.kill),
+            patch.object(service, "_TERMINATE_GRACE_SECONDS", 0.05),
+        ):
             service.shutdown()
 
     def test_every_running_search_is_stopped(self, service):
@@ -323,13 +340,13 @@ class TestShutdown:
     def test_a_search_that_already_finished_is_not_signalled(self, service):
         service._children[4242] = _FakeChild(4242, returncode=0)
 
-        with _ours(), patch('os.kill') as kill:
+        with _ours(), patch("os.kill") as kill:
             service.shutdown()
 
         kill.assert_not_called()
 
     def test_nothing_to_stop_is_not_an_error(self, service):
-        with patch('os.kill') as kill:
+        with patch("os.kill") as kill:
             service.shutdown()
 
         kill.assert_not_called()
@@ -343,16 +360,13 @@ class TestSearchIsolation:
         Otherwise a Ctrl-C in the terminal running the bot reaches the search
         directly, killing it mid-request behind the bot's back.
         """
-        with patch('subprocess.Popen') as popen:
+        with patch("subprocess.Popen") as popen:
             popen.return_value.pid = 4242
             service.start_reservation_process(
-                chat_id=555,
-                username=USERNAME,
-                password=PASSWORD,
-                search_params=search_params
+                chat_id=555, username=USERNAME, password=PASSWORD, search_params=search_params
             )
 
-        assert popen.call_args.kwargs['start_new_session'] is True
+        assert popen.call_args.kwargs["start_new_session"] is True
 
 
 class _cmdline:
@@ -374,9 +388,11 @@ class _cmdline:
 @contextlib.contextmanager
 def _ours():
     """Make /proc report the PID under test as one of our search processes."""
-    cmdline = b"python\x00-m\x00telegramBot.telebotBackProcess\x00"
-    with patch('os.path.isdir', return_value=True), \
-         patch('builtins.open', side_effect=lambda *a, **k: _cmdline(cmdline)):
+    cmdline = b"python\x00-m\x00korail_bot.telegramBot.telebotBackProcess\x00"
+    with (
+        patch("os.path.isdir", return_value=True),
+        patch("builtins.open", side_effect=lambda *a, **k: _cmdline(cmdline)),
+    ):
         yield
 
 

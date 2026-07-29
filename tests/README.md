@@ -33,64 +33,69 @@ tests/
 
 ```bash
 # Install test dependencies
-pipenv install --dev
+uv sync
 
 # Dependencies include:
 # - pytest
 # - pytest-cov (coverage reporting)
-# - pytest-mock (mocking utilities)
-# - pytest-asyncio (async test support)
 # - freezegun (time manipulation)
-# - testcontainers (Redis container for testing)
+# - testcontainers (Redis container, integration/e2e only - needs Docker)
+```
+
+`tests/unit` touches no Redis, so a run restricted to that directory starts no
+container and needs no Docker:
+
+```bash
+uv run pytest tests/unit -q      # or: make test-unit
 ```
 
 ### Run All Tests
 
 ```bash
-pipenv run pytest tests/ -v
+uv run pytest tests/ -v
 ```
 
 ### Run Specific Test Categories
 
 ```bash
 # Unit tests only
-pipenv run pytest tests/unit/ -v
+uv run pytest tests/unit/ -v
 
 # Integration tests only
-pipenv run pytest tests/integration/ -v
+uv run pytest tests/integration/ -v
 
 # E2E tests only
-pipenv run pytest tests/e2e/ -v
+uv run pytest tests/e2e/ -v
 ```
 
 ### Run Specific Test Files
 
 ```bash
 # Validator tests
-pipenv run pytest tests/unit/test_validators.py -v
+uv run pytest tests/unit/test_validators.py -v
 
 # Conversation handler tests
-pipenv run pytest tests/integration/test_conversation_handler.py -v
+uv run pytest tests/integration/test_conversation_handler.py -v
 
 # Full flow tests
-pipenv run pytest tests/e2e/test_full_reservation_flow.py -v
+uv run pytest tests/e2e/test_full_reservation_flow.py -v
 ```
 
 ### Run Specific Tests
 
 ```bash
 # Run single test
-pipenv run pytest tests/unit/test_validators.py::TestPhoneNumberValidation::test_valid_phone_with_hyphens -v
+uv run pytest tests/unit/test_validators.py::TestPhoneNumberValidation::test_valid_phone_with_hyphens -v
 
 # Run all tests in a class
-pipenv run pytest tests/integration/test_conversation_handler.py::TestConversationHandler -v
+uv run pytest tests/integration/test_conversation_handler.py::TestConversationHandler -v
 ```
 
 ### Coverage Reports
 
 ```bash
 # Run tests with coverage
-pipenv run pytest tests/ --cov=src --cov-report=html
+uv run pytest tests/ --cov=src/korail_bot --cov-report=html
 
 # View coverage report
 open htmlcov/index.html
@@ -221,12 +226,13 @@ Each test validates:
 Tests use `testcontainers` to spin up a real Redis instance:
 
 ```python
-# conftest.py automatically manages Redis lifecycle
+# conftest.py manages the Redis lifecycle
 def pytest_configure(config):
-    # Starts Redis container before tests
+    # Starts a Redis container, unless every path on the command line is
+    # under tests/unit - those tests never connect, so they skip it
 
 def pytest_unconfigure(config):
-    # Stops Redis container after tests
+    # Stops the Redis container after tests
 ```
 
 ### 2. Mocking External Dependencies
@@ -234,7 +240,7 @@ def pytest_unconfigure(config):
 Tests mock external services to avoid real API calls:
 
 ```python
-@patch('services.korail_service.KorailService.login')
+@patch('korail_bot.services.korail_service.KorailService.login')
 def test_password_input_success(self, mock_login):
     mock_login.return_value = True
     # Test logic here
@@ -280,8 +286,8 @@ For continuous integration:
 
 ```bash
 # Run tests with coverage and JUnit XML output
-pipenv run pytest tests/ \
-  --cov=src \
+uv run pytest tests/ \
+  --cov=src/korail_bot \
   --cov-report=xml \
   --cov-report=term \
   --junitxml=test-results.xml \
@@ -311,10 +317,10 @@ pytest tests/ -v --log-cli-level=DEBUG
 
 ```bash
 # Reinstall dependencies
-pipenv install --dev
+uv sync
 
 # Verify Python path
-pipenv run python -c "import sys; print(sys.path)"
+uv run python -c "import korail_bot; print(korail_bot.__file__)"
 ```
 
 ## Contributing New Tests
@@ -382,25 +388,25 @@ Replaced with comprehensive integration tests that test real behavior.
 
 ```bash
 # Fast feedback loop (unit tests only)
-pipenv run pytest tests/unit/ -v
+uv run pytest tests/unit/ -v
 
 # Full test suite
-pipenv run pytest tests/ -v
+uv run pytest tests/ -v
 
 # With coverage
-pipenv run pytest tests/ --cov=src --cov-report=term-missing
+uv run pytest tests/ --cov=src/korail_bot --cov-report=term-missing
 
 # Specific test pattern
-pipenv run pytest tests/ -k "payment" -v
+uv run pytest tests/ -k "payment" -v
 
 # Stop on first failure
-pipenv run pytest tests/ -x
+uv run pytest tests/ -x
 
 # Show print statements
-pipenv run pytest tests/ -s
+uv run pytest tests/ -s
 
 # Parallel execution (if installed pytest-xdist)
-pipenv run pytest tests/ -n auto
+uv run pytest tests/ -n auto
 ```
 
 ## Support

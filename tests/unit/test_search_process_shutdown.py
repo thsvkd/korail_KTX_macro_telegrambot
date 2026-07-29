@@ -8,11 +8,12 @@ reporting a failure the user never caused.
 
 They run without Redis or a network.
 """
+
 import signal
 
 import pytest
 
-from telegramBot.telebotBackProcess import SearchStopped, install_shutdown_handlers
+from korail_bot.telegramBot.telebotBackProcess import SearchStopped, install_shutdown_handlers
 
 
 @pytest.fixture

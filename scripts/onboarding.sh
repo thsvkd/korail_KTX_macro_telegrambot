@@ -172,12 +172,13 @@ fi
 
 [[ -n "$DOCKER_NOTE" ]] && note "$DOCKER_NOTE"
 
-# The published image is built for linux/amd64 only, so anywhere else it has
-# to be rebuilt locally.
+# CI publishes linux/amd64 and linux/arm64, but any tag pushed before that
+# change is amd64-only. Building locally works on either, so non-x86_64 hosts
+# keep doing that rather than depending on which tag is currently up.
 ARCH="$(uname -m)"
 say "✔ 아키텍처: ${ARCH}"
 if [[ "$ARCH" != "x86_64" && "$HAS_DOCKER" -eq 1 ]]; then
-    note "배포된 이미지는 x86_64 전용이라 이 기기에서는 직접 빌드해야 합니다."
+    note "이 기기에서는 이미지를 직접 빌드합니다."
     note "  (뒤에서 자동으로 처리합니다)"
 fi
 
@@ -318,7 +319,7 @@ RUN_MODE="local"
 if [[ "$HAS_DOCKER" -eq 1 ]]; then
     RUN_CHOICE="$(ask_choice "어떻게 실행할까요?" 1 \
         "Docker (권장 - 재부팅 후 자동 복구, Redis 포함)" \
-        "직접 실행 (pipenv - 개발용)")"
+        "직접 실행 (uv - 개발용)")"
     [[ "$RUN_CHOICE" == "1" ]] && RUN_MODE="docker"
 else
     note "docker를 쓸 수 없어 직접 실행으로 진행합니다."
@@ -327,9 +328,9 @@ fi
 if [[ "$RUN_MODE" == "docker" ]]; then
     OVERRIDE_FILE="${ROOT_DIR}/docker-compose.override.yml"
 
-    # docker-compose.yml pulls the published image, which is amd64-only and
-    # predates these changes. A local override builds from this checkout
-    # instead. CI copies only docker-compose.yml, so this stays local.
+    # docker-compose.yml pulls the published image, which lags this checkout.
+    # A local override builds from the working tree instead. CI copies only
+    # docker-compose.yml, so this stays local.
     {
         echo "# 온보딩이 생성한 로컬 개발용 오버라이드입니다."
         echo "# docker-compose.yml은 배포된 이미지를 받아 쓰지만, 여기서는"

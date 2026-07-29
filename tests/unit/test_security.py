@@ -3,10 +3,11 @@ Unit tests for the credential-protection and privacy helpers.
 
 These run without Redis or a network.
 """
+
 import pytest
 
-from utils.crypto import SecretBox
-from utils.privacy import mask_phone, mask_phones
+from korail_bot.utils.crypto import SecretBox
+from korail_bot.utils.privacy import mask_phone, mask_phones
 
 
 class TestSecretBox:
@@ -75,11 +76,14 @@ class TestSecretBox:
 class TestMaskPhone:
     """Phone numbers are Korail IDs and must not be broadcast in full."""
 
-    @pytest.mark.parametrize("raw,expected", [
-        ("010-1234-5678", "010-****-5678"),
-        ("011-123-4567", "011-***-4567"),
-        ("010-9876-5432", "010-****-5432"),
-    ])
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("010-1234-5678", "010-****-5678"),
+            ("011-123-4567", "011-***-4567"),
+            ("010-9876-5432", "010-****-5432"),
+        ],
+    )
     def test_middle_block_is_masked(self, raw, expected):
         assert mask_phone(raw) == expected
 
@@ -107,11 +111,10 @@ class TestUserSessionReset:
     """A finished flow must not leave the password behind."""
 
     def test_reset_clears_password(self):
-        from models import UserCredentials, UserSession
+        from korail_bot.models import UserCredentials, UserSession
 
         session = UserSession(
-            chat_id=1,
-            credentials=UserCredentials(korail_id="010-1234-5678", korail_pw="secret")
+            chat_id=1, credentials=UserCredentials(korail_id="010-1234-5678", korail_pw="secret")
         )
 
         session.reset()

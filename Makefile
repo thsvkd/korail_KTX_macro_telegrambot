@@ -10,8 +10,26 @@ setup:			## Create .env, generate secrets, install dependencies
 	./scripts/setup.sh
 
 .PHONY: install
-install:		## Install dependencies with pipenv
-	pipenv install --dev
+install:		## Install dependencies into .venv from uv.lock
+	uv sync --frozen
+
+.PHONY: lock
+lock:			## Re-resolve uv.lock after editing pyproject.toml
+	uv lock
+
+.PHONY: lint
+lint:			## Check formatting and lint rules
+	uv run --frozen ruff format --check .
+	uv run --frozen ruff check .
+
+.PHONY: format
+format:			## Reformat and autofix
+	uv run --frozen ruff format .
+	uv run --frozen ruff check --fix .
+
+.PHONY: typecheck
+typecheck:		## Run mypy
+	uv run --frozen mypy
 
 .PHONY: run
 run:			## Run the application locally
@@ -22,8 +40,8 @@ dev-redis:		## Start the local development Redis (127.0.0.1:6379)
 	./scripts/dev-redis.sh
 
 .PHONY: shell
-shell:			## Open pipenv shell
-	pipenv shell
+shell:			## Open a shell with .venv activated
+	uv run --frozen $$SHELL
 
 .PHONY: secrets
 secrets:		## Generate any missing secrets in .env
@@ -36,11 +54,6 @@ webhook:		## Show the current Telegram webhook status
 .PHONY: security-check
 security-check:	## Check the local configuration for security mistakes
 	./scripts/security-check.sh
-
-.PHONY: requirements
-requirements:	## Generate requirements.txt from Pipfile.lock (for Docker)
-	pipenv requirements > requirements.txt
-	echo "uwsgi==2.0.31" >> requirements.txt
 
 .PHONY: test
 test:			## Run all tests with pytest

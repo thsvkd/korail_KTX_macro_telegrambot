@@ -4,15 +4,15 @@ Unit tests for how Korail credentials are handed to the background process.
 Credentials must never appear in the child's argv: anything on a command
 line is readable by every process on the host via `ps` or /proc.
 """
+
 import json
 from unittest.mock import Mock, patch
 
 import pytest
 
-from models import TrainSearchParams
-from services.reservation_service import ReservationService
-from storage.base import StorageInterface
-
+from korail_bot.models import TrainSearchParams
+from korail_bot.services.reservation_service import ReservationService
+from korail_bot.storage.base import StorageInterface
 
 USERNAME = "010-1234-5678"
 PASSWORD = "sup3r-s3cret-pw"
@@ -31,7 +31,7 @@ def search_params():
         special_option="ReserveOption.GENERAL_FIRST",
         special_option_display="GENERAL_FIRST",
         passenger_count=2,
-        seat_strategy="random"
+        seat_strategy="random",
     )
 
 
@@ -45,16 +45,13 @@ def service():
 
 def _start(service, search_params):
     """Run start_reservation_process against a mocked Popen."""
-    with patch('subprocess.Popen') as popen:
+    with patch("subprocess.Popen") as popen:
         process = Mock()
         process.pid = 4242
         popen.return_value = process
 
         success = service.start_reservation_process(
-            chat_id=555,
-            username=USERNAME,
-            password=PASSWORD,
-            search_params=search_params
+            chat_id=555, username=USERNAME, password=PASSWORD, search_params=search_params
         )
 
     return success, popen, process
@@ -78,12 +75,19 @@ class TestCredentialHandoff:
         _, popen, _ = _start(service, search_params)
 
         argv = popen.call_args[0][0]
-        assert argv[:3] == ['python', '-m', 'telegramBot.telebotBackProcess']
+        assert argv[:3] == ["python", "-m", "korail_bot.telegramBot.telebotBackProcess"]
         # Order must match what telebotBackProcess reads.
         assert argv[3:] == [
-            "20991231", "서울", "부산", "090000",
-            "TrainType.KTX", "ReserveOption.GENERAL_FIRST",
-            "555", "1800", "2", "random"
+            "20991231",
+            "서울",
+            "부산",
+            "090000",
+            "TrainType.KTX",
+            "ReserveOption.GENERAL_FIRST",
+            "555",
+            "1800",
+            "2",
+            "random",
         ]
 
     def test_credentials_written_to_stdin(self, service, search_params):
@@ -91,7 +95,7 @@ class TestCredentialHandoff:
 
         process.stdin.write.assert_called_once()
         written = process.stdin.write.call_args[0][0]
-        payload = json.loads(written.decode('utf-8'))
+        payload = json.loads(written.decode("utf-8"))
 
         assert payload == {"username": USERNAME, "password": PASSWORD}
 

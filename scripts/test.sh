@@ -22,13 +22,20 @@ done
 
 cd "$ROOT_DIR"
 
-# Tests must not depend on the developer's .env - pipenv would otherwise
-# inject it (a REDIS_PASSWORD there fails against the throwaway container).
-export PIPENV_DONT_LOAD_ENV=1
+# Tests must not depend on the developer's .env; uv does not load it, so
+# there is nothing to switch off here. (A REDIS_PASSWORD from .env would
+# fail against the throwaway container, which runs without auth.)
 
-if ! docker info >/dev/null 2>&1; then
+if [[ ${#PYTEST_ARGS[@]} -eq 0 ]]; then
+    PYTEST_ARGS=(tests/ -v)
+fi
+
+# Only the integration and e2e suites need the throwaway Redis. conftest.py
+# decides from the same paths; this check just reports it earlier.
+if [[ "${PYTEST_ARGS[*]}" != tests/unit* ]] && ! docker info >/dev/null 2>&1; then
     warn "Docker does not look available."
-    warn "The suite needs it to start a temporary Redis (testcontainers)."
+    warn "tests/integration and tests/e2e need it for a temporary Redis."
+    warn "Run 'scripts/test.sh tests/unit' for the suite that does not."
 fi
 
 # Values the app expects at import time. conftest.py sets the same defaults,
@@ -37,20 +44,7 @@ export BOTTOKEN="${BOTTOKEN:-test-bot-token}"
 export TELEGRAM_WEBHOOK_SECRET="${TELEGRAM_WEBHOOK_SECRET:-test-webhook-secret}"
 export SESSION_SECRET="${SESSION_SECRET:-test-session-secret}"
 export ADMIN_PASSWORD="${ADMIN_PASSWORD:-test-admin-password}"
-export PYTHONPATH="${ROOT_DIR}/src:${ROOT_DIR}:${PYTHONPATH:-}"
 
-if [[ ${#PYTEST_ARGS[@]} -eq 0 ]]; then
-    PYTEST_ARGS=(tests/ -v)
-fi
-
+require_uv
 info "Running pytest ${PYTEST_ARGS[*]}"
-if has_venv; then
-    pipenv run pytest "${PYTEST_ARGS[@]}"
-elif python3 -c 'import pytest' >/dev/null 2>&1; then
-    warn "No pipenv virtualenv found - falling back to the system pytest"
-    python3 -m pytest "${PYTEST_ARGS[@]}"
-else
-    err "pytest is not available: there is no project virtualenv and the"
-    err "system Python does not have pytest installed."
-    die "Run 'scripts/setup.sh' to create the environment first."
-fi
+exec uv run --frozen pytest "${PYTEST_ARGS[@]}"

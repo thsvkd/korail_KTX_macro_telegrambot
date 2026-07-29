@@ -22,16 +22,15 @@ done
 cd "$ROOT_DIR"
 
 # This script loads .env itself and adjusts some values (REDIS_HOST below).
-# pipenv would re-read .env on top of the exported environment and undo those
-# adjustments, so tell it not to.
-export PIPENV_DONT_LOAD_ENV=1
-
+# uv does not read .env on its own, so nothing undoes those adjustments.
 load_env
 
-# Fail with something actionable instead of a traceback from src/app.py.
-if ! can_import flask; then
-    err "The application dependencies are not installed for $(python_runner)."
-    die "Run 'scripts/setup.sh' first."
+# Build .venv up front rather than in the middle of the startup banner, and
+# fail with something actionable instead of a traceback from app.py.
+require_uv
+if ! uv sync --frozen --quiet; then
+    err "Could not prepare the environment from uv.lock."
+    die "Run 'uv lock' if it is out of step with pyproject.toml."
 fi
 
 # Local runs talk to Redis on the host, not to the compose service name.
@@ -85,7 +84,7 @@ then
 fi
 ok "Redis reachable"
 
-export PYTHONPATH="${ROOT_DIR}/src:${PYTHONPATH:-}"
-
 info "Starting the bot (Ctrl-C to stop)"
-exec $(python_runner) "${ROOT_DIR}/src/app.py"
+# The package is installed into .venv, so no PYTHONPATH is needed.
+# shellcheck disable=SC2046
+exec $(python_runner) -m korail_bot.app

@@ -1,4 +1,6 @@
 """Conversation flow handler for reservation process."""
+from typing import Optional
+
 from korail2 import TrainType, ReserveOption
 
 from config.settings import settings
@@ -106,6 +108,11 @@ class ConversationHandler:
         if is_yes is True:
             session.last_action = UserProgress.START_ACCEPTED
             self.storage.save_user_session(session)
+            # Both prompts that follow have a known answer when the operator
+            # put their Korail account in the environment, so skip them.
+            if settings.has_preconfigured_korail_credentials():
+                self._handle_preconfigured_login(chat_id, session)
+                return
             self.telegram.send_message(chat_id, MessageTemplates.request_phone_number())
         elif is_yes is False:
             session.reset()
@@ -115,27 +122,71 @@ class ConversationHandler:
         else:
             self.telegram.send_message(chat_id, error)
 
-    def _handle_admin_login(self, chat_id: int, session: UserSession) -> None:
-        """Handle magic admin login."""
-        username = settings.KORAIL_ADMIN_USER_ID
-        password = settings.KORAIL_ADMIN_PASSWORD
+    def _login_with_environment_credentials(
+        self, chat_id: int, session: UserSession
+    ) -> Optional[str]:
+        """
+        Log in with USERID/USERPW and record the result on the session.
 
-        if not username or not password:
-            session.reset()
-            self.storage.save_user_session(session)
-            from telegramBot.messages import Messages
-            self.telegram.send_message(chat_id, Messages.ERROR_ADMIN_ENV)
-            return
+        Returns:
+            The Korail ID that was logged in with, or None when the login
+            failed. The session is left untouched on failure so the caller
+            decides what to do next.
+        """
+        # Korail wants the hyphenated form of a mobile number, the same way
+        # the typed-in number is normalised. A member number or an e-mail is
+        # left as it is.
+        username = (
+            InputValidator.normalize_phone_number(settings.KORAIL_ADMIN_USER_ID)
+            or settings.KORAIL_ADMIN_USER_ID
+        )
+        password = settings.KORAIL_ADMIN_PASSWORD
 
         # Try login. The same app session the user's search will run under,
         # so validating a password does not look like a separate device.
         korail = KorailService(
             app_session_start=self.storage.get_or_create_app_session_start(chat_id)
         )
-        if korail.login(username, password):
-            session.credentials = UserCredentials(korail_id=username, korail_pw=password)
-            session.last_action = UserProgress.PW_INPUT_SUCCESS
+        if not korail.login(username, password):
+            return None
+
+        session.credentials = UserCredentials(korail_id=username, korail_pw=password)
+        session.last_action = UserProgress.PW_INPUT_SUCCESS
+        self.storage.save_user_session(session)
+        return username
+
+    def _handle_preconfigured_login(self, chat_id: int, session: UserSession) -> None:
+        """Log in with the account from the environment instead of prompting."""
+        username = self._login_with_environment_credentials(chat_id, session)
+
+        if username:
+            logger.info(f"Logged in with preconfigured credentials for chat_id={chat_id}")
+            self.telegram.send_message(
+                chat_id, MessageTemplates.preconfigured_login_success(username)
+            )
+            return
+
+        # A stale password in .env must not leave the user with nowhere to go,
+        # so fall back to the prompts that were skipped. The session is
+        # already at START_ACCEPTED, which is where the phone number is
+        # expected.
+        logger.warning(
+            f"Preconfigured Korail login failed for chat_id={chat_id}; "
+            f"falling back to manual credential entry"
+        )
+        from telegramBot.messages import Messages
+        self.telegram.send_message(chat_id, Messages.PRECONFIGURED_LOGIN_FAILED)
+
+    def _handle_admin_login(self, chat_id: int, session: UserSession) -> None:
+        """Handle magic admin login."""
+        if not settings.KORAIL_ADMIN_USER_ID or not settings.KORAIL_ADMIN_PASSWORD:
+            session.reset()
             self.storage.save_user_session(session)
+            from telegramBot.messages import Messages
+            self.telegram.send_message(chat_id, Messages.ERROR_ADMIN_ENV)
+            return
+
+        if self._login_with_environment_credentials(chat_id, session):
             self.telegram.send_message(chat_id, MessageTemplates.login_success())
         else:
             session.reset()

@@ -25,6 +25,23 @@ class Messages:
 계속 진행하시려면 "예" 또는 "Y"를 입력해주세요.
 """
 
+    WELCOME_PRECONFIGURED = """🚄 근삼 코레일 봇을 이용해 주셔서 감사합니다.
+
+본 프로그램은 매진 열차 자동 예약을 위한 서비스입니다.
+예약 완료 시 결제는 10분 이내에 직접 진행해주셔야 합니다.
+
+🔑 코레일 계정이 서버에 설정되어 있어 로그인 정보는 묻지 않습니다.
+
+📋 예약 정보 입력 순서
+━━━━━━━━━━━━━━━━
+  1. 출발 희망일
+  2. 출발역
+  3. 도착역
+━━━━━━━━━━━━━━━━
+
+계속 진행하시려면 "예" 또는 "Y"를 입력해주세요.
+"""
+
     HELP = """📌 사용 가능한 명령어
 
 🎫 예약 관련
@@ -73,6 +90,23 @@ class Messages:
 
 📅 출발 희망일을 8자리로 입력해주세요.
 예시: 20250425 (2025년 4월 25일)
+"""
+
+    LOGIN_SUCCESS_PRECONFIGURED = """✅ 서버에 설정된 코레일 계정으로 로그인했습니다. ({username})
+
+📅 출발 희망일을 8자리로 입력해주세요.
+예시: 20250425 (2025년 4월 25일)
+"""
+
+    PRECONFIGURED_LOGIN_FAILED = """⚠️ 서버에 설정된 코레일 계정으로 로그인하지 못했습니다.
+
+비밀번호가 변경되었을 수 있습니다. 직접 입력하는 방식으로 진행합니다.
+
+📱 휴대전화번호를 입력해 주세요.
+예시: 010-1234-5678 또는 01012345678
+
+💡 하이픈(-)은 있어도 없어도 됩니다.
+💡 취소를 원하시면 /cancel을 입력하세요.
 """
 
     LOGIN_FAILED_RETRY = """❌ 로그인 실패
@@ -326,8 +360,14 @@ class Messages:
     # These methods provide compatibility with the old MessageTemplates interface
 
     @staticmethod
-    def welcome_message():
-        """Welcome message (compatibility method)"""
+    def welcome_message(skip_login_prompts: bool = False):
+        """Welcome message (compatibility method)
+
+        The list of steps has to match what the user is actually asked for,
+        so it drops the login step when the server logs in on its own.
+        """
+        if skip_login_prompts:
+            return Messages.WELCOME_PRECONFIGURED
         return Messages.WELCOME
 
     @staticmethod
@@ -344,6 +384,17 @@ class Messages:
     def login_success():
         """Login success (compatibility method)"""
         return Messages.LOGIN_SUCCESS
+
+    @staticmethod
+    def preconfigured_login_success(username: str):
+        """Login success with the account from the environment.
+
+        The account is masked: the operator knows which one it is, and the
+        message lands in a chat transcript that outlives the reservation.
+        """
+        from utils.privacy import mask_phone
+
+        return Messages.LOGIN_SUCCESS_PRECONFIGURED.format(username=mask_phone(username))
 
     @staticmethod
     def login_failure(username: str):

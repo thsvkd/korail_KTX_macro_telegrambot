@@ -4,9 +4,24 @@
 모든 봇 메시지를 중앙에서 관리하여 유지보수성을 향상시킵니다.
 """
 
+from typing import ClassVar
+
 
 class Messages:
     """봇 메시지 템플릿 클래스"""
+
+    # ========== 명령어 메뉴 ==========
+    # Telegram 의 메뉴 버튼에 표시되는 목록. 명령어를 외워서 타이핑하는 대신
+    # 골라서 쓰게 만드는 용도다.
+    #
+    # 관리자 명령어는 일부러 빼두었다. 메뉴는 모든 사용자에게 똑같이 보이므로,
+    # 여기에 넣는 순간 /flushredis 가 있다는 사실을 전원에게 광고하게 된다.
+    BOT_COMMANDS: ClassVar[list[dict[str, str]]] = [
+        {"command": "start", "description": "🎫 예약 시작"},
+        {"command": "status", "description": "📊 예약 상태 확인"},
+        {"command": "cancel", "description": "🚫 진행 중인 예약 취소"},
+        {"command": "help", "description": "❓ 도움말"},
+    ]
 
     # ========== 시작 및 안내 메시지 ==========
     WELCOME = """🚄 근삼 코레일 봇을 이용해 주셔서 감사합니다.

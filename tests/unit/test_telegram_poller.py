@@ -131,8 +131,11 @@ class TestOffsetTracking:
 
         params = polls(calls)[0]["kwargs"]["params"]
         assert params["timeout"] == Settings.TELEGRAM_POLL_TIMEOUT
-        # Telegram expects a JSON array, and this bot only handles messages.
-        assert json.loads(params["allowed_updates"]) == ["message"]
+        # Telegram expects a JSON array. callback_query has to be on it:
+        # a button press arrives as nothing else, and an omitted kind is one
+        # Telegram never delivers - every inline keyboard in the bot would
+        # look pressed and do nothing.
+        assert json.loads(params["allowed_updates"]) == ["message", "callback_query"]
 
     def test_request_timeout_exceeds_the_long_poll(self):
         """An idle long poll must not look like a hung connection."""

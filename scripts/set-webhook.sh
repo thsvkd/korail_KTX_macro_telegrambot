@@ -51,9 +51,14 @@ case "$ACTION" in
             die "TELEGRAM_WEBHOOK_SECRET is not set. Run 'scripts/gen-secrets.sh'."
 
         info "Registering webhook: ${URL}"
+        # allowed_updates is stated rather than left to the default: the
+        # value is remembered between calls, so a webhook registered by an
+        # older version of this script would keep filtering out the button
+        # presses every inline keyboard in the bot depends on.
         curl -sS -X POST "${API}/setWebhook" \
             --data-urlencode "url=${URL}" \
             --data-urlencode "secret_token=${TELEGRAM_WEBHOOK_SECRET}" \
+            --data-urlencode 'allowed_updates=["message","callback_query"]' \
             --data-urlencode "drop_pending_updates=true"
         echo
         ok "Webhook registered with a secret token."

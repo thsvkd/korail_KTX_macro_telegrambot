@@ -15,6 +15,7 @@ from korail_bot.services import (
     TelegramService,
 )
 from korail_bot.storage.base import StorageInterface
+from korail_bot.telegramBot import keyboards
 from korail_bot.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -69,6 +70,12 @@ class TelegramUpdateProcessor:
         try:
             # Ignore edited messages and chat member updates
             if "edited_message" in update or "my_chat_member" in update:
+                return
+
+            # A button press arrives as its own update kind, carrying no
+            # message from the user at all.
+            if "callback_query" in update:
+                self.process_callback_query(update["callback_query"])
                 return
 
             # Extract message
@@ -169,3 +176,133 @@ class TelegramUpdateProcessor:
 
         except Exception as e:
             logger.error(f"Error handling update: {e}", exc_info=True)
+
+    def process_callback_query(self, query: dict) -> None:
+        """
+        Handle one inline keyboard button press.
+
+        A press is turned into the answer the user would have typed and given
+        to the same conversation handler, so buttons and typing cannot drift
+        apart: there is one place that validates a date, and one place that
+        decides what comes next.
+
+        Args:
+            query: The callback_query object from the Bot API
+        """
+        query_id = query.get("id")
+        if not isinstance(query_id, str):
+            # Nothing to acknowledge and nothing to reply to.
+            logger.warning("Ignoring a callback_query with no id")
+            return
+
+        data = query.get("data")
+        if not isinstance(data, str):
+            self.telegram.answer_callback_query(query_id)
+            return
+
+        message = query.get("message")
+        message = message if isinstance(message, dict) else {}
+        try:
+            chat_id = int(message["chat"]["id"])
+        except (KeyError, TypeError, ValueError):
+            # Telegram stops sending the originating message once it is too
+            # old to edit, and without it there is no chat to answer in.
+            self.telegram.answer_callback_query(
+                query_id, "너무 오래된 메시지입니다.\n/start 로 다시 시작해주세요.", show_alert=True
+            )
+            return
+
+        message_id = message.get("message_id")
+        message_id = message_id if isinstance(message_id, int) else None
+
+        step, _, value = data.partition(":")
+        logger.info(f"Button press from chat_id={chat_id}: {data}")
+
+        if step == keyboards.STEP_CANCEL:
+            self.telegram.answer_callback_query(query_id)
+            self._settle_keyboard(chat_id, message_id, message, data)
+            self.command_handler.handle_cancel(chat_id)
+            return
+
+        expected_progress = keyboards.STEP_PROGRESS.get(step)
+        if expected_progress is None:
+            logger.warning(f"Unknown callback step {step!r} from chat_id={chat_id}")
+            self.telegram.answer_callback_query(
+                query_id, "알 수 없는 버튼입니다.\n/start 로 다시 시작해주세요.", show_alert=True
+            )
+            return
+
+        # The guard that makes buttons safe. Old messages keep their keyboards
+        # forever, and every value here is a digit or a date that the current
+        # step would accept without complaint - a tap on last week's "특실만"
+        # would be recorded as four passengers.
+        session = self.storage.get_user_session(chat_id)
+        current_progress = session.last_action if session else None
+        if current_progress != expected_progress:
+            logger.info(
+                f"Ignoring a stale button from chat_id={chat_id}: "
+                f"{data} expects progress {expected_progress}, session is at {current_progress}"
+            )
+            self.telegram.answer_callback_query(
+                query_id,
+                "이미 지나간 단계의 버튼입니다.\n가장 최근 메시지에서 선택해주세요.",
+                show_alert=True,
+            )
+            self._remove_keyboard(chat_id, message_id)
+            return
+
+        if value == keyboards.MANUAL:
+            self.telegram.answer_callback_query(query_id, "원하는 값을 직접 입력해주세요.")
+            self._remove_keyboard(chat_id, message_id)
+            return
+
+        self.telegram.answer_callback_query(query_id)
+        # Before dispatching, not after: the handler sends the next question,
+        # and the answer to this one should already be settled above it.
+        self._settle_keyboard(chat_id, message_id, message, data)
+        self.conversation_handler.handle_message(chat_id, value)
+
+    def _settle_keyboard(
+        self, chat_id: int, message_id: int | None, message: dict, data: str
+    ) -> None:
+        """
+        Record the choice on the message that offered it, and take its buttons away.
+
+        Leaves the chat readable after the fact - a transcript of questions
+        with no answers is not much of a transcript - and stops the same
+        question being answered twice.
+
+        Presentational, and contained accordingly. It runs before the answer
+        is dispatched so the record lands above the next question, which puts
+        it on the path of something that matters; nothing that happens here
+        may cost the user the choice they just made.
+        """
+        if message_id is None:
+            return
+
+        try:
+            text = message.get("text")
+            if not isinstance(text, str):
+                # A message without text cannot be edited into one that has it.
+                self._remove_keyboard(chat_id, message_id)
+                return
+
+            label = keyboards.button_label(message.get("reply_markup"), data)
+            self.telegram.edit_message_text(
+                chat_id,
+                message_id,
+                f"{text}\n\n👉 선택: {label}" if label else text,
+                reply_markup=keyboards.empty_keyboard(),
+            )
+        except Exception as e:
+            logger.warning(f"Could not record the choice on message {message_id}: {e}")
+
+    def _remove_keyboard(self, chat_id: int, message_id: int | None) -> None:
+        """Take the buttons off a message without touching its text."""
+        if message_id is None:
+            return
+
+        try:
+            self.telegram.edit_message_reply_markup(chat_id, message_id, keyboards.empty_keyboard())
+        except Exception as e:
+            logger.warning(f"Could not remove the keyboard from message {message_id}: {e}")

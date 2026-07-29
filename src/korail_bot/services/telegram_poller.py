@@ -151,7 +151,9 @@ class TelegramPoller:
         params = {
             "timeout": self.poll_timeout,
             # Telegram expects a JSON array here, not repeated parameters.
-            "allowed_updates": json.dumps(["message"]),
+            # callback_query is what a button press arrives as; leave it out
+            # and every inline keyboard in the bot silently does nothing.
+            "allowed_updates": json.dumps(["message", "callback_query"]),
         }
         if self._offset is not None:
             params["offset"] = self._offset

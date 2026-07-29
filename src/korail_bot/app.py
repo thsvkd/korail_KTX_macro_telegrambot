@@ -131,6 +131,16 @@ logger.info("=" * 60)
 if not is_running_from_reloader():
     reservation_service.reconcile_after_restart()
 
+    # Publish the command menu. Best effort: Telegram being unreachable at
+    # startup means the menu keeps whatever it had, which is not a reason to
+    # refuse to start a bot whose searches run over a different connection.
+    from korail_bot.telegramBot.messages import Messages
+
+    if telegram_service.set_my_commands(Messages.BOT_COMMANDS):
+        logger.info("Command menu published to Telegram")
+    else:
+        logger.warning("Could not publish the command menu - the previous one stays in place")
+
 poller = None
 if settings.RECEIVE_MODE == "polling" and not is_running_from_reloader():
     poller = TelegramPoller(

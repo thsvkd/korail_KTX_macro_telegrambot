@@ -11,6 +11,7 @@ from korail_bot.services import (
     TelegramService,
 )
 from korail_bot.storage.base import StorageInterface
+from korail_bot.telegramBot import keyboards
 from korail_bot.utils.logger import LoggerFactory, get_logger
 from korail_bot.utils.privacy import mask_phone
 
@@ -67,6 +68,7 @@ class CommandHandler:
             MessageTemplates.welcome_message(
                 skip_login_prompts=settings.has_preconfigured_korail_credentials()
             ),
+            reply_markup=keyboards.start_confirm_keyboard(),
         )
 
     def handle_cancel(self, chat_id: int) -> None:

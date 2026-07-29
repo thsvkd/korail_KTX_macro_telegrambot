@@ -6,6 +6,7 @@ from korail_bot.config.settings import settings
 from korail_bot.models import TrainSearchParams, UserCredentials, UserProgress, UserSession
 from korail_bot.services import KorailService, MessageTemplates, ReservationService, TelegramService
 from korail_bot.storage.base import StorageInterface
+from korail_bot.telegramBot import keyboards
 from korail_bot.utils.logger import get_logger
 from korail_bot.utils.privacy import mask_phone
 from korail_bot.utils.validators import InputValidator
@@ -111,7 +112,13 @@ class ConversationHandler:
             if settings.has_preconfigured_korail_credentials():
                 self._handle_preconfigured_login(chat_id, session)
                 return
-            self.telegram.send_message(chat_id, MessageTemplates.request_phone_number())
+            # A phone number has to be typed, but leaving should not have to
+            # be, so the cancel button follows the flow all the way through.
+            self.telegram.send_message(
+                chat_id,
+                MessageTemplates.request_phone_number(),
+                reply_markup=keyboards.cancel_only_keyboard(),
+            )
         elif is_yes is False:
             session.reset()
             self.storage.save_user_session(session)
@@ -119,7 +126,9 @@ class ConversationHandler:
 
             self.telegram.send_message(chat_id, Messages.CANCEL_START_CONFIRMATION)
         else:
-            self.telegram.send_message(chat_id, error)
+            self.telegram.send_message(
+                chat_id, error, reply_markup=keyboards.start_confirm_keyboard()
+            )
 
     def _login_with_environment_credentials(self, chat_id: int, session: UserSession) -> str | None:
         """
@@ -159,7 +168,9 @@ class ConversationHandler:
         if username:
             logger.info(f"Logged in with preconfigured credentials for chat_id={chat_id}")
             self.telegram.send_message(
-                chat_id, MessageTemplates.preconfigured_login_success(username)
+                chat_id,
+                MessageTemplates.preconfigured_login_success(username),
+                reply_markup=keyboards.date_keyboard(),
             )
             return
 
@@ -173,7 +184,11 @@ class ConversationHandler:
         )
         from korail_bot.telegramBot.messages import Messages
 
-        self.telegram.send_message(chat_id, Messages.PRECONFIGURED_LOGIN_FAILED)
+        self.telegram.send_message(
+            chat_id,
+            Messages.PRECONFIGURED_LOGIN_FAILED,
+            reply_markup=keyboards.cancel_only_keyboard(),
+        )
 
     def _handle_admin_login(self, chat_id: int, session: UserSession) -> None:
         """Handle magic admin login."""
@@ -186,7 +201,9 @@ class ConversationHandler:
             return
 
         if self._login_with_environment_credentials(chat_id, session):
-            self.telegram.send_message(chat_id, MessageTemplates.login_success())
+            self.telegram.send_message(
+                chat_id, MessageTemplates.login_success(), reply_markup=keyboards.date_keyboard()
+            )
         else:
             session.reset()
             self.storage.save_user_session(session)
@@ -234,7 +251,11 @@ class ConversationHandler:
         # Validate password
         is_valid, error = InputValidator.validate_password(text)
         if not is_valid:
-            self.telegram.send_message(chat_id, error + " 다시 입력 바랍니다.")
+            self.telegram.send_message(
+                chat_id,
+                error + " 다시 입력 바랍니다.",
+                reply_markup=keyboards.cancel_only_keyboard(),
+            )
             return
 
         username = session.credentials.korail_id
@@ -252,10 +273,18 @@ class ConversationHandler:
         if korail.login(username, password):
             session.last_action = UserProgress.PW_INPUT_SUCCESS
             self.storage.save_user_session(session)
-            self.telegram.send_message(chat_id, MessageTemplates.login_success())
+            self.telegram.send_message(
+                chat_id, MessageTemplates.login_success(), reply_markup=keyboards.date_keyboard()
+            )
         else:
-            # Login failed - ask for retry
-            self.telegram.send_message(chat_id, MessageTemplates.login_failure(username))
+            # Login failed - ask for retry. No buttons for the retry itself:
+            # the answer is a password, a Y or an N, and only the first two
+            # of those can be offered without putting a password on a button.
+            self.telegram.send_message(
+                chat_id,
+                MessageTemplates.login_failure(username),
+                reply_markup=keyboards.cancel_only_keyboard(),
+            )
             # Don't change state - wait for retry input
 
     def _handle_date_input(self, chat_id: int, text: str, session: UserSession) -> None:
@@ -266,33 +295,52 @@ class ConversationHandler:
             self.telegram.send_message(
                 chat_id,
                 f"{error}\n예매 희망일 8자를 입력해주십시오.\n(ex_ 20210124) <- 2021년 1월 24일",
+                reply_markup=keyboards.date_keyboard(),
             )
             return
 
         session.train_info["depDate"] = text
         session.last_action = UserProgress.DATE_INPUT_SUCCESS
         self.storage.save_user_session(session)
-        self.telegram.send_message(chat_id, MessageTemplates.request_departure_station())
+        self.telegram.send_message(
+            chat_id,
+            MessageTemplates.request_departure_station(),
+            reply_markup=keyboards.station_keyboard(keyboards.STEP_SRC_STATION),
+        )
 
     def _handle_src_station_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle source station input."""
         is_valid, error = InputValidator.validate_station_name(text)
 
         if not is_valid:
-            self.telegram.send_message(chat_id, error)
+            self.telegram.send_message(
+                chat_id, error, reply_markup=keyboards.station_keyboard(keyboards.STEP_SRC_STATION)
+            )
             return
 
         session.train_info["srcLocate"] = text
         session.last_action = UserProgress.SRC_LOCATE_INPUT_SUCCESS
         self.storage.save_user_session(session)
-        self.telegram.send_message(chat_id, MessageTemplates.request_arrival_station())
+        # The departure station is dropped from the arrival keyboard: a train
+        # from a station to itself is not something to make one tap away.
+        self.telegram.send_message(
+            chat_id,
+            MessageTemplates.request_arrival_station(),
+            reply_markup=keyboards.station_keyboard(keyboards.STEP_DST_STATION, exclude=text),
+        )
 
     def _handle_dst_station_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle destination station input."""
         is_valid, error = InputValidator.validate_station_name(text)
 
         if not is_valid:
-            self.telegram.send_message(chat_id, error)
+            self.telegram.send_message(
+                chat_id,
+                error,
+                reply_markup=keyboards.station_keyboard(
+                    keyboards.STEP_DST_STATION, exclude=session.train_info.get("srcLocate")
+                ),
+            )
             return
 
         session.train_info["dstLocate"] = text
@@ -301,14 +349,20 @@ class ConversationHandler:
 
         from korail_bot.telegramBot.messages import Messages
 
-        self.telegram.send_message(chat_id, Messages.REQUEST_DST_STATION)
+        self.telegram.send_message(
+            chat_id,
+            Messages.REQUEST_DST_STATION,
+            reply_markup=keyboards.time_keyboard(keyboards.STEP_DEP_TIME),
+        )
 
     def _handle_dep_time_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle departure time input."""
         is_valid, error = InputValidator.validate_time(text)
 
         if not is_valid:
-            self.telegram.send_message(chat_id, error)
+            self.telegram.send_message(
+                chat_id, error, reply_markup=keyboards.time_keyboard(keyboards.STEP_DEP_TIME)
+            )
             return
 
         session.train_info["depTime"] = text + "00"  # Add seconds
@@ -317,7 +371,13 @@ class ConversationHandler:
 
         from korail_bot.telegramBot.messages import Messages
 
-        self.telegram.send_message(chat_id, Messages.REQUEST_DEP_TIME)
+        self.telegram.send_message(
+            chat_id,
+            Messages.REQUEST_DEP_TIME,
+            reply_markup=keyboards.time_keyboard(
+                keyboards.STEP_MAX_DEP_TIME, include_unlimited=True
+            ),
+        )
 
     def _handle_max_dep_time_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle max departure time input."""
@@ -327,7 +387,13 @@ class ConversationHandler:
         else:
             is_valid, error = InputValidator.validate_time(text)
             if not is_valid:
-                self.telegram.send_message(chat_id, error)
+                self.telegram.send_message(
+                    chat_id,
+                    error,
+                    reply_markup=keyboards.time_keyboard(
+                        keyboards.STEP_MAX_DEP_TIME, include_unlimited=True
+                    ),
+                )
                 return
 
         session.train_info["maxDepTime"] = text
@@ -336,14 +402,16 @@ class ConversationHandler:
 
         from korail_bot.telegramBot.messages import Messages
 
-        self.telegram.send_message(chat_id, Messages.REQUEST_TRAIN_TYPE)
+        self.telegram.send_message(
+            chat_id, Messages.REQUEST_TRAIN_TYPE, reply_markup=keyboards.train_type_keyboard()
+        )
 
     def _handle_train_type_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle train type selection."""
         is_valid, error = InputValidator.validate_train_type_choice(text)
 
         if not is_valid:
-            self.telegram.send_message(chat_id, error)
+            self.telegram.send_message(chat_id, error, reply_markup=keyboards.train_type_keyboard())
             return
 
         if text == "1":
@@ -358,14 +426,18 @@ class ConversationHandler:
 
         from korail_bot.telegramBot.messages import Messages
 
-        self.telegram.send_message(chat_id, Messages.REQUEST_SEAT_TYPE)
+        self.telegram.send_message(
+            chat_id, Messages.REQUEST_SEAT_TYPE, reply_markup=keyboards.seat_option_keyboard()
+        )
 
     def _handle_special_option_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle special seat option selection."""
         is_valid, error = InputValidator.validate_special_option_choice(text)
 
         if not is_valid:
-            self.telegram.send_message(chat_id, error)
+            self.telegram.send_message(
+                chat_id, error, reply_markup=keyboards.seat_option_keyboard()
+            )
             return
 
         option_map = {
@@ -385,7 +457,11 @@ class ConversationHandler:
         # Ask for passenger count
         from korail_bot.telegramBot.messages import Messages
 
-        self.telegram.send_message(chat_id, Messages.REQUEST_PASSENGER_COUNT)
+        self.telegram.send_message(
+            chat_id,
+            Messages.REQUEST_PASSENGER_COUNT,
+            reply_markup=keyboards.passenger_count_keyboard(),
+        )
 
     def _handle_passenger_count_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle passenger count input."""
@@ -393,7 +469,9 @@ class ConversationHandler:
         is_valid, error = InputValidator.validate_passenger_count(text)
 
         if not is_valid:
-            self.telegram.send_message(chat_id, error)
+            self.telegram.send_message(
+                chat_id, error, reply_markup=keyboards.passenger_count_keyboard()
+            )
             return
 
         count = int(text)
@@ -407,7 +485,11 @@ class ConversationHandler:
         if count > 1:
             from korail_bot.telegramBot.messages import Messages
 
-            self.telegram.send_message(chat_id, Messages.REQUEST_SEAT_STRATEGY.format(count=count))
+            self.telegram.send_message(
+                chat_id,
+                Messages.REQUEST_SEAT_STRATEGY.format(count=count),
+                reply_markup=keyboards.seat_strategy_keyboard(),
+            )
         else:
             # Single passenger, skip seat strategy
             session.train_info["seatStrategy"] = "consecutive"
@@ -421,7 +503,9 @@ class ConversationHandler:
         is_valid, error = InputValidator.validate_seat_strategy_choice(text)
 
         if not is_valid:
-            self.telegram.send_message(chat_id, error)
+            self.telegram.send_message(
+                chat_id, error, reply_markup=keyboards.seat_strategy_keyboard()
+            )
             return
 
         strategy = "consecutive" if text == "1" else "random"
@@ -461,7 +545,7 @@ class ConversationHandler:
             passengerCount=info.get("passengerCount", 1),
             seatStrategy=info.get("seatStrategyShow", "1명"),
         )
-        self.telegram.send_message(chat_id, summary)
+        self.telegram.send_message(chat_id, summary, reply_markup=keyboards.confirm_keyboard())
 
     def _handle_final_confirmation(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle final confirmation before starting reservation."""
@@ -479,7 +563,9 @@ class ConversationHandler:
         else:
             from korail_bot.telegramBot.messages import Messages
 
-            self.telegram.send_message(chat_id, Messages.ERROR_CONFIRM_INVALID)
+            self.telegram.send_message(
+                chat_id, Messages.ERROR_CONFIRM_INVALID, reply_markup=keyboards.confirm_keyboard()
+            )
 
     def _start_reservation(self, chat_id: int, session: UserSession) -> None:
         """Start the reservation background process."""

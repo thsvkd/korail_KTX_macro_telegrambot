@@ -1,5 +1,7 @@
 """Integration tests for refactored application."""
 
+from datetime import datetime, timedelta
+
 import pytest
 
 from korail_bot.config.settings import settings
@@ -120,12 +122,24 @@ class TestRefactoredArchitecture:
         valid, error = InputValidator.validate_phone_number("010-1234-5678")
         assert valid is True
 
+        # Hyphens are optional. This used to assert False, which contradicted
+        # both the shipped behaviour and
+        # test_validators.py::test_valid_phone_without_hyphens.
         valid, error = InputValidator.validate_phone_number("01012345678")
+        assert valid is True
+
+        valid, error = InputValidator.validate_phone_number("010-12-5678")
         assert valid is False
 
-        # Date validation
-        valid, error = InputValidator.validate_date("20991231")
+        # Date validation. A relative date, because booking is capped at a
+        # year ahead - the hardcoded "20991231" this used to assert as valid
+        # is past that cap and past what Korail sells.
+        next_week = (datetime.now() + timedelta(days=7)).strftime("%Y%m%d")
+        valid, error = InputValidator.validate_date(next_week)
         assert valid is True
+
+        valid, error = InputValidator.validate_date("20991231")
+        assert valid is False  # Beyond the one-year booking window
 
         valid, error = InputValidator.validate_date("20200101")
         assert valid is False  # Past date

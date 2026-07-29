@@ -85,6 +85,7 @@ class TestReservationService:
         existing = RunningReservation(
             chat_id=chat_id,
             process_id=11111,
+            korail_id="010-1234-5678",
             search_params=TrainSearchParams(
                 dep_date="20991231",
                 src_locate="서울",
@@ -202,6 +203,7 @@ class TestReservationService:
         reservation = RunningReservation(
             chat_id=chat_id,
             process_id=12345,
+            korail_id="010-1234-5678",
             search_params=TrainSearchParams(
                 dep_date="20991231",
                 src_locate="서울",
@@ -286,6 +288,7 @@ class TestReservationService:
         reservation = RunningReservation(
             chat_id=chat_id,
             process_id=999999999,  # Invalid PID
+            korail_id="010-1234-5678",
             search_params=TrainSearchParams(
                 dep_date="20991231",
                 src_locate="서울",

@@ -33,7 +33,7 @@ class TestPaymentReminderService:
         chat_id = 12345
 
         # Mock the reminder thread to not actually run
-        with patch.object(self.service, "_send_reminder_loop"):
+        with patch.object(self.service, "_reminder_loop"):
             self.service.start_reminders(chat_id)
 
         # Check payment status created
@@ -120,7 +120,7 @@ class TestPaymentReminderService:
         """Test multiple users can have simultaneous reminders."""
         chat_ids = [11111, 22222, 33333]
 
-        with patch.object(self.service, "_send_reminder_loop"):
+        with patch.object(self.service, "_reminder_loop"):
             for chat_id in chat_ids:
                 self.service.start_reminders(chat_id)
 

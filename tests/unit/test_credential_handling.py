@@ -40,6 +40,9 @@ def service():
     storage = Mock(spec=StorageInterface)
     storage.get_all_subscribers.return_value = []
     storage.get_user_session.return_value = None
+    # Nothing running for this chat; otherwise the duplicate guard refuses to
+    # start, because a bare Mock answers every lookup with a truthy Mock.
+    storage.get_running_reservation.return_value = None
     return ReservationService(storage, Mock())
 
 

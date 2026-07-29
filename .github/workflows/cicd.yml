@@ -49,11 +49,9 @@ jobs:
         run: uv run --frozen pytest tests/unit -q
     -
         name: Integration and e2e tests
-        # Not blocking yet. 16 of these fail on master and did so before the
-        # toolchain work - they call service methods that no longer exist
-        # (e.g. PaymentReminderService.deactivate_reminders). Drop
-        # continue-on-error once that drift is repaired.
-        continue-on-error: true
+        # Blocking. These used to be exempted for 16 failures inherited from a
+        # batch of tests that was committed without ever being run; those are
+        # now fixed, on both sides.
         run: uv run --frozen pytest tests/integration tests/e2e -q
     -
         name: Type check

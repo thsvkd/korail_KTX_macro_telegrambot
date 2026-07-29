@@ -23,11 +23,18 @@ def buttons_of(keyboard: dict) -> list[dict]:
 
 
 def values_of(keyboard: dict, step: str) -> list[str]:
-    """The answers a keyboard's buttons carry for one step, minus the escapes."""
+    """
+    The answers a keyboard's buttons carry for one step, minus the escapes.
+
+    Sentinels are dropped: "type it instead", "go back", "watch everything"
+    are instructions to the handler rather than answers, so validating them
+    against the step's validator would be checking the wrong thing. They are
+    marked by a leading * precisely so they cannot be mistaken for answers.
+    """
     values = []
     for button in buttons_of(keyboard):
         button_step, _, value = button["callback_data"].partition(":")
-        if button_step == step and value != keyboards.MANUAL:
+        if button_step == step and value != keyboards.MANUAL and not value.startswith("*"):
             values.append(value)
     return values
 

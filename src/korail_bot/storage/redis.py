@@ -2,6 +2,7 @@
 
 import json
 import time
+from datetime import datetime
 
 import redis
 
@@ -10,6 +11,7 @@ from korail_bot.models import (
     MultiReservationStatus,
     PaymentStatus,
     RunningReservation,
+    ScheduledSearch,
     TrainSearchParams,
     UserCredentials,
     UserSession,
@@ -135,6 +137,62 @@ class RedisStorage(StorageInterface):
         key = f"running_reservation:{reservation.chat_id}"
         data = json.dumps(self._serialize_running_reservation(reservation))
         self.redis.set(key, data)
+
+    # ==================== Scheduled searches ====================
+
+    def get_scheduled_search(self, chat_id: int) -> ScheduledSearch | None:
+        """Get the search waiting to start for a chat ID."""
+        data = self.redis.get(f"scheduled_search:{chat_id}")
+        if not data:
+            return None
+        return self._deserialize_scheduled_search(json.loads(data))
+
+    def save_scheduled_search(self, search: ScheduledSearch) -> None:
+        """
+        Save a search to be started later.
+
+        Given a lifetime that outlasts its start time but not by much. The
+        record is deleted when the search actually starts; the expiry is for
+        the one that never does, because the app was down at the moment it
+        came due and nobody is going to want it three days later.
+        """
+        key = f"scheduled_search:{search.chat_id}"
+        data = json.dumps(self._serialize_scheduled_search(search))
+        ttl = int(search.seconds_until_due()) + settings.SCHEDULE_GRACE_SECONDS
+        self.redis.set(key, data, ex=max(ttl, settings.SCHEDULE_GRACE_SECONDS))
+
+    def delete_scheduled_search(self, chat_id: int) -> None:
+        """Forget a search that was waiting to start."""
+        self.redis.delete(f"scheduled_search:{chat_id}")
+
+    def get_all_scheduled_searches(self) -> list[ScheduledSearch]:
+        """Every search waiting to start."""
+        searches = []
+        for key in self._scan_keys("scheduled_search:*"):
+            data = self.redis.get(key)
+            if data:
+                searches.append(self._deserialize_scheduled_search(json.loads(data)))
+        return searches
+
+    def _serialize_scheduled_search(self, search: ScheduledSearch) -> dict:
+        """Serialize ScheduledSearch to dict."""
+        return {
+            "chat_id": search.chat_id,
+            "korail_id": search.korail_id,
+            "start_at": search.start_at.isoformat(),
+            "created_at": search.created_at.isoformat(),
+            "search_params": self._serialize_search_params(search.search_params),
+        }
+
+    def _deserialize_scheduled_search(self, data: dict) -> ScheduledSearch:
+        """Deserialize dict to ScheduledSearch."""
+        return ScheduledSearch(
+            chat_id=data["chat_id"],
+            korail_id=data["korail_id"],
+            start_at=datetime.fromisoformat(data["start_at"]),
+            created_at=datetime.fromisoformat(data["created_at"]),
+            search_params=self._deserialize_search_params(data["search_params"]),
+        )
 
     def delete_running_reservation(self, chat_id: int) -> None:
         """Delete running reservation."""
@@ -561,20 +619,7 @@ class RedisStorage(StorageInterface):
             }
             if session.credentials
             else None,
-            "search_params": {
-                "dep_date": session.search_params.dep_date,
-                "src_locate": session.search_params.src_locate,
-                "dst_locate": session.search_params.dst_locate,
-                "dep_time": session.search_params.dep_time,
-                "max_dep_time": session.search_params.max_dep_time,
-                "train_type": session.search_params.train_type,
-                "train_type_display": session.search_params.train_type_display,
-                "special_option": session.search_params.special_option,
-                "special_option_display": session.search_params.special_option_display,
-                "passenger_count": session.search_params.passenger_count,
-                "seat_strategy": session.search_params.seat_strategy,
-                "train_numbers": session.search_params.train_numbers,
-            }
+            "search_params": self._serialize_search_params(session.search_params)
             if session.search_params
             else None,
         }
@@ -593,23 +638,7 @@ class RedisStorage(StorageInterface):
 
         search_params = None
         if data.get("search_params"):
-            p = data["search_params"]
-            search_params = TrainSearchParams(
-                dep_date=p["dep_date"],
-                src_locate=p["src_locate"],
-                dst_locate=p["dst_locate"],
-                dep_time=p["dep_time"],
-                max_dep_time=p["max_dep_time"],
-                train_type=p["train_type"],
-                train_type_display=p["train_type_display"],
-                special_option=p["special_option"],
-                special_option_display=p["special_option_display"],
-                passenger_count=p["passenger_count"],
-                seat_strategy=p["seat_strategy"],
-                # Records written before trains could be picked have no such
-                # field, and no chosen trains is exactly what they meant.
-                train_numbers=p.get("train_numbers") or [],
-            )
+            search_params = self._deserialize_search_params(data["search_params"])
 
         return UserSession(
             chat_id=data["chat_id"],
@@ -621,6 +650,57 @@ class RedisStorage(StorageInterface):
             search_params=search_params,
         )
 
+    def _serialize_search_params(self, params: TrainSearchParams) -> dict:
+        """
+        Turn search parameters into something JSON can hold.
+
+        One place rather than three. The user session, the running
+        reservation and the scheduled search all carry the same object, and
+        each used to spell out its own field list - so a new field meant
+        finding every one of them, and the running reservation had already
+        quietly fallen behind by two.
+        """
+        return {
+            "dep_date": params.dep_date,
+            "src_locate": params.src_locate,
+            "dst_locate": params.dst_locate,
+            "dep_time": params.dep_time,
+            "max_dep_time": params.max_dep_time,
+            "train_type": params.train_type,
+            "train_type_display": params.train_type_display,
+            "special_option": params.special_option,
+            "special_option_display": params.special_option_display,
+            "passenger_count": params.passenger_count,
+            "seat_strategy": params.seat_strategy,
+            "train_numbers": params.train_numbers,
+        }
+
+    def _deserialize_search_params(self, data: dict) -> TrainSearchParams:
+        """
+        Rebuild search parameters from storage.
+
+        Every field is read with a default. Records outlive the code that
+        wrote them, and a stored search that a deploy makes unreadable is a
+        search the user is still waiting on.
+        """
+        defaults = TrainSearchParams(dep_date="", src_locate="", dst_locate="", dep_time="")
+        return TrainSearchParams(
+            dep_date=data["dep_date"],
+            src_locate=data["src_locate"],
+            dst_locate=data["dst_locate"],
+            dep_time=data["dep_time"],
+            max_dep_time=data.get("max_dep_time", defaults.max_dep_time),
+            train_type=data.get("train_type", defaults.train_type),
+            train_type_display=data.get("train_type_display", defaults.train_type_display),
+            special_option=data.get("special_option", defaults.special_option),
+            special_option_display=data.get(
+                "special_option_display", defaults.special_option_display
+            ),
+            passenger_count=data.get("passenger_count", defaults.passenger_count),
+            seat_strategy=data.get("seat_strategy", defaults.seat_strategy),
+            train_numbers=data.get("train_numbers") or [],
+        )
+
     def _serialize_running_reservation(self, reservation: RunningReservation) -> dict:
         """Serialize RunningReservation to dict."""
         return {
@@ -628,38 +708,12 @@ class RedisStorage(StorageInterface):
             "process_id": reservation.process_id,
             "korail_id": reservation.korail_id,
             "run_id": reservation.run_id,
-            "search_params": {
-                "dep_date": reservation.search_params.dep_date,
-                "src_locate": reservation.search_params.src_locate,
-                "dst_locate": reservation.search_params.dst_locate,
-                "dep_time": reservation.search_params.dep_time,
-                "max_dep_time": reservation.search_params.max_dep_time,
-                "train_type": reservation.search_params.train_type,
-                "special_option": reservation.search_params.special_option,
-                "passenger_count": reservation.search_params.passenger_count,
-                "seat_strategy": reservation.search_params.seat_strategy,
-                "train_numbers": reservation.search_params.train_numbers,
-            },
+            "search_params": self._serialize_search_params(reservation.search_params),
         }
 
     def _deserialize_running_reservation(self, data: dict) -> RunningReservation:
         """Deserialize dict to RunningReservation."""
-        p = data["search_params"]
-        search_params = TrainSearchParams(
-            dep_date=p["dep_date"],
-            src_locate=p["src_locate"],
-            dst_locate=p["dst_locate"],
-            dep_time=p["dep_time"],
-            max_dep_time=p["max_dep_time"],
-            train_type=p["train_type"],
-            special_option=p["special_option"],
-            passenger_count=p["passenger_count"],
-            seat_strategy=p["seat_strategy"],
-            # Absent from records written before trains could be picked, and
-            # absent is what a whole-window watch looks like anyway - so a
-            # search resumed across that deploy keeps doing what it was doing.
-            train_numbers=p.get("train_numbers") or [],
-        )
+        search_params = self._deserialize_search_params(data["search_params"])
 
         return RunningReservation(
             chat_id=data["chat_id"],
@@ -682,8 +736,6 @@ class RedisStorage(StorageInterface):
 
     def _deserialize_payment_status(self, data: dict) -> PaymentStatus:
         """Deserialize dict to PaymentStatus."""
-        from datetime import datetime
-
         return PaymentStatus(
             chat_id=data["chat_id"],
             reminder_active=data["reminder_active"],
@@ -720,8 +772,6 @@ class RedisStorage(StorageInterface):
 
     def _deserialize_multi_reservation_status(self, data: dict) -> MultiReservationStatus:
         """Deserialize dict to MultiReservationStatus."""
-        from datetime import datetime
-
         from korail_bot.models import ReservationPaymentStatus, SingleReservationInfo
 
         reservations = [

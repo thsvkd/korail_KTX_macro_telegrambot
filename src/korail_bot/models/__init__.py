@@ -5,6 +5,7 @@ from korail_bot.models.reservation import (
     PaymentStatus,
     ReservationPaymentStatus,
     RunningReservation,
+    ScheduledSearch,
     SingleReservationInfo,
     TrainSearchParams,
 )
@@ -15,6 +16,7 @@ __all__ = [
     "PaymentStatus",
     "ReservationPaymentStatus",
     "RunningReservation",
+    "ScheduledSearch",
     "SingleReservationInfo",
     "TrainSearchParams",
     "UserCredentials",

@@ -80,6 +80,11 @@ class CommandHandler:
         """
         logger.info(f"Handling /cancel for chat_id={chat_id}")
 
+        # A search booked for later has no process to stop, only a record -
+        # and it has to go before anything else, or the schedule fires later
+        # and starts the very search the user just cancelled.
+        scheduled_cancelled = self._cancel_scheduled_search(chat_id)
+
         # Cancel any running reservation. Returns False when there was none,
         # having told the user so itself.
         cancelled = self.reservation.cancel_reservation(chat_id)
@@ -106,6 +111,26 @@ class CommandHandler:
 
         if cancelled:
             self.telegram.send_message(chat_id, "✅ 예약이 취소되었습니다.")
+        elif scheduled_cancelled:
+            # cancel_reservation stays quiet when there was no running search,
+            # which for a booked-but-not-started one would be no reply at all.
+            self.telegram.send_message(chat_id, "✅ 예약해둔 검색을 취소했습니다.")
+
+    def _cancel_scheduled_search(self, chat_id: int) -> bool:
+        """
+        Drop a search that was waiting for its start time.
+
+        Never raises: /cancel is how a user gets out of anything, and it has
+        several other things to clean up after this one.
+        """
+        try:
+            from korail_bot.services import ScheduledSearchService
+
+            scheduler = ScheduledSearchService(self.storage, self.telegram, self.reservation)
+            return scheduler.cancel(chat_id)
+        except Exception as e:
+            logger.error(f"Failed to cancel the scheduled search for chat_id={chat_id}: {e}")
+            return False
 
     def handle_subscribe(self, chat_id: int) -> None:
         """

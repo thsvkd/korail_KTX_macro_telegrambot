@@ -34,7 +34,14 @@ STEP_PASSENGER_COUNT = "pc"
 STEP_SEAT_STRATEGY = "ss"
 STEP_TRAIN_SELECT = "trs"
 STEP_CONFIRM = "cf"
+STEP_SCHEDULE = "sch"
 STEP_CANCEL = "x"
+
+# Answers to STEP_CONFIRM that are neither yes nor no.
+CONFIRM_SCHEDULE = "*schedule"
+
+# Answers to STEP_SCHEDULE that are not a time. A real one is all digits.
+SCHEDULE_BACK = "*back"
 
 # Answers to STEP_TRAIN_SELECT that are not a train number. Prefixed so they
 # cannot collide with one: Korail numbers its trains in digits.
@@ -61,6 +68,7 @@ STEP_PROGRESS = {
     STEP_SEAT_STRATEGY: UserProgress.PASSENGER_COUNT_INPUT_SUCCESS,
     STEP_TRAIN_SELECT: UserProgress.SEAT_STRATEGY_INPUT_SUCCESS,
     STEP_CONFIRM: UserProgress.TRAIN_SELECT_INPUT_SUCCESS,
+    STEP_SCHEDULE: UserProgress.SCHEDULE_INPUT_PENDING,
 }
 
 # Steps whose question survives being answered.
@@ -263,12 +271,54 @@ def train_select_keyboard(options: list[dict], selected: list[str] | None = None
 
 
 def confirm_keyboard() -> InlineKeyboard:
-    """The last stop before a search starts."""
+    """
+    The last stop before a search starts.
+
+    Starting now is the first button and the default; booking a start time is
+    the exception, and reads as one.
+    """
     return _keyboard(
-        [
-            _button("🎯 예약 시작", STEP_CONFIRM, "Y"),
-            _button("❌ 취소", STEP_CONFIRM, "N"),
-        ]
+        [_button("🎯 지금 검색 시작", STEP_CONFIRM, "Y")],
+        [_button("⏰ 시작 시각 예약", STEP_CONFIRM, CONFIRM_SCHEDULE)],
+        [_button("❌ 취소", STEP_CONFIRM, "N")],
+    )
+
+
+def schedule_keyboard(now: datetime | None = None) -> InlineKeyboard:
+    """
+    Times worth starting a search at, as buttons.
+
+    Two kinds. Relative offsets, for "not right now, I am doing something
+    else". And the next few mornings at the hours ticket releases actually
+    happen, for the case this feature exists to serve.
+
+    Values are absolute, resolved here from the clock, so a press means the
+    same moment however long it sits unpressed on the screen.
+    """
+    now = now or datetime.now()
+
+    def at(moment: datetime, label: str) -> dict:
+        return _button(label, STEP_SCHEDULE, moment.strftime("%Y%m%d%H%M"))
+
+    relative = [at(now + timedelta(hours=hours), f"{hours}시간 뒤") for hours in (1, 3, 6)]
+
+    # Korail opens holiday booking in the small hours of the morning, and
+    # cancellations turn up when people wake up and change their minds.
+    clock_times = []
+    for days, hour in ((0, 22), (1, 6), (1, 7), (1, 9), (2, 6), (2, 7)):
+        moment = (now + timedelta(days=days)).replace(hour=hour, minute=0, second=0, microsecond=0)
+        if moment <= now:
+            # An hour that has already gone by today is not an offer.
+            continue
+        day = {0: "오늘", 1: "내일", 2: "모레"}[days]
+        clock_times.append(at(moment, f"{day} {hour:02d}:00"))
+
+    return _keyboard(
+        relative,
+        *_rows(clock_times, 3),
+        [_manual_button(STEP_SCHEDULE)],
+        [_button("◀️ 뒤로", STEP_SCHEDULE, SCHEDULE_BACK)],
+        _cancel_row(),
     )
 
 

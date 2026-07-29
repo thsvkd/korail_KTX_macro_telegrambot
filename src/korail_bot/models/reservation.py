@@ -54,6 +54,33 @@ class TrainSearchParams:
 
 
 @dataclass
+class ScheduledSearch:
+    """
+    A search that has been set up but is not to begin yet.
+
+    Everything a search needs, held until its start time comes round. The
+    reason to want one is that tickets are not released evenly: holiday
+    booking opens at an announced minute, and cancellations cluster at the
+    hours around a departure. A search that starts at the right moment beats
+    one that has been grinding away since yesterday.
+    """
+
+    chat_id: int
+    korail_id: str
+    search_params: "TrainSearchParams"
+    start_at: datetime
+    created_at: datetime = field(default_factory=lambda: datetime.now())
+
+    def is_due(self, now: datetime | None = None) -> bool:
+        """Whether the moment has arrived."""
+        return (now or datetime.now()) >= self.start_at
+
+    def seconds_until_due(self, now: datetime | None = None) -> float:
+        """How long until it starts; zero once it is due."""
+        return max(0.0, (self.start_at - (now or datetime.now())).total_seconds())
+
+
+@dataclass
 class RunningReservation:
     """Information about a running reservation process."""
 

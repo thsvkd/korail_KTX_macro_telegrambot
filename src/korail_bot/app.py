@@ -20,6 +20,7 @@ from korail_bot.handlers import TelegramUpdateProcessor
 from korail_bot.services import (
     PaymentReminderService,
     ReservationService,
+    ScheduledSearchService,
     TelegramPoller,
     TelegramService,
 )
@@ -65,6 +66,7 @@ except Exception as e:
 telegram_service = TelegramService(settings.TELEGRAM_BOT_TOKEN)
 reservation_service = ReservationService(storage, telegram_service)
 payment_reminder_service = PaymentReminderService(storage, telegram_service)
+scheduled_search_service = ScheduledSearchService(storage, telegram_service, reservation_service)
 
 # Configure API resources with dependency injection
 api.add_resource(
@@ -141,6 +143,13 @@ if not is_running_from_reloader():
     else:
         logger.warning("Could not publish the command menu - the previous one stays in place")
 
+# Searches booked for a later time are held in Redis and started by this
+# thread. It lives in the app rather than in a process of its own because a
+# process asleep until tomorrow morning dies with the next restart, while a
+# record in Redis is picked up by whatever is running when the time comes.
+if not is_running_from_reloader():
+    scheduled_search_service.start()
+
 poller = None
 if settings.RECEIVE_MODE == "polling" and not is_running_from_reloader():
     poller = TelegramPoller(
@@ -173,6 +182,8 @@ def shutdown() -> None:
 
     if poller:
         poller.stop()
+
+    scheduled_search_service.stop()
 
     try:
         reservation_service.shutdown()

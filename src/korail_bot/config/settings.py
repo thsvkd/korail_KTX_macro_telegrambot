@@ -182,6 +182,23 @@ class Settings:
     # Backstop only: the credentials are deleted when the search finishes.
     RESUME_TTL_SECONDS: int = int(os.environ.get("RESUME_TTL_SECONDS", "259200"))
 
+    # ==================== Scheduled searches ====================
+
+    # How far ahead a search may be booked. Bounded by RESUME_TTL_SECONDS
+    # because the login it will need is stored under that expiry: schedule
+    # past it and the moment arrives with no way to log in.
+    SCHEDULE_MAX_AHEAD_SECONDS: int = int(
+        os.environ.get("SCHEDULE_MAX_AHEAD_SECONDS", str(RESUME_TTL_SECONDS))
+    )
+    # How long past its start time a missed schedule is still worth running.
+    # Covers the app being restarted across the moment; beyond it the user
+    # would be getting a search they asked for hours ago without warning.
+    SCHEDULE_GRACE_SECONDS: int = int(os.environ.get("SCHEDULE_GRACE_SECONDS", "600"))
+    # Longest the scheduler sleeps between checks. It normally sleeps exactly
+    # until the next start time, so this only bounds how quickly a newly
+    # booked search is noticed.
+    SCHEDULE_POLL_SECONDS: float = float(os.environ.get("SCHEDULE_POLL_SECONDS", "30"))
+
     # Identifies this run of the application. Reservations carry it, so
     # anything left over from an earlier run is recognisable as abandoned.
     RUN_ID: str = secrets.token_hex(8)

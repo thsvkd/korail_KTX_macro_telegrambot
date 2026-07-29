@@ -126,6 +126,9 @@ class TestStatusPrivacy:
         other.korail_id = "010-9999-8888"
         other.search_params = search_params
         service.storage.get_all_running_reservations.return_value = [other]
+        # Mock answers every call with a truthy Mock, which would look like a
+        # search booked for later and send /status down the wrong branch.
+        service.storage.get_scheduled_search.return_value = None
 
         status = service.get_status(chat_id=555)
 

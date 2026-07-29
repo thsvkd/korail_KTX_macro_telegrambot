@@ -1,5 +1,7 @@
 """Conversation flow handler for reservation process."""
 
+from datetime import datetime, timedelta
+
 from korail2 import ReserveOption
 
 from korail_bot.config.settings import settings
@@ -88,6 +90,8 @@ class ConversationHandler:
             self._handle_train_selection_input(chat_id, text, session)
         elif progress == UserProgress.TRAIN_SELECT_INPUT_SUCCESS:
             self._handle_final_confirmation(chat_id, text, session)
+        elif progress == UserProgress.SCHEDULE_INPUT_PENDING:
+            self._handle_schedule_input(chat_id, text, session)
         else:
             logger.error(f"Unknown progress state: {progress}")
             self.telegram.send_message(
@@ -806,8 +810,196 @@ class ConversationHandler:
         )
         self.telegram.send_message(chat_id, summary, reply_markup=keyboards.confirm_keyboard())
 
+    # ==================== Booking a start time ====================
+    #
+    # Tickets are not released evenly - holiday booking opens at an announced
+    # minute, cancellations bunch up near departure - so starting at a chosen
+    # moment beats starting now and grinding. Optional: the summary still
+    # offers "start now" first, and this is reached only by asking for it.
+
+    def _show_schedule_prompt(self, chat_id: int, session: UserSession) -> None:
+        """Ask when the search should begin."""
+        from korail_bot.telegramBot.messages import Messages
+
+        session.last_action = UserProgress.SCHEDULE_INPUT_PENDING
+        self.storage.save_user_session(session)
+
+        info = session.train_info
+        self.telegram.send_message(
+            chat_id,
+            Messages.REQUEST_SCHEDULE.format(
+                srcLocate=info.get("srcLocate", "N/A"),
+                dstLocate=info.get("dstLocate", "N/A"),
+                depDate=info.get("depDate", "N/A"),
+            ),
+            reply_markup=keyboards.schedule_keyboard(),
+        )
+
+    @staticmethod
+    def parse_start_time(text: str, now: datetime | None = None) -> datetime | None:
+        """
+        Read a start time out of whatever the user typed or pressed.
+
+        Buttons send the full YYYYMMDDHHMM, so the shorter forms exist for
+        typing. A bare time means the next time the clock reads that - today
+        if it is still to come, tomorrow otherwise - which is what someone
+        typing "0700" at midnight means and what they mean at noon too.
+
+        Args:
+            text: The answer, as typed or as carried by a button
+            now: The moment to resolve relative forms against
+
+        Returns:
+            The moment, or None when it could not be read
+        """
+        now = now or datetime.now()
+        digits = text.replace(":", "").replace("-", "").replace("/", "").strip()
+        parts = digits.split()
+        digits = "".join(parts)
+
+        if not digits.isdigit():
+            return None
+
+        try:
+            if len(digits) == 4:  # HHMM
+                candidate = now.replace(
+                    hour=int(digits[:2]), minute=int(digits[2:]), second=0, microsecond=0
+                )
+                return candidate if candidate > now else candidate + timedelta(days=1)
+
+            if len(digits) == 8:  # MMDDHHMM
+                candidate = datetime(
+                    now.year, int(digits[:2]), int(digits[2:4]), int(digits[4:6]), int(digits[6:])
+                )
+                # A date that has gone by means next year: nobody books a
+                # search for a train that left in January by typing "0105".
+                return candidate if candidate > now else candidate.replace(year=now.year + 1)
+
+            if len(digits) == 12:  # YYYYMMDDHHMM
+                return datetime.strptime(digits, "%Y%m%d%H%M")
+        except ValueError:
+            return None
+
+        return None
+
+    def _handle_schedule_input(self, chat_id: int, text: str, session: UserSession) -> None:
+        """Book the search for the time the user gave, or say why not."""
+        from korail_bot.telegramBot.messages import Messages
+
+        text = text.strip()
+
+        if text == keyboards.SCHEDULE_BACK:
+            session.last_action = UserProgress.TRAIN_SELECT_INPUT_SUCCESS
+            self.storage.save_user_session(session)
+            self._show_final_confirmation(chat_id, session)
+            return
+
+        start_at = self.parse_start_time(text)
+        if start_at is None:
+            self.telegram.send_message(
+                chat_id,
+                Messages.SCHEDULE_UNPARSEABLE.format(value=text),
+                reply_markup=keyboards.schedule_keyboard(),
+            )
+            return
+
+        self._schedule_reservation(chat_id, session, start_at)
+
+    def _schedule_reservation(self, chat_id: int, session: UserSession, start_at: datetime) -> None:
+        """Store the search against its start time and step out of the conversation."""
+        from korail_bot.services.scheduled_search_service import ScheduleError
+        from korail_bot.telegramBot.messages import Messages
+
+        credentials = session.credentials
+        if not credentials or not credentials.korail_id or not credentials.korail_pw:
+            # Nothing to log in with when the moment comes, so there is no
+            # point storing a schedule. Starting now would still work - the
+            # search process is handed the password directly - which is why
+            # this is refused here rather than at the summary.
+            logger.warning(f"Cannot schedule a search for chat_id={chat_id}: no credentials")
+            self.telegram.send_message(chat_id, Messages.SCHEDULE_NO_CREDENTIALS)
+            return
+
+        search_params = self._build_search_params(session)
+        scheduler = self._scheduler()
+
+        try:
+            scheduler.validate_start_time(start_at, search_params)
+        except ScheduleError as e:
+            # Every one of these has something specific to say, and the user
+            # is still on the step, so the keyboard goes back with it.
+            self.telegram.send_message(chat_id, str(e), reply_markup=keyboards.schedule_keyboard())
+            return
+
+        try:
+            scheduler.schedule(
+                chat_id=chat_id,
+                username=credentials.korail_id,
+                password=credentials.korail_pw,
+                search_params=search_params,
+                start_at=start_at,
+            )
+        except Exception as e:
+            logger.error(f"Failed to schedule a search for chat_id={chat_id}: {e}", exc_info=True)
+            self.telegram.send_message(chat_id, Messages.ERROR_RESERVATION_START_FAILED)
+            return
+
+        info = session.train_info
+        dep_time = info.get("depTime") or ""
+        self.telegram.send_message(
+            chat_id,
+            Messages.SCHEDULE_CONFIRMED.format(
+                startAt=f"{start_at:%m월 %d일 %H:%M}",
+                srcLocate=info.get("srcLocate", "N/A"),
+                dstLocate=info.get("dstLocate", "N/A"),
+                depDate=info.get("depDate", "N/A"),
+                depTime=dep_time[:4] if dep_time else "N/A",
+                maxDepTime=info.get("maxDepTime", "N/A"),
+                trainWatch=self._describe_watch(session),
+            ),
+        )
+
+        # The conversation is over; the schedule now lives in Redis and the
+        # password with it. Resetting clears the copy held on the session.
+        session.reset()
+        self.storage.save_user_session(session)
+
+    def _scheduler(self):
+        """
+        The scheduling service, built on demand.
+
+        Not held on the handler: the running loop belongs to the application,
+        and everything used here reads and writes Redis, so a second instance
+        sees exactly the same schedules.
+        """
+        from korail_bot.services.scheduled_search_service import ScheduledSearchService
+
+        return ScheduledSearchService(self.storage, self.telegram, self.reservation)
+
+    def _build_search_params(self, session: UserSession) -> TrainSearchParams:
+        """Collect the answers into the object a search is driven by."""
+        info = session.train_info
+        return TrainSearchParams(
+            dep_date=info["depDate"],
+            src_locate=info["srcLocate"],
+            dst_locate=info["dstLocate"],
+            dep_time=info["depTime"],
+            max_dep_time=info["maxDepTime"],
+            train_type=info["trainType"],
+            train_type_display=info["trainTypeShow"],
+            special_option=info["specialInfo"],
+            special_option_display=info["specialInfoShow"],
+            passenger_count=info.get("passengerCount", 1),
+            seat_strategy=info.get("seatStrategy", "consecutive"),
+            train_numbers=list(info.get("selectedTrains") or []),
+        )
+
     def _handle_final_confirmation(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle final confirmation before starting reservation."""
+        if text.strip() == keyboards.CONFIRM_SCHEDULE:
+            self._show_schedule_prompt(chat_id, session)
+            return
+
         is_yes, _error = InputValidator.validate_yes_no(text)
 
         if is_yes is True:
@@ -829,20 +1021,7 @@ class ConversationHandler:
     def _start_reservation(self, chat_id: int, session: UserSession) -> None:
         """Start the reservation background process."""
         # Create search params
-        search_params = TrainSearchParams(
-            dep_date=session.train_info["depDate"],
-            src_locate=session.train_info["srcLocate"],
-            dst_locate=session.train_info["dstLocate"],
-            dep_time=session.train_info["depTime"],
-            max_dep_time=session.train_info["maxDepTime"],
-            train_type=session.train_info["trainType"],
-            train_type_display=session.train_info["trainTypeShow"],
-            special_option=session.train_info["specialInfo"],
-            special_option_display=session.train_info["specialInfoShow"],
-            passenger_count=session.train_info.get("passengerCount", 1),
-            seat_strategy=session.train_info.get("seatStrategy", "consecutive"),
-            train_numbers=list(session.train_info.get("selectedTrains") or []),
-        )
+        search_params = self._build_search_params(session)
 
         # Update session
         session.last_action = UserProgress.FINDING_TICKET

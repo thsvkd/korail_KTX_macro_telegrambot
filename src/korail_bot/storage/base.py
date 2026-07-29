@@ -2,7 +2,13 @@
 
 from abc import ABC, abstractmethod
 
-from korail_bot.models import MultiReservationStatus, PaymentStatus, RunningReservation, UserSession
+from korail_bot.models import (
+    MultiReservationStatus,
+    PaymentStatus,
+    RunningReservation,
+    ScheduledSearch,
+    UserSession,
+)
 
 
 class StorageInterface(ABC):
@@ -48,6 +54,27 @@ class StorageInterface(ABC):
     @abstractmethod
     def get_all_running_reservations(self) -> list[RunningReservation]:
         """Get all running reservations."""
+        pass
+
+    # Scheduled Search Management
+    @abstractmethod
+    def get_scheduled_search(self, chat_id: int) -> "ScheduledSearch | None":
+        """Get the search waiting to start for a chat ID."""
+        pass
+
+    @abstractmethod
+    def save_scheduled_search(self, search: "ScheduledSearch") -> None:
+        """Save a search to be started later."""
+        pass
+
+    @abstractmethod
+    def delete_scheduled_search(self, chat_id: int) -> None:
+        """Forget a search that was waiting to start."""
+        pass
+
+    @abstractmethod
+    def get_all_scheduled_searches(self) -> "list[ScheduledSearch]":
+        """Every search waiting to start."""
         pass
 
     # Resume Credentials Management

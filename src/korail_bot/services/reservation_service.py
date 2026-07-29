@@ -605,6 +605,26 @@ class ReservationService:
         mine = next((r for r in reservations if r.chat_id == chat_id), None)
 
         if not mine:
+            # A search booked for later is not running, but it is very much
+            # something the user has going on - and /status saying "nothing"
+            # would read as the booking having been lost.
+            scheduled = self.storage.get_scheduled_search(chat_id)
+            if scheduled:
+                params = scheduled.search_params
+                return (
+                    "⏰ 검색이 예약되어 있습니다.\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    f"시작 시각: {scheduled.start_at:%m월 %d일 %H:%M}\n"
+                    f"출발일: {params.dep_date}\n"
+                    f"구간: {params.src_locate} → {params.dst_locate}\n"
+                    f"검색 시각: {params.dep_time[:4]}~{params.max_dep_time}\n"
+                    f"인원: {params.passenger_count}명\n"
+                    f"감시: {self._describe_watch(params)}\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "그때까지는 아무 요청도 보내지 않습니다.\n\n"
+                    "취소하려면 /cancel 을 입력하세요."
+                )
+
             return (
                 "진행중인 예약이 없습니다.\n"
                 f"(현재 서버 전체 실행중인 예약: {total}개)\n\n"
@@ -620,10 +640,18 @@ class ReservationService:
             f"검색 시작 시각: {params.dep_time[:4]}\n"
             f"최대 출발 시각: {params.max_dep_time}\n"
             f"인원: {params.passenger_count}명\n"
+            f"감시: {self._describe_watch(params)}\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             f"(현재 서버 전체 실행중인 예약: {total}개)\n\n"
             "중단하려면 /cancel 을 입력하세요."
         )
+
+    @staticmethod
+    def _describe_watch(params: TrainSearchParams) -> str:
+        """Whether the search is watching the whole window or picked trains."""
+        if not params.train_numbers:
+            return "시간대 전체"
+        return f"지정 열차 {len(params.train_numbers)}개 ({', '.join(params.train_numbers)}번)"
 
     def _notify_subscribers_start(self, username: str, params: TrainSearchParams) -> None:
         """Notify subscribers about reservation start."""

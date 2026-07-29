@@ -287,6 +287,72 @@ class Messages:
 ⏱ 예약 완료까지 시간이 걸릴 수 있습니다.
 """
 
+    # ========== 검색 시작 시각 예약 ==========
+    REQUEST_SCHEDULE = """⏰ 검색을 시작할 시각을 선택해주세요.
+
+📍 {srcLocate} → {dstLocate}  📅 {depDate}
+
+지금 시작하는 대신 정해진 시각에 검색을 시작합니다.
+명절 예매 오픈 시각처럼 표가 풀리는 때를 노릴 때 씁니다.
+
+⌨️ 직접 입력도 됩니다
+   0700         → 다음 07:00
+   0801 0700    → 8월 1일 07:00
+"""
+
+    SCHEDULE_CONFIRMED = """⏰ 검색이 예약되었습니다
+
+🕐 시작 시각: {startAt}
+📍 {srcLocate} → {dstLocate}
+📅 {depDate}  {depTime}~{maxDepTime}
+🎯 감시: {trainWatch}
+
+그때가 되면 자동으로 검색을 시작하고 알려드립니다.
+그전까지는 아무 요청도 보내지 않습니다.
+
+💡 취소하려면 /cancel, 확인하려면 /status
+"""
+
+    SCHEDULE_STARTING = """⏰ 예약해두신 시각이 되어 검색을 시작합니다
+
+📍 {srcLocate} → {dstLocate}
+📅 {depDate}
+
+취소표가 나오면 바로 알려드립니다.
+"""
+
+    SCHEDULE_MISSED = """⚠️ 예약해둔 검색을 시작하지 못했습니다
+
+🕐 예정 시각: {startAt}
+📍 {srcLocate} → {dstLocate}
+
+그 시각에 봇이 꺼져 있었고, 지금 시작하기에는 너무 늦었습니다.
+필요하시면 /start 로 다시 시작해주세요.
+"""
+
+    SCHEDULE_NO_CREDENTIALS = """⚠️ 예약해둔 검색을 시작하지 못했습니다
+
+저장된 로그인 정보가 만료되었습니다.
+/start 로 다시 시작해주세요.
+"""
+
+    SCHEDULE_IN_THE_PAST = "❌ 이미 지난 시각입니다. 앞으로의 시각을 선택해주세요."
+
+    SCHEDULE_TOO_FAR = """❌ 너무 먼 미래입니다.
+
+로그인 정보 보관 기한 때문에 최대 {days}일 뒤까지만 예약할 수 있습니다."""
+
+    SCHEDULE_AFTER_DEPARTURE = """❌ 열차 출발({departure}) 이후에는 검색할 수 없습니다.
+
+출발 전 시각을 선택해주세요."""
+
+    SCHEDULE_UNPARSEABLE = """❌ 시각을 알아듣지 못했습니다: {value}
+
+이렇게 입력해주세요.
+   0700         → 다음 07:00
+   0801 0700    → 8월 1일 07:00
+   202608010700 → 2026년 8월 1일 07:00"""
+
     RESERVATION_STARTED = """🎯 예약 검색을 시작합니다!
 
 🔍 매진된 자리에 공석이 생길 때까지 계속 확인합니다.

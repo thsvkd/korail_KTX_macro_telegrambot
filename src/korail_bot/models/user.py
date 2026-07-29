@@ -71,3 +71,6 @@ class UserProgress:
     # and renumbering would move every session that outlived a deploy to a
     # different question than the one it was answering.
     TRAIN_SELECT_INPUT_SUCCESS = 15
+    # Waiting for the time at which the search should begin. Only reached by
+    # asking for it from the summary - the default is still to start now.
+    SCHEDULE_INPUT_PENDING = 16

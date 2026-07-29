@@ -165,6 +165,16 @@ else:
         if not running:
             print("      ⚠ 기록만 남고 검색은 죽었습니다. 봇을 재시작하면 정리/재개합니다.")
 
+scheduled = storage.get_all_scheduled_searches()
+if scheduled:
+    print()
+    for s in sorted(scheduled, key=lambda s: s.start_at):
+        p = s.search_params
+        print(f"  ⏰ 예약 대기  chat_id={s.chat_id}  코레일={mask_phone(s.korail_id)}")
+        print(f"      시작 {s.start_at:%m/%d %H:%M}  ({s.seconds_until_due() / 60:.0f}분 뒤)")
+        print(f"      {p.src_locate} → {p.dst_locate}  {p.dep_date}  "
+              f"{p.dep_time[:4]}~{p.max_dep_time}  {p.passenger_count}명")
+
 payments = storage.get_all_payment_statuses()
 pending = [s for s in payments if not s.completed]
 if pending:
@@ -174,7 +184,7 @@ if pending:
         since = s.created_at.strftime("%H:%M:%S") if s.created_at else "?"
         print(f"  💳 결제 대기  chat_id={s.chat_id}  {state}  (시작 {since})")
 
-if not reservations and not pending:
+if not reservations and not scheduled and not pending:
     sys.exit(0)
 PY
 fi

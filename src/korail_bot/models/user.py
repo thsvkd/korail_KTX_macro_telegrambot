@@ -64,3 +64,10 @@ class UserProgress:
     PASSENGER_COUNT_INPUT_SUCCESS = 12  # New: passenger count selection
     SEAT_STRATEGY_INPUT_SUCCESS = 13  # New: seat allocation strategy
     FINDING_TICKET = 14  # Updated from 12 to 14
+    # Which trains to watch, chosen from the list for the time window.
+    #
+    # Numbered after FINDING_TICKET rather than inserted at 14, even though it
+    # comes before it in the conversation: these numbers are stored in Redis,
+    # and renumbering would move every session that outlived a deploy to a
+    # different question than the one it was answering.
+    TRAIN_SELECT_INPUT_SUCCESS = 15

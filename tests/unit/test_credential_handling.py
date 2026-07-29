@@ -91,6 +91,8 @@ class TestCredentialHandoff:
             "1800",
             "2",
             "random",
+            # No trains picked: the whole time window is watched.
+            "",
         ]
 
     def test_credentials_written_to_stdin(self, service, search_params):

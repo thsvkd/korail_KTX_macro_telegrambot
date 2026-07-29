@@ -108,6 +108,12 @@ class BackgroundReservationProcess:
         # Optional parameters with defaults
         self.passenger_count = int(sys.argv[9]) if len(sys.argv) > 9 else 1
         self.seat_strategy = sys.argv[10] if len(sys.argv) > 10 else "consecutive"
+        # Which trains to watch, comma-joined. Empty - and absent, which is
+        # how a search started by an older build arrives - means the whole
+        # time window, the behaviour that predates picking trains at all.
+        self.train_numbers = [
+            number for number in (sys.argv[11] if len(sys.argv) > 11 else "").split(",") if number
+        ]
 
         # Parse train type
         self.train_type = self._parse_train_type(self.train_type_str)
@@ -146,6 +152,9 @@ class BackgroundReservationProcess:
         logger.info(f"  special_info_str: '{self.special_info_str}' -> {self.reserve_option}")
         logger.info(f"  passenger_count: {self.passenger_count}")
         logger.info(f"  seat_strategy: '{self.seat_strategy}'")
+        logger.info(
+            f"  watching: {', '.join(self.train_numbers) if self.train_numbers else 'every train in the window'}"
+        )
         logger.info("========================================")
 
     @staticmethod
@@ -278,6 +287,7 @@ class BackgroundReservationProcess:
                     reserve_option=self.reserve_option,
                     passenger_count=self.passenger_count,
                     seat_strategy=self.seat_strategy,
+                    train_numbers=self.train_numbers,
                 )
             except DuplicateReservationError as e:
                 # First duplicate detection - notify user but continue searching
@@ -310,6 +320,7 @@ class BackgroundReservationProcess:
                         reserve_option=self.reserve_option,
                         passenger_count=self.passenger_count,
                         seat_strategy=self.seat_strategy,
+                        train_numbers=self.train_numbers,
                     )
                 except DuplicateReservationError:
                     # Should not happen as we already notified, but handle gracefully
@@ -795,6 +806,7 @@ class BackgroundReservationProcess:
                     train_type=self.train_type,
                     passenger_count=1,  # Single seat
                     verbose=is_summary,
+                    train_numbers=self.train_numbers,
                 )
             except SearchUnavailableError as e:
                 # Backs off and tells the user once the run of failures is

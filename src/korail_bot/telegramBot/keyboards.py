@@ -32,8 +32,15 @@ STEP_TRAIN_TYPE = "tt"
 STEP_SEAT_OPTION = "so"
 STEP_PASSENGER_COUNT = "pc"
 STEP_SEAT_STRATEGY = "ss"
+STEP_TRAIN_SELECT = "trs"
 STEP_CONFIRM = "cf"
 STEP_CANCEL = "x"
+
+# Answers to STEP_TRAIN_SELECT that are not a train number. Prefixed so they
+# cannot collide with one: Korail numbers its trains in digits.
+TRAIN_SELECT_DONE = "*done"
+TRAIN_SELECT_ALL = "*all"
+TRAIN_SELECT_REFRESH = "*refresh"
 
 # The progress state at which each step's answer is expected.
 #
@@ -52,8 +59,16 @@ STEP_PROGRESS = {
     STEP_SEAT_OPTION: UserProgress.TRAIN_TYPE_INPUT_SUCCESS,
     STEP_PASSENGER_COUNT: UserProgress.SPECIAL_INPUT_SUCCESS,
     STEP_SEAT_STRATEGY: UserProgress.PASSENGER_COUNT_INPUT_SUCCESS,
-    STEP_CONFIRM: UserProgress.SEAT_STRATEGY_INPUT_SUCCESS,
+    STEP_TRAIN_SELECT: UserProgress.SEAT_STRATEGY_INPUT_SUCCESS,
+    STEP_CONFIRM: UserProgress.TRAIN_SELECT_INPUT_SUCCESS,
 }
+
+# Steps whose question survives being answered.
+#
+# Ticking a train off a list is not the end of the question - the user is
+# expected to tick several. The keyboard stays, and the handler redraws it
+# with the new ticks rather than the router clearing it away.
+REPEATABLE_STEPS = frozenset({STEP_TRAIN_SELECT})
 
 # Chosen instead of an answer: the user wants to type this one. Not a value
 # any step could produce, so it can never collide with a real answer.
@@ -209,6 +224,42 @@ def seat_strategy_keyboard() -> InlineKeyboard:
         [_button("🎲 랜덤 배치 (성공률 ↑)", STEP_SEAT_STRATEGY, "2")],
         _cancel_row(),
     )
+
+
+def train_select_keyboard(options: list[dict], selected: list[str] | None = None) -> InlineKeyboard:
+    """
+    The trains running in the chosen window, each one tickable.
+
+    A tick is not a decision to move on - several trains can be watched - so
+    every train button leaves the keyboard in place and only its own tick
+    changes. Finishing is a separate button.
+
+    Args:
+        options: Trains, as {"no": train number, "label": what to show,
+                 "soldout": whether it has no seats right now}
+        selected: Train numbers currently ticked
+
+    Returns:
+        The keyboard, with a row per train
+    """
+    ticked = set(selected or [])
+
+    rows = []
+    for option in options:
+        number = option["no"]
+        mark = "☑️" if number in ticked else "⬜"
+        seats = "매진" if option.get("soldout") else "여석"
+        rows.append([_button(f"{mark} {option['label']}  {seats}", STEP_TRAIN_SELECT, number)])
+
+    if ticked:
+        rows.append(
+            [_button(f"▶️ 선택한 {len(ticked)}개 열차로 시작", STEP_TRAIN_SELECT, TRAIN_SELECT_DONE)]
+        )
+    rows.append([_button("🚄 시간대 전체 감시 (성공률 ↑)", STEP_TRAIN_SELECT, TRAIN_SELECT_ALL)])
+    rows.append([_button("🔄 목록 새로고침", STEP_TRAIN_SELECT, TRAIN_SELECT_REFRESH)])
+    rows.append(_cancel_row())
+
+    return _keyboard(*rows)
 
 
 def confirm_keyboard() -> InlineKeyboard:

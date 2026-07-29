@@ -114,9 +114,13 @@ class TestFullReservationFlow:
         self.conversation_handler.handle_message(chat_id, "1")
         session = self.storage.get_user_session(chat_id)
         assert session.train_info["passengerCount"] == 1
-        assert session.last_action == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
-        # Single passenger auto-sets consecutive
+        # Single passenger auto-sets consecutive, then the train list is
+        # offered. Korail cannot be reached from a test, so the list falls
+        # through to the summary with no train picked - which is the same
+        # whole-window watch the flow had before trains could be picked.
+        assert session.last_action == UserProgress.TRAIN_SELECT_INPUT_SUCCESS
         assert session.train_info["seatStrategy"] == "consecutive"
+        assert session.train_info["selectedTrains"] == []
 
         # Step 13: Final confirmation (Y)
         self.conversation_handler.handle_message(chat_id, "Y")
@@ -167,7 +171,7 @@ class TestFullReservationFlow:
         self.conversation_handler.handle_message(chat_id, "1")
         session = self.storage.get_user_session(chat_id)
         assert session.train_info["seatStrategy"] == "consecutive"
-        assert session.last_action == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+        assert session.last_action == UserProgress.TRAIN_SELECT_INPUT_SUCCESS
 
         # Final confirmation
         self.conversation_handler.handle_message(chat_id, "Y")
@@ -297,7 +301,7 @@ class TestFullReservationFlow:
         from korail_bot.models import UserCredentials, UserSession
 
         session = UserSession(
-            chat_id=chat_id, in_progress=True, last_action=UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+            chat_id=chat_id, in_progress=True, last_action=UserProgress.TRAIN_SELECT_INPUT_SUCCESS
         )
         session.credentials = UserCredentials(korail_id="010-1234-5678", korail_pw="password123")
         session.train_info = {

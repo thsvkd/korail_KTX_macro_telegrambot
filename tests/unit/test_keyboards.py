@@ -120,8 +120,27 @@ class TestStepProgressMapping:
 
     def test_confirm_is_the_last_step_before_the_search_starts(self):
         assert keyboards.STEP_PROGRESS[keyboards.STEP_CONFIRM] == (
+            UserProgress.TRAIN_SELECT_INPUT_SUCCESS
+        )
+
+    def test_train_selection_comes_between_seat_strategy_and_confirmation(self):
+        """
+        Which trains to watch is asked once every other parameter is known,
+        so the list shown is the list the search would actually cover.
+        """
+        assert keyboards.STEP_PROGRESS[keyboards.STEP_TRAIN_SELECT] == (
             UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
         )
+
+    def test_only_train_selection_repeats(self):
+        """
+        Every other step closes its question when answered. Marking one
+        repeatable by mistake would leave its keyboard live after the answer.
+        """
+        assert set(keyboards.REPEATABLE_STEPS) == {keyboards.STEP_TRAIN_SELECT}
+
+    def test_repeatable_steps_are_real_steps(self):
+        assert set(keyboards.STEP_PROGRESS).issuperset(keyboards.REPEATABLE_STEPS)
 
 
 class TestValuesPassTheirValidators:

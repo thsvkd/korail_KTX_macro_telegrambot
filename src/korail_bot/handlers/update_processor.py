@@ -257,9 +257,15 @@ class TelegramUpdateProcessor:
             return
 
         self.telegram.answer_callback_query(query_id)
-        # Before dispatching, not after: the handler sends the next question,
-        # and the answer to this one should already be settled above it.
-        self._settle_keyboard(chat_id, message_id, message, data)
+
+        # A repeatable step is still being answered - ticking one train off a
+        # list does not close the list - so its keyboard is left alone and the
+        # handler redraws it. Everything else is settled here, before
+        # dispatching rather than after: the handler sends the next question,
+        # and the answer to this one belongs above it.
+        if step not in keyboards.REPEATABLE_STEPS:
+            self._settle_keyboard(chat_id, message_id, message, data)
+
         self.conversation_handler.handle_message(chat_id, value)
 
     def _settle_keyboard(

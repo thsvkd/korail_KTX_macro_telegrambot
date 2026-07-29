@@ -573,6 +573,7 @@ class RedisStorage(StorageInterface):
                 "special_option_display": session.search_params.special_option_display,
                 "passenger_count": session.search_params.passenger_count,
                 "seat_strategy": session.search_params.seat_strategy,
+                "train_numbers": session.search_params.train_numbers,
             }
             if session.search_params
             else None,
@@ -605,6 +606,9 @@ class RedisStorage(StorageInterface):
                 special_option_display=p["special_option_display"],
                 passenger_count=p["passenger_count"],
                 seat_strategy=p["seat_strategy"],
+                # Records written before trains could be picked have no such
+                # field, and no chosen trains is exactly what they meant.
+                train_numbers=p.get("train_numbers") or [],
             )
 
         return UserSession(
@@ -634,6 +638,7 @@ class RedisStorage(StorageInterface):
                 "special_option": reservation.search_params.special_option,
                 "passenger_count": reservation.search_params.passenger_count,
                 "seat_strategy": reservation.search_params.seat_strategy,
+                "train_numbers": reservation.search_params.train_numbers,
             },
         }
 
@@ -650,6 +655,10 @@ class RedisStorage(StorageInterface):
             special_option=p["special_option"],
             passenger_count=p["passenger_count"],
             seat_strategy=p["seat_strategy"],
+            # Absent from records written before trains could be picked, and
+            # absent is what a whole-window watch looks like anyway - so a
+            # search resumed across that deploy keeps doing what it was doing.
+            train_numbers=p.get("train_numbers") or [],
         )
 
         return RunningReservation(

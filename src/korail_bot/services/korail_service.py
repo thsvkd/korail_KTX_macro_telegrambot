@@ -312,6 +312,8 @@ class KorailService:
         train_type: TrainType = TrainType.KTX,
         passenger_count: int = 1,
         verbose: bool = True,
+        include_no_seats: bool = False,
+        train_numbers: list[str] | None = None,
     ) -> list:
         """
         Search for available trains.
@@ -324,6 +326,12 @@ class KorailService:
             max_dep_time: Maximum departure time threshold (HHMM)
             train_type: Type of train to search for
             passenger_count: Number of adult passengers
+            include_no_seats: Return sold-out trains too. Off for the search
+                              loop, which only wants what it can reserve; on
+                              for showing the user what runs in the window,
+                              where the sold-out ones are the whole point.
+            train_numbers: Keep only these Korail train numbers. None or empty
+                           means every train in the window.
 
         Returns:
             List of available trains
@@ -355,6 +363,7 @@ class KorailService:
                 dep_time,
                 train_type=train_type,
                 passengers=passengers,
+                include_no_seats=include_no_seats,
             )
 
             if verbose:
@@ -394,6 +403,20 @@ class KorailService:
                 trains = filtered_trains
                 if verbose:
                     logger.debug(f"📊 After filtering: {len(trains)} trains remain")
+
+            # Narrow to the trains the user picked, if they picked any.
+            #
+            # Applied here rather than in the loops so both seat strategies get
+            # it from one place, and so a train that stops running mid-search
+            # simply stops appearing rather than needing to be noticed.
+            if trains and train_numbers:
+                wanted = set(train_numbers)
+                trains = [train for train in trains if train.train_no in wanted]
+                if verbose:
+                    logger.debug(
+                        f"🎯 Watching {len(wanted)} chosen train(s): {len(trains)} of them "
+                        f"are in this result"
+                    )
 
             if verbose:
                 logger.debug(
@@ -498,6 +521,7 @@ class KorailService:
         passenger_count: int = 1,
         seat_strategy: str = "consecutive",
         max_attempts: int | None = None,
+        train_numbers: list[str] | None = None,
     ):
         """
         Continuously search for trains and attempt reservation until successful.
@@ -513,6 +537,8 @@ class KorailService:
             passenger_count: Number of adult passengers
             seat_strategy: "consecutive" for seats together, "random" for separate seats
             max_attempts: Maximum attempts (None for infinite)
+            train_numbers: Watch only these Korail train numbers; empty or
+                           None watches every train in the time window
 
         Returns:
             Reservation object(s) when successful, None if max_attempts reached
@@ -536,6 +562,7 @@ class KorailService:
                 reserve_option,
                 passenger_count,
                 max_attempts,
+                train_numbers,
             )
         else:  # random
             return self._search_and_reserve_random(
@@ -548,6 +575,7 @@ class KorailService:
                 reserve_option,
                 passenger_count,
                 max_attempts,
+                train_numbers,
             )
 
     def _search_and_reserve_consecutive(
@@ -561,6 +589,7 @@ class KorailService:
         reserve_option: ReserveOption,
         passenger_count: int,
         max_attempts: int | None,
+        train_numbers: list[str] | None = None,
     ):
         """Reserve seats consecutively (together)."""
         attempts = 0
@@ -597,6 +626,7 @@ class KorailService:
                     train_type,
                     passenger_count,
                     verbose=is_summary,
+                    train_numbers=train_numbers,
                 )
             except SearchUnavailableError as e:
                 self.wait_between_requests(self.note_search_failure(e))
@@ -649,6 +679,7 @@ class KorailService:
         reserve_option: ReserveOption,
         passenger_count: int,
         max_attempts: int | None,
+        train_numbers: list[str] | None = None,
     ):
         """Reserve seats randomly (one at a time until target count reached)."""
         attempts = 0
@@ -681,6 +712,7 @@ class KorailService:
                     train_type,
                     passenger_count=1,
                     verbose=is_summary,
+                    train_numbers=train_numbers,
                 )
             except SearchUnavailableError as e:
                 self.wait_between_requests(self.note_search_failure(e))

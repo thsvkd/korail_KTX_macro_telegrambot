@@ -20,6 +20,15 @@ class TrainSearchParams:
     special_option_display: str = "GENERAL_FIRST"
     passenger_count: int = 1  # Number of adult passengers (1-9)
     seat_strategy: str = "consecutive"  # "consecutive" or "random"
+    # Korail train numbers to watch. Empty means every train in the time
+    # window, which is what the bot did before trains could be picked and is
+    # still the better odds - a narrower watch is a deliberate choice to wait
+    # for one particular train rather than take the first seat going.
+    train_numbers: list[str] = field(default_factory=list)
+
+    def watches_specific_trains(self) -> bool:
+        """Whether the search is narrowed to a chosen set of trains."""
+        return bool(self.train_numbers)
 
     def validate(self) -> tuple[bool, str | None]:
         """

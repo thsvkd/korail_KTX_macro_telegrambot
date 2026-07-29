@@ -261,7 +261,10 @@ class TestConversationHandler:
         self.handler.handle_message(chat_id, "1")
         updated_session = self.storage.get_user_session(chat_id)
         assert updated_session.train_info["passengerCount"] == 1
-        assert updated_session.last_action == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+        # A single passenger skips the seat strategy question and lands on
+        # the train list, which without credentials to ask Korail with falls
+        # straight through to the summary.
+        assert updated_session.last_action == UserProgress.TRAIN_SELECT_INPUT_SUCCESS
         assert updated_session.train_info["seatStrategy"] == "consecutive"
 
     def test_passenger_count_multiple(self):
@@ -293,7 +296,9 @@ class TestConversationHandler:
         # Select consecutive
         self.handler.handle_message(chat_id, "1")
         updated_session = self.storage.get_user_session(chat_id)
-        assert updated_session.last_action == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+        # Past the train list, which has nothing to offer without a Korail
+        # login and so does not stop the flow.
+        assert updated_session.last_action == UserProgress.TRAIN_SELECT_INPUT_SUCCESS
         assert updated_session.train_info["seatStrategy"] == "consecutive"
 
         # Reset and test random
@@ -307,7 +312,7 @@ class TestConversationHandler:
         """Test final confirmation with yes."""
         chat_id = 12345
         session = UserSession(
-            chat_id=chat_id, in_progress=True, last_action=UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+            chat_id=chat_id, in_progress=True, last_action=UserProgress.TRAIN_SELECT_INPUT_SUCCESS
         )
         session.credentials = UserCredentials(korail_id="010-1234-5678", korail_pw="password123")
         session.train_info = {
@@ -337,7 +342,7 @@ class TestConversationHandler:
         """Test final confirmation with no."""
         chat_id = 12345
         session = UserSession(
-            chat_id=chat_id, in_progress=True, last_action=UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+            chat_id=chat_id, in_progress=True, last_action=UserProgress.TRAIN_SELECT_INPUT_SUCCESS
         )
         self.storage.save_user_session(session)
 

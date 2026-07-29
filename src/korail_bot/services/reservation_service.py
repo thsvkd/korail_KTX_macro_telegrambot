@@ -87,6 +87,11 @@ class ReservationService:
                 search_params.max_dep_time,
                 str(search_params.passenger_count),
                 search_params.seat_strategy,
+                # Comma-joined so the slot stays one argument however many
+                # trains were picked; empty means watch the whole window.
+                # Not secret, unlike the credentials above - a train number is
+                # public timetable data.
+                ",".join(search_params.train_numbers),
             ]
 
             # Start background process.

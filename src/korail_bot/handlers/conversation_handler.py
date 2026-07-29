@@ -85,6 +85,8 @@ class ConversationHandler:
         elif progress == UserProgress.PASSENGER_COUNT_INPUT_SUCCESS:
             self._handle_seat_strategy_input(chat_id, text, session)
         elif progress == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS:
+            self._handle_train_selection_input(chat_id, text, session)
+        elif progress == UserProgress.TRAIN_SELECT_INPUT_SUCCESS:
             self._handle_final_confirmation(chat_id, text, session)
         else:
             logger.error(f"Unknown progress state: {progress}")
@@ -495,7 +497,7 @@ class ConversationHandler:
             session.train_info["seatStrategy"] = "consecutive"
             session.last_action = UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
             self.storage.save_user_session(session)
-            self._show_final_confirmation(chat_id, session)
+            self._show_train_selection(chat_id, session)
 
     def _handle_seat_strategy_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle seat strategy selection."""
@@ -516,7 +518,263 @@ class ConversationHandler:
         session.last_action = UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
         self.storage.save_user_session(session)
 
+        self._show_train_selection(chat_id, session)
+
+    # ==================== Choosing which trains to watch ====================
+    #
+    # The search can watch every train in the time window, which is what it
+    # always did, or a set the user picked out of that window. Picking is worth
+    # having when only one train is any use - a connection to make, a meeting
+    # to reach - and costs success rate the rest of the time, so the list says
+    # so and watching everything stays one press away.
+
+    #: How many trains a selection list will show. Korail can return well over
+    #: this on a busy corridor across a wide window, and a keyboard that long
+    #: is unreadable before it is unsendable.
+    MAX_TRAIN_OPTIONS = 30
+
+    def _fetch_train_options(self, chat_id: int, session: UserSession) -> list[dict] | None:
+        """
+        Ask Korail what runs in the chosen window.
+
+        Sold-out trains are included deliberately: a train with seats left
+        needs no watching, so the ones worth picking are exactly the ones an
+        ordinary search would leave out.
+
+        Returns:
+            The trains, oldest first, or None when Korail could not be asked
+        """
+        info = session.train_info
+        credentials = session.credentials
+        if not credentials or not credentials.korail_id or not credentials.korail_pw:
+            logger.warning(f"No credentials to list trains with for chat_id={chat_id}")
+            return None
+
+        korail = KorailService(
+            app_session_start=self.storage.get_or_create_app_session_start(chat_id)
+        )
+        if not korail.login(credentials.korail_id, credentials.korail_pw):
+            logger.warning(f"Could not log in to list trains for chat_id={chat_id}")
+            return None
+
+        try:
+            trains = korail.search_trains(
+                dep_date=info["depDate"],
+                src_locate=info["srcLocate"],
+                dst_locate=info["dstLocate"],
+                dep_time=info["depTime"],
+                max_dep_time=info["maxDepTime"],
+                train_type=self._parse_train_type(info.get("trainType", "")),
+                passenger_count=info.get("passengerCount", 1),
+                verbose=False,
+                include_no_seats=True,
+            )
+        except Exception as e:
+            # Includes SearchUnavailableError. Whatever went wrong, the user
+            # is mid-conversation and needs an answer rather than a traceback.
+            logger.error(f"Could not list trains for chat_id={chat_id}: {e}")
+            return None
+
+        return [self._describe_train(train) for train in trains]
+
+    @staticmethod
+    def _parse_train_type(train_type_str: str):
+        """Turn the stored 'TrainType.KTX' back into the enum korail2 wants."""
+        from korail2 import TrainType
+
+        return TrainType.KTX if "KTX" in train_type_str.upper() else TrainType.ALL
+
+    @staticmethod
+    def _describe_train(train) -> dict:
+        """
+        Reduce a korail2 train to what the keyboard and the summary need.
+
+        Only strings and booleans: this goes into the session, which is
+        serialised to Redis, and a korail2 object would not survive the trip.
+        """
+
+        def clock(value: str | None) -> str:
+            # Korail sends HHMMSS; the seconds are always zero and never
+            # interesting.
+            return f"{value[:2]}:{value[2:4]}" if value and len(value) >= 4 else "??:??"
+
+        return {
+            "no": str(getattr(train, "train_no", "") or ""),
+            "label": (
+                f"{clock(getattr(train, 'dep_time', None))}→"
+                f"{clock(getattr(train, 'arr_time', None))} "
+                f"{getattr(train, 'train_type_name', None) or '열차'}"
+            ),
+            "soldout": not (hasattr(train, "has_seat") and train.has_seat()),
+        }
+
+    def _show_train_selection(self, chat_id: int, session: UserSession) -> None:
+        """Fetch the trains for the window and offer them for ticking."""
+        options = self._fetch_train_options(chat_id, session)
+
+        from korail_bot.telegramBot.messages import Messages
+
+        if options is None:
+            # Korail could not be asked. Watching the whole window needs no
+            # list, so the flow carries on there rather than dead-ending on a
+            # step whose only purpose is an optional narrowing.
+            self.telegram.send_message(chat_id, Messages.TRAIN_LIST_FAILED)
+            self._finish_train_selection(chat_id, session, [])
+            return
+
+        if not options:
+            self.telegram.send_message(chat_id, Messages.TRAIN_LIST_EMPTY)
+            self._finish_train_selection(chat_id, session, [])
+            return
+
+        truncated = ""
+        if len(options) > self.MAX_TRAIN_OPTIONS:
+            logger.info(
+                f"Showing {self.MAX_TRAIN_OPTIONS} of {len(options)} trains for chat_id={chat_id}"
+            )
+            truncated = Messages.SELECT_TRAINS_TRUNCATED.format(shown=self.MAX_TRAIN_OPTIONS)
+            options = options[: self.MAX_TRAIN_OPTIONS]
+
+        info = session.train_info
+        info["trainOptions"] = options
+        info["selectedTrains"] = []
+        self.storage.save_user_session(session)
+
+        message_id = self.telegram.send_and_get_id(
+            chat_id,
+            self._train_selection_text(session, len(options), truncated),
+            reply_markup=keyboards.train_select_keyboard(options, []),
+        )
+
+        # Kept so a tick can rewrite this message instead of sending the whole
+        # list again. Without it the chat grows a copy of the list per tick.
+        info["trainListMessageId"] = message_id
+        self.storage.save_user_session(session)
+
+    @staticmethod
+    def _train_selection_text(session: UserSession, count: int, truncated: str) -> str:
+        """The prompt above the list of trains."""
+        from korail_bot.telegramBot.messages import Messages
+
+        info = session.train_info
+        dep_time = info.get("depTime") or ""
+        return Messages.SELECT_TRAINS.format(
+            srcLocate=info.get("srcLocate", "N/A"),
+            dstLocate=info.get("dstLocate", "N/A"),
+            depDate=info.get("depDate", "N/A"),
+            depTime=dep_time[:4] if dep_time else "N/A",
+            maxDepTime=info.get("maxDepTime", "N/A"),
+            count=count,
+            truncated=truncated,
+        )
+
+    def _handle_train_selection_input(self, chat_id: int, text: str, session: UserSession) -> None:
+        """
+        Tick trains, or finish ticking.
+
+        Everything but the two sentinels is read as train numbers, so a press
+        and a typed '101 105' end up in the same place.
+        """
+        info = session.train_info
+        options = info.get("trainOptions") or []
+        selected: list[str] = list(info.get("selectedTrains") or [])
+        text = text.strip()
+
+        if text == keyboards.TRAIN_SELECT_ALL or text in {"전체", "0"}:
+            self._finish_train_selection(chat_id, session, [])
+            return
+
+        if text == keyboards.TRAIN_SELECT_DONE:
+            # An empty selection here would silently become a whole-window
+            # watch, which is a different search from the one the user thinks
+            # they asked for. The button only appears once something is
+            # ticked, so this is the typed path or a stale press.
+            self._finish_train_selection(chat_id, session, selected)
+            return
+
+        if text == keyboards.TRAIN_SELECT_REFRESH:
+            # Availability moves while the list is on screen; this is how the
+            # user sees a train free up without restarting the flow.
+            self._show_train_selection(chat_id, session)
+            return
+
+        available = {option["no"] for option in options}
+        # Splitting on whitespace and commas: '101 105' and '101,105' are the
+        # same intent, and a keyboard press is a single number either way.
+        requested = [part for part in text.replace(",", " ").split() if part]
+        unknown = [number for number in requested if number not in available]
+
+        if not requested or unknown:
+            from korail_bot.telegramBot.messages import Messages
+
+            self.telegram.send_message(
+                chat_id, Messages.TRAIN_SELECT_UNKNOWN.format(value=", ".join(unknown) or text)
+            )
+            return
+
+        if len(requested) == 1:
+            # One number is a press on that train's row, and a press on a
+            # ticked train means untick it.
+            number = requested[0]
+            if number in selected:
+                selected.remove(number)
+            else:
+                selected.append(number)
+        else:
+            # A typed list is a statement of what the selection should be,
+            # not a series of toggles.
+            selected = requested
+
+        info["selectedTrains"] = selected
+        self.storage.save_user_session(session)
+        self._redraw_train_selection(chat_id, session, options, selected)
+
+    def _redraw_train_selection(
+        self, chat_id: int, session: UserSession, options: list[dict], selected: list[str]
+    ) -> None:
+        """Update the ticks in place, or send a fresh list if that is not possible."""
+        message_id = session.train_info.get("trainListMessageId")
+        keyboard = keyboards.train_select_keyboard(options, selected)
+
+        if isinstance(message_id, int) and self.telegram.edit_message_reply_markup(
+            chat_id, message_id, keyboard
+        ):
+            return
+
+        # The message is gone, too old to edit, or was never recorded. A new
+        # list is worse than an updated one but far better than a tick that
+        # appears to do nothing.
+        new_id = self.telegram.send_and_get_id(
+            chat_id,
+            self._train_selection_text(session, len(options), ""),
+            reply_markup=keyboard,
+        )
+        session.train_info["trainListMessageId"] = new_id
+        self.storage.save_user_session(session)
+
+    def _finish_train_selection(
+        self, chat_id: int, session: UserSession, selected: list[str]
+    ) -> None:
+        """Record which trains to watch and move on to the summary."""
+        info = session.train_info
+        info["selectedTrains"] = selected
+        # The list has served its purpose, and it is the bulky part of a
+        # session that is written to Redis on every step from here on.
+        info.pop("trainOptions", None)
+        info.pop("trainListMessageId", None)
+
+        session.last_action = UserProgress.TRAIN_SELECT_INPUT_SUCCESS
+        self.storage.save_user_session(session)
+
         self._show_final_confirmation(chat_id, session)
+
+    @staticmethod
+    def _describe_watch(session: UserSession) -> str:
+        """How the summary and the status line describe the watch."""
+        selected = session.train_info.get("selectedTrains") or []
+        if not selected:
+            return "시간대 전체"
+        return f"지정 열차 {len(selected)}개 ({', '.join(selected)}번)"
 
     def _show_final_confirmation(self, chat_id: int, session: UserSession) -> None:
         """
@@ -544,6 +802,7 @@ class ConversationHandler:
             specialInfoShow=info.get("specialInfoShow", "N/A"),
             passengerCount=info.get("passengerCount", 1),
             seatStrategy=info.get("seatStrategyShow", "1명"),
+            trainWatch=self._describe_watch(session),
         )
         self.telegram.send_message(chat_id, summary, reply_markup=keyboards.confirm_keyboard())
 
@@ -582,6 +841,7 @@ class ConversationHandler:
             special_option_display=session.train_info["specialInfoShow"],
             passenger_count=session.train_info.get("passengerCount", 1),
             seat_strategy=session.train_info.get("seatStrategy", "consecutive"),
+            train_numbers=list(session.train_info.get("selectedTrains") or []),
         )
 
         # Update session

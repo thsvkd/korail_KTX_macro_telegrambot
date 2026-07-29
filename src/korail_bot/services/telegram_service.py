@@ -93,6 +93,35 @@ class TelegramService:
         logger.info(f"Message sent to chat_id={chat_id}")
         return True
 
+    def send_and_get_id(
+        self, chat_id: int, text: str, reply_markup: dict | None = None
+    ) -> int | None:
+        """
+        Send a message and report which one it became.
+
+        For messages that get rewritten in place - a list the user ticks
+        items off, say. Editing needs the message id, and the alternative is
+        sending a fresh copy of the list on every tick.
+
+        Args:
+            chat_id: Telegram chat ID
+            text: Message text to send
+            reply_markup: Optional inline keyboard to attach
+
+        Returns:
+            The new message's id, or None when the send failed
+        """
+        payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+
+        result = self._call("sendMessage", payload)
+        if result is None:
+            return None
+
+        message_id = result.get("message_id")
+        return message_id if isinstance(message_id, int) else None
+
     def send_to_multiple(self, chat_ids: list[int], text: str) -> int:
         """
         Send a message to multiple chats.

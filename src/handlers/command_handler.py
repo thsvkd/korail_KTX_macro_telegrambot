@@ -61,7 +61,12 @@ class CommandHandler:
         self.storage.save_user_session(session)
 
         # Send welcome message
-        self.telegram.send_message(chat_id, MessageTemplates.welcome_message())
+        self.telegram.send_message(
+            chat_id,
+            MessageTemplates.welcome_message(
+                skip_login_prompts=settings.has_preconfigured_korail_credentials()
+            )
+        )
 
     def handle_cancel(self, chat_id: int) -> None:
         """

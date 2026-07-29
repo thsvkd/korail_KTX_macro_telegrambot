@@ -115,6 +115,14 @@ logger.info(
     f"Admin magic login: {'enabled' if settings.ADMIN_MAGIC_STRING else 'disabled'}"
 )
 logger.info(
+    "Korail login: "
+    + (
+        "USERID/USERPW from the environment (users are not asked)"
+        if settings.has_preconfigured_korail_credentials()
+        else "asked from each user"
+    )
+)
+logger.info(
     f"Resume on restart: {'enabled' if settings.RESUME_ON_RESTART else 'disabled'}"
 )
 logger.info("="*60)

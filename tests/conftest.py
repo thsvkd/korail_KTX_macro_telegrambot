@@ -23,6 +23,13 @@ def pytest_configure(config):
     os.environ.setdefault("SESSION_SECRET", "test-session-secret")
     os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password")
 
+    # A real USERID/USERPW inherited from .env (pipenv loads it automatically)
+    # would make the bot skip the login prompts, so every test of those
+    # prompts would exercise a different flow than it means to. Tests that
+    # want the skip set it explicitly.
+    os.environ.pop("USERID", None)
+    os.environ.pop("USERPW", None)
+
     _redis_container = RedisContainer("redis:7-alpine")
     _redis_container.start()
 

@@ -8,7 +8,8 @@
 |-----|--------------|-------------|-----------|-----------|---------|
 | 0 | INIT | - | - | - | - |
 | 1 | STARTED | `_handle_start_confirmation` | "Y" 또는 "예" | REQUEST_PHONE (전화번호 요청) | START_ACCEPTED |
-| 1-1 | STARTED | `_handle_admin_login` | "근삼이최고" | LOGIN_SUCCESS (환경변수 자동로그인) | PW_INPUT_SUCCESS |
+| 1-1 | STARTED | `_handle_preconfigured_login` | "Y" 또는 "예" (USERID/USERPW 설정 시) | LOGIN_SUCCESS_PRECONFIGURED (2·3단계 생략) | PW_INPUT_SUCCESS |
+| 1-2 | STARTED | `_handle_admin_login` | ADMIN_MAGIC_STRING | LOGIN_SUCCESS (환경변수 자동로그인) | PW_INPUT_SUCCESS |
 | 2 | START_ACCEPTED | `_handle_phone_input` | 010-1234-5678 | REQUEST_PASSWORD (비밀번호 요청) | ID_INPUT_SUCCESS |
 | 3 | ID_INPUT_SUCCESS | `_handle_password_input` | 비밀번호 | LOGIN_SUCCESS (로그인 성공) | PW_INPUT_SUCCESS |
 | 4 | PW_INPUT_SUCCESS | `_handle_date_input` | 20260408 | REQUEST_DATE (✅ 출발일 입력 완료 + 출발역 요청) | DATE_INPUT_SUCCESS |
@@ -27,19 +28,23 @@
 ### 1단계: 시작 확인 (STARTED)
 **입력**:
 - "Y" 또는 "예" → 정상 진행
-- "근삼이최고" → 관리자 자동 로그인 (환경변수 USERID, USERPW 사용)
+- `ADMIN_MAGIC_STRING` 값 → 관리자 자동 로그인 (환경변수 USERID, USERPW 사용)
 
 **응답**:
 - 정상: REQUEST_PHONE (전화번호 입력 요청)
+- USERID/USERPW가 모두 설정된 경우: 2·3단계를 건너뛰고 바로 로그인 →
+  LOGIN_SUCCESS_PRECONFIGURED (날짜 입력 단계로). 로그인에 실패하면
+  PRECONFIGURED_LOGIN_FAILED를 보내고 2단계(전화번호 입력)로 되돌아갑니다.
 - 관리자: LOGIN_SUCCESS (자동 로그인 후 날짜 입력 단계로)
 
 ---
 
 ### 2단계: 전화번호 입력 (START_ACCEPTED)
-**입력**: `010-1234-5678` (하이픈 포함 필수)
+> USERID/USERPW가 설정된 경우 이 단계는 실행되지 않습니다 (로그인 실패 시 예외).
+
+**입력**: `010-1234-5678` 또는 `01012345678` (하이픈 선택)
 
 **검증**:
-- 하이픈 포함 여부
 - 전화번호 형식 (010-xxxx-xxxx)
 - ALLOW_LIST 확인 (허용된 사용자인지)
 
@@ -48,6 +53,8 @@
 ---
 
 ### 3단계: 비밀번호 입력 (ID_INPUT_SUCCESS)
+> USERID/USERPW가 설정된 경우 이 단계는 실행되지 않습니다 (로그인 실패 시 예외).
+
 **입력**: 코레일 비밀번호
 
 **검증**:

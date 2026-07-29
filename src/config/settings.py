@@ -74,8 +74,12 @@ class Settings:
     TELEGRAM_POLL_REQUEST_TIMEOUT: int = 35
 
     # Korail Configuration
-    KORAIL_ADMIN_USER_ID: Optional[str] = os.environ.get('USERID')
-    KORAIL_ADMIN_PASSWORD: Optional[str] = os.environ.get('USERPW')
+    # Credentials kept on the server. When both are set the bot logs in with
+    # them instead of asking each user for a phone number and a password -
+    # see has_preconfigured_korail_credentials().
+    KORAIL_ADMIN_USER_ID: Optional[str] = (os.environ.get('USERID') or '').strip() or None
+    # Not stripped: a password may legitimately begin or end with a space.
+    KORAIL_ADMIN_PASSWORD: Optional[str] = os.environ.get('USERPW') or None
     KORAIL_SEARCH_INTERVAL: float = float(os.environ.get('SEARCH_INTERVAL', '1'))  # seconds
     # Every wait between Korail requests is drawn from
     # interval * (1 +/- jitter) instead of being a fixed number of seconds, so
@@ -221,6 +225,14 @@ class Settings:
                 "ADMIN_PASSWORD is not set - all admin commands are disabled."
             )
 
+        if cls.has_preconfigured_korail_credentials():
+            messages.append(
+                "USERID/USERPW are set - anyone who talks to the bot reserves "
+                "with that Korail account, and ALLOW_LIST is not consulted "
+                "because no phone number is ever typed. Unset them to go back "
+                "to asking each user for their own credentials."
+            )
+
         if not cls.REDIS_PASSWORD:
             messages.append(
                 "REDIS_PASSWORD is not set - make sure Redis is not reachable "
@@ -234,6 +246,17 @@ class Settings:
             )
 
         return messages
+
+    @classmethod
+    def has_preconfigured_korail_credentials(cls) -> bool:
+        """
+        Whether the server can log in without asking the user anything.
+
+        USERID/USERPW are the operator's own Korail account. When both are
+        present the phone number and password prompts have a known answer,
+        so the conversation skips straight past them.
+        """
+        return bool(cls.KORAIL_ADMIN_USER_ID and cls.KORAIL_ADMIN_PASSWORD)
 
     @classmethod
     def is_user_allowed(cls, phone_number: str) -> bool:

@@ -55,7 +55,7 @@ class PaymentReminderService:
 
         # Initialize payment status
         payment_status = PaymentStatus(
-            chat_id=chat_id, completed=False, reservation_time=datetime.now(), reminder_active=True
+            chat_id=chat_id, completed=False, created_at=datetime.now(), reminder_active=True
         )
         self.storage.save_payment_status(payment_status)
 
@@ -83,10 +83,11 @@ class PaymentReminderService:
             ):
                 time.sleep(self.interval_seconds)
 
-                # Check if payment completed
+                # Payment settled, or the window was closed by /cancel. Both
+                # paths have already told the user; stop quietly rather than
+                # sending a second message about it.
                 if self.check_payment_completed(chat_id):
-                    self._send_completion_message(chat_id)
-                    self._deactivate_reminder(chat_id)
+                    self.deactivate_reminders(chat_id)
                     return
 
                 # Calculate remaining time
@@ -99,13 +100,11 @@ class PaymentReminderService:
                     self._send_reminder(chat_id, remaining_minutes, remaining_secs)
 
             # Final check after timeout
-            if self.check_payment_completed(chat_id):
-                self._send_completion_message(chat_id)
-            else:
+            if not self.check_payment_completed(chat_id):
                 self._send_timeout_message(chat_id)
 
             # Deactivate reminder after completion or timeout
-            self._deactivate_reminder(chat_id)
+            self.deactivate_reminders(chat_id)
 
         except Exception as e:
             logger.error(f"Error in reminder loop for chat_id={chat_id}: {e}", exc_info=True)
@@ -138,7 +137,15 @@ class PaymentReminderService:
 
     def confirm_payment(self, chat_id: int) -> None:
         """
-        Mark payment as confirmed for a chat ID.
+        Mark payment as confirmed for a chat ID, and say so.
+
+        The acknowledgement is sent from here rather than from the reminder
+        loop. The update handler consumes the message that triggers this and
+        returns, so acknowledging in the loop left the user with no reply for
+        up to interval_seconds - and with no reply at all when no loop was
+        running, which is the case for every payment window that outlived a
+        restart, since the loop lives in a daemon thread and the status lives
+        in Redis.
 
         Args:
             chat_id: Telegram chat ID
@@ -153,6 +160,8 @@ class PaymentReminderService:
             # Create new status if not exists
             payment_status = PaymentStatus(chat_id=chat_id, completed=True, reminder_active=False)
             self.storage.save_payment_status(payment_status)
+
+        self._send_completion_message(chat_id)
 
     def _send_reminder(self, chat_id: int, minutes: int, seconds: int) -> None:
         """Send a payment reminder message."""
@@ -170,10 +179,27 @@ class PaymentReminderService:
         self.telegram.send_message(chat_id, Messages.PAYMENT_REMINDER_TIMEOUT)
         logger.warning(f"Payment reminder timeout for chat_id={chat_id}")
 
-    def _deactivate_reminder(self, chat_id: int) -> None:
-        """Deactivate reminder for a chat ID."""
+    def deactivate_reminders(self, chat_id: int, completed: bool = False) -> None:
+        """
+        Stop reminders for a chat ID.
+
+        Public because callers outside the reminder loop need it: /cancel ends
+        the payment window along with everything else, and used to write
+        `completed` and `reminder_active` by hand instead, leaving two places
+        that had to agree on what stopping a reminder means.
+
+        Args:
+            chat_id: Telegram chat ID
+            completed: Also mark the payment settled, so the loop does not
+                       treat the silence as a timeout and warn the user about
+                       a reservation they have already dealt with.
+        """
         payment_status = self.storage.get_payment_status(chat_id)
-        if payment_status:
-            payment_status.reminder_active = False
-            self.storage.save_payment_status(payment_status)
-            logger.info(f"Deactivated reminder for chat_id={chat_id}")
+        if not payment_status:
+            return
+
+        payment_status.reminder_active = False
+        if completed:
+            payment_status.completed = True
+        self.storage.save_payment_status(payment_status)
+        logger.info(f"Deactivated reminder for chat_id={chat_id}")

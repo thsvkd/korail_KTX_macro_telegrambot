@@ -59,7 +59,12 @@ class RunningReservation:
     # default_factory, not datetime.now(): a plain default is evaluated once,
     # when the class is defined, so every record would carry the time the
     # process started rather than the time the search did.
-    started_at: datetime = field(default_factory=datetime.now)
+    #
+    # Wrapped in a lambda rather than passed as datetime.now, so that the name
+    # is resolved when a record is built. Handing over the bound method here
+    # would capture the real one at import, before anything that patches the
+    # clock - freezegun in the tests - has replaced it.
+    started_at: datetime = field(default_factory=lambda: datetime.now())
 
     def is_stale(self, current_run_id: str) -> bool:
         """Check whether this record outlived the process that owned it."""
@@ -72,7 +77,14 @@ class PaymentStatus:
 
     chat_id: int
     completed: bool = False
-    reservation_time: datetime | None = None
+    # When the payment window opened. Named to match
+    # MultiReservationStatus.created_at, which holds the same thing for the
+    # multi-seat case; it was 'reservation_time' here alone.
+    #
+    # Stamped on creation so the field is never meaningless. Still optional,
+    # because a record written before the field existed deserializes without
+    # one and there is no way to invent the time it should have had.
+    created_at: datetime | None = field(default_factory=lambda: datetime.now())
     reminder_active: bool = False
 
 

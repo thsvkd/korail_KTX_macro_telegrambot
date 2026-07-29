@@ -651,9 +651,7 @@ class RedisStorage(StorageInterface):
             "chat_id": status.chat_id,
             "reminder_active": status.reminder_active,
             "completed": status.completed,
-            "reservation_time": status.reservation_time.isoformat()
-            if status.reservation_time
-            else None,
+            "created_at": status.created_at.isoformat() if status.created_at else None,
         }
 
     def _deserialize_payment_status(self, data: dict) -> PaymentStatus:
@@ -664,8 +662,12 @@ class RedisStorage(StorageInterface):
             chat_id=data["chat_id"],
             reminder_active=data["reminder_active"],
             completed=data["completed"],
-            reservation_time=datetime.fromisoformat(data["reservation_time"])
-            if data.get("reservation_time")
+            # 'reservation_time' is the old name for this field. These records
+            # live for PAYMENT_TIMEOUT_MINUTES + 5, so reading both only
+            # matters across a deploy, but that is exactly when a user is
+            # part-way through paying.
+            created_at=datetime.fromisoformat(created_at_raw)
+            if (created_at_raw := data.get("created_at") or data.get("reservation_time"))
             else None,
         )
 

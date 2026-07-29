@@ -435,22 +435,31 @@ class ConversationHandler:
         self._show_final_confirmation(chat_id, session)
 
     def _show_final_confirmation(self, chat_id: int, session: UserSession) -> None:
-        """Show final confirmation summary."""
-        passenger_count = session.train_info.get("passengerCount", 1)
-        seat_strategy_display = session.train_info.get("seatStrategyShow", "1명")
+        """
+        Show final confirmation summary.
+
+        Reads train_info defensively, the way _handle_already_processing does.
+        A missing key used to raise KeyError out of the update handler, so the
+        user got no reply at all and no indication of what to do next - the
+        worst possible outcome for a summary screen. A session that reaches
+        here without every field has already gone wrong somewhere earlier;
+        showing what is known and letting the user answer beats going silent.
+        """
+        info = session.train_info
+        dep_time = info.get("depTime") or ""
 
         from korail_bot.telegramBot.messages import Messages
 
         summary = Messages.CONFIRM_RESERVATION.format(
-            depDate=session.train_info["depDate"],
-            srcLocate=session.train_info["srcLocate"],
-            dstLocate=session.train_info["dstLocate"],
-            depTime=session.train_info["depTime"][:4],
-            maxDepTime=session.train_info["maxDepTime"],
-            trainTypeShow=session.train_info["trainTypeShow"],
-            specialInfoShow=session.train_info["specialInfoShow"],
-            passengerCount=passenger_count,
-            seatStrategy=seat_strategy_display,
+            depDate=info.get("depDate", "N/A"),
+            srcLocate=info.get("srcLocate", "N/A"),
+            dstLocate=info.get("dstLocate", "N/A"),
+            depTime=dep_time[:4] if dep_time else "N/A",
+            maxDepTime=info.get("maxDepTime", "N/A"),
+            trainTypeShow=info.get("trainTypeShow", "N/A"),
+            specialInfoShow=info.get("specialInfoShow", "N/A"),
+            passengerCount=info.get("passengerCount", 1),
+            seatStrategy=info.get("seatStrategyShow", "1명"),
         )
         self.telegram.send_message(chat_id, summary)
 

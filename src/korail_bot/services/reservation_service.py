@@ -66,6 +66,13 @@ class ReservationService:
         try:
             self._reap_children()
 
+            # A search already recorded for this chat must not be replaced.
+            # Resuming is the one case that legitimately starts a process for a
+            # chat that still has a record: reconcile_after_restart has already
+            # terminated the process that record pointed at.
+            if not resumed and not self._may_start(chat_id):
+                return False
+
             # Credentials are deliberately absent from argv: anything passed on
             # a command line is world-readable through `ps` and /proc. They are
             # written to the child's stdin instead.
@@ -151,6 +158,47 @@ class ReservationService:
 
     # The placeholder PID used for reservations that never had a process.
     _NO_PROCESS = 9999999
+
+    def _may_start(self, chat_id: int) -> bool:
+        """
+        Decide whether a new search may be started for this chat.
+
+        Storage holds one running reservation per chat, so starting a second
+        search overwrites the first record and leaves that process running with
+        nothing tracking it - unkillable through /cancel and still hitting
+        Korail on the same account. The conversation handler does check its own
+        session state before getting here, but a session expires after
+        SESSION_TTL_SECONDS while a search for a sold-out train can outlive it,
+        and at that point the handler offers the user a fresh /start.
+
+        Args:
+            chat_id: Telegram chat ID
+
+        Returns:
+            True when nothing is recorded as running for this chat
+        """
+        existing = self.storage.get_running_reservation(chat_id)
+        if not existing:
+            return True
+
+        logger.warning(
+            f"Refusing to start a second search for chat_id={chat_id}: "
+            f"pid={existing.process_id} is already recorded"
+        )
+
+        params = existing.search_params
+        self.telegram.send_message(
+            chat_id,
+            MessageTemplates.ALREADY_RUNNING.format(
+                depDate=params.dep_date,
+                srcLocate=params.src_locate,
+                dstLocate=params.dst_locate,
+                depTime=params.dep_time[:4],
+                trainTypeShow=params.train_type_display,
+                specialInfoShow=params.special_option_display,
+            ),
+        )
+        return False
 
     def _owns_process(self, pid: int) -> bool:
         """
@@ -454,6 +502,11 @@ class ReservationService:
             reservation = self.storage.get_running_reservation(chat_id)
             if not reservation:
                 logger.warning(f"No running reservation found for chat_id={chat_id}")
+                # Say so. The caller used to report a cancellation regardless,
+                # so /cancel with nothing running answered "예약이 취소되었습니다"
+                # - which tells a user whose search has quietly died that it
+                # was still going right up until they stopped it.
+                self.telegram.send_message(chat_id, MessageTemplates.ERROR_NO_PROGRESS)
                 return False
 
             self._terminate_search_process(reservation.process_id)

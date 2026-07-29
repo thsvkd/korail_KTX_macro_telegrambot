@@ -78,8 +78,12 @@ class CommandHandler:
         """
         logger.info(f"Handling /cancel for chat_id={chat_id}")
 
-        # Cancel any running reservation
-        self.reservation.cancel_reservation(chat_id)
+        # Cancel any running reservation. Returns False when there was none,
+        # having told the user so itself.
+        cancelled = self.reservation.cancel_reservation(chat_id)
+
+        # The rest runs either way: /cancel is also how a user gets out of a
+        # half-finished conversation, and that state outlives the search.
 
         # Reset user session
         session = self.storage.get_user_session(chat_id)
@@ -91,19 +95,15 @@ class CommandHandler:
         self.storage.delete_multi_reservation_status(chat_id)
         logger.debug(f"Cleared multi-reservation status for chat_id={chat_id}")
 
-        # Clear payment status and deactivate reminders
-        payment_status = self.storage.get_payment_status(chat_id)
-        if payment_status:
-            payment_status.completed = True
-            payment_status.reminder_active = False
-            self.storage.save_payment_status(payment_status)
-            logger.debug(f"Cleared payment status for chat_id={chat_id}")
+        # Stop payment reminders through the service that owns them, rather
+        # than writing the same two fields by hand from here.
+        self.payment_reminder.deactivate_reminders(chat_id, completed=True)
 
         # Clear admin password waiting state if any
         self.storage.set_waiting_for_admin_password(chat_id, False)
 
-        # Send cancellation message
-        self.telegram.send_message(chat_id, "✅ 예약이 취소되었습니다.")
+        if cancelled:
+            self.telegram.send_message(chat_id, "✅ 예약이 취소되었습니다.")
 
     def handle_subscribe(self, chat_id: int) -> None:
         """

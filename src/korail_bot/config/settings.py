@@ -176,7 +176,6 @@ class Settings:
     REDIS_DECODE_RESPONSES: bool = True
     REDIS_SOCKET_TIMEOUT: int = 5
     REDIS_SOCKET_CONNECT_TIMEOUT: int = 5
-    REDIS_RETRY_ON_TIMEOUT: bool = True
     REDIS_MAX_CONNECTIONS: int = 50
 
     @classmethod

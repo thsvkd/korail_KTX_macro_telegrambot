@@ -40,7 +40,9 @@ class RedisStorage(StorageInterface):
                 decode_responses=settings.REDIS_DECODE_RESPONSES,
                 socket_timeout=settings.REDIS_SOCKET_TIMEOUT,
                 socket_connect_timeout=settings.REDIS_SOCKET_CONNECT_TIMEOUT,
-                retry_on_timeout=settings.REDIS_RETRY_ON_TIMEOUT,
+                # No retry_on_timeout: redis-py deprecated it because the
+                # default Retry already lists TimeoutError among the errors it
+                # retries, so passing it changed nothing but the warning count.
                 max_connections=settings.REDIS_MAX_CONNECTIONS,
             )
             # Test connection
@@ -75,7 +77,7 @@ class RedisStorage(StorageInterface):
         """
         key = f"user_session:{session.chat_id}"
         data = json.dumps(self._serialize_user_session(session))
-        self.redis.setex(key, settings.SESSION_TTL_SECONDS, data)
+        self.redis.set(key, data, ex=settings.SESSION_TTL_SECONDS)
         logger.debug(f"Saved user session for chat_id={session.chat_id}")
 
     def delete_user_session(self, chat_id: int) -> None:
@@ -151,7 +153,7 @@ class RedisStorage(StorageInterface):
         key = f"resume_credentials:{chat_id}"
         box = get_secret_box()
         data = json.dumps({"username": box.encrypt(username), "password": box.encrypt(password)})
-        self.redis.setex(key, settings.RESUME_TTL_SECONDS, data)
+        self.redis.set(key, data, ex=settings.RESUME_TTL_SECONDS)
         logger.debug(f"Saved resume credentials for chat_id={chat_id}")
 
     def get_resume_credentials(self, chat_id: int) -> tuple | None:
@@ -217,7 +219,7 @@ class RedisStorage(StorageInterface):
         stored = self.redis.get(key)
         if not stored:
             # Expired between the two calls. Rare, and a fresh one is right.
-            self.redis.setex(key, settings.RESUME_TTL_SECONDS, now)
+            self.redis.set(key, now, ex=settings.RESUME_TTL_SECONDS)
             return now
 
         # Keep it for as long as the search that owns it can still be resumed.
@@ -250,7 +252,7 @@ class RedisStorage(StorageInterface):
         data = json.dumps(self._serialize_payment_status(status))
         # Set with TTL (payment timeout + buffer)
         ttl = (settings.PAYMENT_TIMEOUT_MINUTES + 5) * 60
-        self.redis.setex(key, ttl, data)
+        self.redis.set(key, data, ex=ttl)
 
     def delete_payment_status(self, chat_id: int) -> None:
         """Delete payment status."""
@@ -301,7 +303,7 @@ class RedisStorage(StorageInterface):
         """Set admin authentication status for chat ID."""
         key = f"admin_authenticated:{chat_id}"
         if authenticated:
-            self.redis.setex(key, settings.ADMIN_SESSION_TTL_SECONDS, "1")
+            self.redis.set(key, "1", ex=settings.ADMIN_SESSION_TTL_SECONDS)
         else:
             self.redis.delete(key)
 
@@ -347,7 +349,7 @@ class RedisStorage(StorageInterface):
         """Set whether user is waiting to enter admin password."""
         key = f"admin_password_pending:{chat_id}"
         if waiting:
-            self.redis.setex(key, 300, "1")  # 5 min TTL
+            self.redis.set(key, "1", ex=300)  # 5 min TTL
         else:
             self.redis.delete(key)
 
@@ -360,7 +362,7 @@ class RedisStorage(StorageInterface):
         """Set pending admin command waiting for authentication."""
         key = f"pending_admin_command:{chat_id}"
         if command:
-            self.redis.setex(key, 300, command)  # 5 min TTL
+            self.redis.set(key, command, ex=300)  # 5 min TTL
         else:
             self.redis.delete(key)
 
@@ -386,7 +388,7 @@ class RedisStorage(StorageInterface):
         data = json.dumps(self._serialize_multi_reservation_status(status))
         # Set with TTL
         ttl = (settings.PAYMENT_TIMEOUT_MINUTES + 5) * 60
-        self.redis.setex(key, ttl, data)
+        self.redis.set(key, data, ex=ttl)
 
     def delete_multi_reservation_status(self, chat_id: int) -> None:
         """Delete multi-reservation status and related keys."""
@@ -442,7 +444,7 @@ class RedisStorage(StorageInterface):
 
         data = json.dumps(reservations)
         # TTL: 2 hours (enough for multiple reservations)
-        self.redis.setex(key, 7200, data)
+        self.redis.set(key, data, ex=7200)
         logger.info(f"Saved partial reservation {seat_index} for chat_id={chat_id}")
 
     def get_partial_reservations(self, chat_id: int) -> list[dict]:
@@ -474,7 +476,7 @@ class RedisStorage(StorageInterface):
         """Set the current seat index being reserved."""
         key = f"current_seat_index:{chat_id}"
         if index is not None:
-            self.redis.setex(key, 7200, str(index))  # 2 hour TTL
+            self.redis.set(key, str(index), ex=7200)  # 2 hour TTL
         else:
             self.redis.delete(key)
 
@@ -486,7 +488,7 @@ class RedisStorage(StorageInterface):
     def mark_payment_ready(self, chat_id: int, seat_index: int) -> None:
         """Mark payment as ready for a specific seat."""
         key = f"payment_ready:{chat_id}:{seat_index}"
-        self.redis.setex(key, 60, "1")  # 60s TTL
+        self.redis.set(key, "1", ex=60)  # 60s TTL
         logger.info(f"Marked payment ready for seat {seat_index}, chat_id={chat_id}")
 
     def wait_for_payment(self, chat_id: int, seat_index: int, timeout: int = 600) -> bool:

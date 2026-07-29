@@ -127,7 +127,11 @@ markers = [
     "redis_container: needs a real Redis (testcontainers starts one; requires Docker)",
 ]
 filterwarnings = [
-    "default",
+    # A warning fails the run. The suite is at zero, and a deprecation is the
+    # notice that a dependency is going to break us on some later release -
+    # worth seeing when the bump lands rather than when the API is gone.
+    # Silence one with an explicit ignore below, deliberately.
+    "error",
     # testcontainers 4.x deprecates its own decorator internally.
     "ignore:The @wait_container_is_ready decorator is deprecated:DeprecationWarning",
 ]

@@ -52,6 +52,21 @@ class RedisStorage(StorageInterface):
             logger.error(f"Redis connection failed: {e}")
             raise
 
+    def _scan_keys(self, pattern: str) -> list[str]:
+        """
+        Every key matching a pattern, without blocking the server.
+
+        KEYS walks the whole keyspace in one shot and Redis is single
+        threaded, so for the duration nothing else - including the search
+        process asking whether it should still be running - is served. SCAN
+        does the same walk in small batches and lets other commands through
+        in between.
+
+        The cursor may hand back a key more than once, which KEYS never did,
+        so the results are deduplicated. Order is not guaranteed by either.
+        """
+        return list(dict.fromkeys(self.redis.scan_iter(match=pattern, count=100)))
+
     # ==================== User Session Management ====================
 
     def get_user_session(self, chat_id: int) -> UserSession | None:
@@ -87,7 +102,7 @@ class RedisStorage(StorageInterface):
 
     def get_all_user_sessions(self) -> list[UserSession]:
         """Get all user sessions."""
-        keys = self.redis.keys("user_session:*")
+        keys = self._scan_keys("user_session:*")
         sessions = []
         for key in keys:
             data = self.redis.get(key)
@@ -128,7 +143,7 @@ class RedisStorage(StorageInterface):
 
     def get_all_running_reservations(self) -> list[RunningReservation]:
         """Get all running reservations."""
-        keys = self.redis.keys("running_reservation:*")
+        keys = self._scan_keys("running_reservation:*")
         reservations = []
         for key in keys:
             data = self.redis.get(key)
@@ -261,7 +276,7 @@ class RedisStorage(StorageInterface):
 
     def get_all_payment_statuses(self) -> list[PaymentStatus]:
         """Get all payment statuses."""
-        keys = self.redis.keys("payment_status:*")
+        keys = self._scan_keys("payment_status:*")
         statuses = []
         for key in keys:
             data = self.redis.get(key)
@@ -401,13 +416,13 @@ class RedisStorage(StorageInterface):
         self.redis.delete(seat_key)
 
         # Delete all payment ready flags for this user
-        payment_keys = self.redis.keys(f"payment_ready:{chat_id}:*")
+        payment_keys = self._scan_keys(f"payment_ready:{chat_id}:*")
         if payment_keys:
             self.redis.delete(*payment_keys)
 
     def get_all_multi_reservation_statuses(self) -> list[MultiReservationStatus]:
         """Get all multi-reservation statuses."""
-        keys = self.redis.keys("multi_reservation_status:*")
+        keys = self._scan_keys("multi_reservation_status:*")
         statuses = []
         for key in keys:
             data = self.redis.get(key)

@@ -93,6 +93,20 @@ class Settings:
     # session instead, which is when the client re-authenticates anyway.
     KORAIL_RELOGIN_INTERVAL: float = float(os.environ.get("RELOGIN_INTERVAL", "1800"))
     KORAIL_RELOGIN_INTERVAL_JITTER: float = _env_ratio("RELOGIN_INTERVAL_JITTER", 0.4)
+    # A search that finds nothing and a search that could not ask both end up
+    # with no trains, so a run of failures is the only thing that tells them
+    # apart. How long a run has to get before the user hears about it:
+    KORAIL_FAILURE_ALERT_THRESHOLD: int = int(
+        os.environ.get("SEARCH_FAILURE_ALERT_THRESHOLD", "10")
+    )
+    # How long to wait before saying it again, while it is still failing.
+    KORAIL_FAILURE_REALERT_SECONDS: float = float(
+        os.environ.get("SEARCH_FAILURE_REALERT_SECONDS", "1800")
+    )
+    # Failures back the search off instead of keeping it at full rate: if
+    # Korail is refusing us, asking every second is what makes it worse. The
+    # wait doubles per failure, up to this multiple of the search interval.
+    KORAIL_FAILURE_BACKOFF_CAP: float = float(os.environ.get("SEARCH_FAILURE_BACKOFF_CAP", "60"))
     # The mobile app build the client reports itself as. korail2 carries the
     # build that was current when it was packaged; this is the escape hatch
     # for when Korail stops serving that build and the library has not caught

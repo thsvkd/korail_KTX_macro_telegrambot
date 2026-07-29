@@ -2,6 +2,7 @@
 
 import random
 import time
+from collections.abc import Callable
 
 import requests
 from korail2 import AdultPassenger, NoResultsError, ReserveOption, SoldOutError, TrainType
@@ -17,7 +18,11 @@ logger = get_logger(__name__)
 class KorailService:
     """Service for interacting with Korail API."""
 
-    def __init__(self, app_session_start: str | None = None):
+    def __init__(
+        self,
+        app_session_start: str | None = None,
+        on_status: Callable[[str], None] | None = None,
+    ):
         """
         Initialize Korail service.
 
@@ -27,6 +32,12 @@ class KorailService:
                                interrupted passes back the value it started
                                with so it stays one session; None lets the
                                client stamp the moment it was built.
+            on_status: Called with a message for the user when the search
+                       stops being able to reach Korail, and again when it
+                       recovers. A callback rather than a TelegramService so
+                       that this class keeps knowing nothing about Telegram;
+                       None means nobody is told, which is right for the
+                       short-lived clients that only log in and stop.
         """
         self._korail_instance: K2MKorail | None = None
         self._logged_in = False
@@ -39,6 +50,13 @@ class KorailService:
         self._relogin_jitter = settings.KORAIL_RELOGIN_INTERVAL_JITTER
         self._relogin_due_at: float = 0.0
         self._relogin_count: int = 0
+        self._on_status = on_status
+        self._failure_streak: int = 0
+        self._failure_since: float = 0.0
+        self._failure_alerted_at: float = 0.0
+        self._failure_threshold = settings.KORAIL_FAILURE_ALERT_THRESHOLD
+        self._failure_realert = settings.KORAIL_FAILURE_REALERT_SECONDS
+        self._failure_backoff_cap = settings.KORAIL_FAILURE_BACKOFF_CAP
 
         # Log class methods to verify correct version is loaded
         logger.debug(
@@ -192,6 +210,86 @@ class KorailService:
         """
         return self.jittered(self._search_interval * multiplier)
 
+    # ==================== Reachability tracking ====================
+    #
+    # Korail answering "no trains" and Korail not answering at all both leave
+    # the loop with nothing to reserve. Told apart, the first is the whole
+    # point of the search and the second is worth waking the user for; run
+    # together, as they were, a blocked search looks exactly like a sold-out
+    # one and reports itself as healthy forever.
+
+    def _announce(self, message: str) -> None:
+        """Pass a message to the user, if anyone is listening."""
+        if not self._on_status:
+            return
+        try:
+            self._on_status(message)
+        except Exception as e:
+            # Telling the user failed. That must not end the search.
+            logger.error(f"Failed to deliver search status message: {e}", exc_info=True)
+
+    def note_search_failure(self, error: Exception) -> float:
+        """
+        Record a failed request and say how much to slow down.
+
+        Args:
+            error: What went wrong, for the log and the user-facing message
+
+        Returns:
+            A multiplier for the next wait between requests
+        """
+        self._failure_streak += 1
+        now = time.time()
+        if self._failure_streak == 1:
+            self._failure_since = now
+
+        logger.error(
+            f"❌ Korail request failed ({self._failure_streak} in a row): "
+            f"{type(error).__name__}: {error}",
+            exc_info=self._failure_streak == 1,
+        )
+
+        due = self._failure_streak >= self._failure_threshold and (
+            self._failure_alerted_at == 0.0
+            or now - self._failure_alerted_at >= self._failure_realert
+        )
+        if due:
+            self._failure_alerted_at = now
+            minutes = int((now - self._failure_since) // 60)
+            self._announce(
+                f"⚠️ 코레일 응답을 받지 못하고 있습니다\n\n"
+                f"연속 {self._failure_streak}회 실패"
+                f"{f' (약 {minutes}분째)' if minutes else ''}.\n"
+                f"마지막 오류: {type(error).__name__}\n\n"
+                f"검색은 계속하되 요청 간격을 늘려 재시도합니다.\n"
+                f"코레일 점검 중이거나 접속이 차단되었을 수 있습니다.\n\n"
+                f"💡 중단하려면 /cancel 을 사용하세요."
+            )
+
+        # Doubling per failure, capped: at the default 1s interval this walks
+        # 1s, 2s, 4s ... up to a minute between attempts. Shifting instead of
+        # ** so a long outage cannot produce a float overflow.
+        multiplier = float(1 << min(self._failure_streak - 1, 20))
+        return min(multiplier, self._failure_backoff_cap)
+
+    def note_search_success(self) -> None:
+        """Record that Korail answered, and say so if it had stopped."""
+        if self._failure_streak == 0:
+            return
+
+        recovered_from = self._failure_streak
+        alerted = self._failure_alerted_at != 0.0
+        self._failure_streak = 0
+        self._failure_since = 0.0
+        self._failure_alerted_at = 0.0
+
+        logger.info(f"✅ Korail is answering again after {recovered_from} failed request(s)")
+        # Only worth a message if the silence was reported in the first place.
+        if alerted:
+            self._announce(
+                "✅ 코레일 응답이 정상으로 돌아왔습니다\n\n원래 간격으로 검색을 계속합니다."
+            )
+
     def wait_between_requests(self, multiplier: float = 1.0) -> float:
         """Sleep for a randomised interval and return how long it waited."""
         delay = self.next_interval(multiplier)
@@ -315,8 +413,12 @@ class KorailService:
                     return []  # Will retry on next loop iteration
                 else:
                     raise
-            logger.error(f"❌ Error searching trains: {e}", exc_info=True)
-            return []
+            # Anything else means the request did not get an answer we
+            # understand. Raised rather than returned as an empty list: the
+            # caller cannot act on what it cannot distinguish from a sold-out
+            # train, and this used to be swallowed here, leaving a search that
+            # had stopped working reporting itself as still looking.
+            raise SearchUnavailableError(f"{type(e).__name__}: {e}") from e
 
     def reserve_train(
         self, train, option: ReserveOption = ReserveOption.GENERAL_FIRST, passenger_count: int = 1
@@ -485,16 +587,22 @@ class KorailService:
             self._check_session_refresh()
 
             # Search for trains
-            trains = self.search_trains(
-                dep_date,
-                src_locate,
-                dst_locate,
-                dep_time,
-                max_dep_time,
-                train_type,
-                passenger_count,
-                verbose=is_summary,
-            )
+            try:
+                trains = self.search_trains(
+                    dep_date,
+                    src_locate,
+                    dst_locate,
+                    dep_time,
+                    max_dep_time,
+                    train_type,
+                    passenger_count,
+                    verbose=is_summary,
+                )
+            except SearchUnavailableError as e:
+                self.wait_between_requests(self.note_search_failure(e))
+                continue
+
+            self.note_search_success()
 
             if not trains:
                 if is_summary:
@@ -563,16 +671,22 @@ class KorailService:
             self._check_session_refresh()
 
             # Search for trains (search for single passenger each time)
-            trains = self.search_trains(
-                dep_date,
-                src_locate,
-                dst_locate,
-                dep_time,
-                max_dep_time,
-                train_type,
-                passenger_count=1,
-                verbose=is_summary,
-            )
+            try:
+                trains = self.search_trains(
+                    dep_date,
+                    src_locate,
+                    dst_locate,
+                    dep_time,
+                    max_dep_time,
+                    train_type,
+                    passenger_count=1,
+                    verbose=is_summary,
+                )
+            except SearchUnavailableError as e:
+                self.wait_between_requests(self.note_search_failure(e))
+                continue
+
+            self.note_search_success()
 
             if not trains:
                 if is_summary:
@@ -678,5 +792,19 @@ class KorailService:
 
 class DuplicateReservationError(Exception):
     """Raised when attempting to reserve a train that's already reserved."""
+
+    pass
+
+
+class SearchUnavailableError(Exception):
+    """
+    Raised when a search could not be carried out at all.
+
+    Distinct from finding no trains, which is an ordinary answer and comes
+    back as an empty list. This one means Korail refused, timed out, or
+    replied with something the client could not read - a state the search
+    cannot fix by asking again immediately, and that the user should hear
+    about if it persists.
+    """
 
     pass

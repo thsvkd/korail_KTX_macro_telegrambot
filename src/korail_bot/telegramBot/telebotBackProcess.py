@@ -29,7 +29,10 @@ from korail_bot.services import (
     PaymentReminderService,
     TelegramService,
 )
-from korail_bot.services.korail_service import DuplicateReservationError
+from korail_bot.services.korail_service import (
+    DuplicateReservationError,
+    SearchUnavailableError,
+)
 from korail_bot.storage.redis import RedisStorage
 from korail_bot.utils.logger import LoggerFactory, get_logger
 from korail_bot.utils.privacy import mask_phone
@@ -94,7 +97,12 @@ class BackgroundReservationProcess:
         self.dep_time = sys.argv[4]
         self.train_type_str = sys.argv[5]
         self.special_info_str = sys.argv[6]
-        self.chat_id = sys.argv[7]
+        # int, not the raw argv string: every storage call and the Telegram
+        # client want a number, and the spawner passes str(chat_id) of one.
+        # Two places already converted at the point of use; the rest were
+        # handing a string to parameters typed int and getting away with it
+        # because it only ever ended up interpolated into a key or a URL.
+        self.chat_id = int(sys.argv[7])
         self.max_dep_time = sys.argv[8]
 
         # Optional parameters with defaults
@@ -113,7 +121,8 @@ class BackgroundReservationProcess:
         # A resumed search is the same app session the user started, not a
         # freshly launched one, so it picks up the timestamp it began with.
         self.korail = KorailService(
-            app_session_start=self.storage.get_or_create_app_session_start(self.chat_id)
+            app_session_start=self.storage.get_or_create_app_session_start(self.chat_id),
+            on_status=self._announce_search_status,
         )
 
         logger.info(f"Redis storage connected: {settings.REDIS_HOST}:{settings.REDIS_PORT}")
@@ -501,7 +510,7 @@ class BackgroundReservationProcess:
 
                 logger.info(f"Creating new MultiReservationStatus for chat_id={self.chat_id}")
                 multi_status = MultiReservationStatus(
-                    chat_id=int(self.chat_id),
+                    chat_id=self.chat_id,
                     reservations=[],
                     total_seats=total_seats,
                     seat_strategy=self.seat_strategy,
@@ -563,7 +572,7 @@ class BackgroundReservationProcess:
 
             # Create MultiReservationStatus
             multi_status = MultiReservationStatus(
-                chat_id=int(self.chat_id),
+                chat_id=self.chat_id,
                 reservations=reservation_infos,
                 total_seats=total_seats,
                 seat_strategy=self.seat_strategy,
@@ -580,6 +589,16 @@ class BackgroundReservationProcess:
 
         except Exception as e:
             logger.error(f"Failed to create MultiReservationStatus: {e}", exc_info=True)
+
+    def _announce_search_status(self, message: str) -> None:
+        """
+        Tell the user how the search itself is doing.
+
+        Straight to Telegram rather than through _send_callback: this is news
+        about the search, not a result for it, and every callback status means
+        the search has ended one way or another.
+        """
+        self.telegram.send_message(self.chat_id, message)
 
     def _send_callback(
         self,
@@ -777,14 +796,20 @@ class BackgroundReservationProcess:
                     passenger_count=1,  # Single seat
                     verbose=is_summary,
                 )
-                if trains:
-                    logger.debug(f"✅ Search completed: found {len(trains)} trains")
-                elif is_summary:
-                    logger.debug(f"📊 Attempt #{attempts}: no trains found, retrying...")
-            except Exception as e:
-                logger.error(f"❌ Search failed (attempt #{attempts}): {e}", exc_info=True)
-                self.korail.wait_between_requests()
+            except SearchUnavailableError as e:
+                # Backs off and tells the user once the run of failures is
+                # long enough to mean something. Used to be a bare
+                # `except Exception` that logged and retried at full rate,
+                # so a Korail that had stopped answering was invisible.
+                self.korail.wait_between_requests(self.korail.note_search_failure(e))
                 continue
+
+            self.korail.note_search_success()
+
+            if trains:
+                logger.debug(f"✅ Search completed: found {len(trains)} trains")
+            elif is_summary:
+                logger.debug(f"📊 Attempt #{attempts}: no trains found, retrying...")
 
             if not trains:
                 self.korail.wait_between_requests()

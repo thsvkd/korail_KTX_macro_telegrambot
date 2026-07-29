@@ -34,6 +34,7 @@ from korail_bot.services.korail_service import (
     SearchUnavailableError,
 )
 from korail_bot.storage.redis import RedisStorage
+from korail_bot.telegramBot.messages import Messages
 from korail_bot.utils.logger import LoggerFactory, get_logger
 from korail_bot.utils.privacy import mask_phone
 
@@ -453,6 +454,14 @@ class BackgroundReservationProcess:
                 # Note: Payment reminders will be started by main app after receiving callback
                 # (subprocess and main app don't share memory, so reminders must start in main app)
 
+                # Then stay and watch. This process holds the only logged-in
+                # Korail session there is - the main app deletes the stored
+                # credentials the moment this callback lands - so it is the
+                # only thing that can find out whether the payment actually
+                # happened.
+                if not (is_random and total_seats > 1):
+                    self._watch_payment(reservation)
+
             else:
                 logger.warning("Reservation failed - no result")
                 message = """
@@ -492,6 +501,97 @@ class BackgroundReservationProcess:
             self._send_callback(message, status=1)
 
         logger.info(f"Reservation process ended for {mask_phone(self.username)}")
+
+    def _payment_deadline(self, reservation) -> datetime:
+        """
+        When Korail stops holding this seat.
+
+        Korail states the deadline on the reservation itself, so that is what
+        is used rather than PAYMENT_TIMEOUT_MINUTES - the configured value is
+        this bot's idea of the window and can only ever be an approximation
+        of theirs. Falls back to it when the reservation does not carry a
+        readable one.
+        """
+        raw_date = getattr(reservation, "buy_limit_date", None)
+        raw_time = getattr(reservation, "buy_limit_time", None)
+
+        if isinstance(raw_date, str) and isinstance(raw_time, str):
+            try:
+                return datetime.strptime(f"{raw_date}{raw_time[:6]}", "%Y%m%d%H%M%S")
+            except ValueError:
+                pass
+
+        logger.warning(
+            f"Reservation carried no readable payment deadline "
+            f"({raw_date!r} {raw_time!r}); falling back to the configured window"
+        )
+        return datetime.now() + timedelta(minutes=settings.PAYMENT_TIMEOUT_MINUTES)
+
+    def _watch_payment(self, reservation) -> None:
+        """
+        Watch the reservation until it is paid for or lost.
+
+        Korail lists a reservation only while it is waiting to be paid for,
+        so it dropping off the list before the deadline means the payment
+        went through. Nothing here pays for anything: it is one read-only
+        listing call, repeated slowly.
+
+        This replaces a guess. "Payment complete" used to mean the user had
+        sent the bot any message at all, so someone who answered the reminder
+        without paying was told the matter was settled and quietly lost the
+        seat, while someone who paid and said nothing was nagged until the
+        window closed.
+        """
+        rsv_id = getattr(reservation, "rsv_id", None)
+        if not rsv_id:
+            logger.warning("Reservation has no rsv_id - cannot verify payment")
+            return
+
+        deadline = self._payment_deadline(reservation)
+        interval = settings.PAYMENT_VERIFY_INTERVAL_SECONDS
+        logger.info(f"Watching reservation {rsv_id} until {deadline:%H:%M:%S}")
+
+        while datetime.now() < deadline:
+            time.sleep(min(interval, max(1.0, (deadline - datetime.now()).total_seconds())))
+
+            outstanding = self.korail.is_reservation_outstanding(rsv_id)
+            if outstanding is None:
+                # Korail could not be asked. Not an answer, and certainly not
+                # "it is gone" - saying the payment went through here would
+                # be the same guess this exists to remove.
+                continue
+
+            if not outstanding:
+                logger.info(f"Reservation {rsv_id} is no longer outstanding - payment settled")
+                self._settle_payment(verified=True)
+                return
+
+        # The deadline passed with the reservation still on the list, so it
+        # was never paid for. Worth saying plainly even when the user has
+        # already told us otherwise: they are the one who will find out at
+        # the station.
+        logger.warning(f"Reservation {rsv_id} expired unpaid")
+        self._settle_payment(verified=False)
+
+    def _settle_payment(self, verified: bool) -> None:
+        """Record what the watch found, and tell the user."""
+        status = self.storage.get_payment_status(self.chat_id)
+        already_confirmed = bool(status and status.completed)
+
+        # Either way the reminder loop in the main app has nothing left to
+        # remind anyone about, and it reads this flag out of Redis.
+        if status:
+            status.completed = True
+            status.reminder_active = False
+            self.storage.save_payment_status(status)
+
+        if verified:
+            # The user having said so already makes this a confirmation of
+            # something they know. No second message for that.
+            if not already_confirmed:
+                self.telegram.send_message(self.chat_id, Messages.PAYMENT_VERIFIED)
+        else:
+            self.telegram.send_message(self.chat_id, Messages.PAYMENT_EXPIRED_VERIFIED)
 
     def _update_multi_reservation_status(
         self, seat_index: int, reservation, total_seats: int

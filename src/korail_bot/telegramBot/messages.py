@@ -352,6 +352,20 @@ class Messages:
     CANCELLED_BY_USER = "🚫 예약을 취소합니다."
     CANCEL_START_CONFIRMATION = "🚫 예매 진행을 취소합니다."
 
+    PAYMENT_VERIFIED = """✅ 결제가 확인되었습니다
+
+코레일에서 예약이 결제 완료 처리된 것을 확인했습니다.
+더 이상 알림을 보내지 않습니다.
+
+즐거운 여행 되세요! 🚄"""
+
+    PAYMENT_EXPIRED_VERIFIED = """❌ 결제 기한이 지나 예약이 취소되었습니다
+
+코레일에 확인한 결과 결제가 완료되지 않았습니다.
+좌석은 다시 풀렸습니다.
+
+다시 잡으시려면 /start 로 검색을 시작하세요."""
+
     PAYMENT_REMINDER_STOPPED = """✅ 결제 리마인더가 중단되었습니다.
 
 결제를 완료하셨다면 즐거운 여행 되세요! 🚄

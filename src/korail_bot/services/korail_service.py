@@ -781,6 +781,46 @@ class KorailService:
 
         return reservations[0] if reservations else None
 
+    # ==================== Payment, observed rather than performed ====================
+    #
+    # The bot reserves; the user pays. Nothing here pays for anything, and
+    # korail2 could not if it wanted to - it has no payment call at all. What
+    # it does have is the list of reservations still waiting to be paid for,
+    # which is enough to tell whether a payment happened without ever taking
+    # part in one.
+
+    def is_reservation_outstanding(self, rsv_id: str) -> bool | None:
+        """
+        Whether a reservation is still sitting unpaid.
+
+        Korail lists a reservation until it is paid for, cancelled, or left
+        to expire, at which point it drops off. Read-only, and the only way
+        the bot can know a payment happened: until now "payment complete"
+        meant the user had sent any message at all, which is a claim rather
+        than a fact.
+
+        Args:
+            rsv_id: The reservation number to look for
+
+        Returns:
+            True while it is still unpaid, False once it is gone, and None
+            when Korail could not be asked - which is not the same as gone,
+            and must not be read as one.
+        """
+        if not self._logged_in or not self._korail_instance:
+            return None
+
+        try:
+            reservations = self._korail_instance.reservations()
+        except NoResultsError:
+            # No reservations at all. An ordinary answer, not a failure.
+            return False
+        except Exception as e:
+            logger.warning(f"Could not check whether {rsv_id} is still unpaid: {e}")
+            return None
+
+        return any(str(getattr(r, "rsv_id", "")) == str(rsv_id) for r in reservations)
+
     def _cancel_reservations(self, reservations: list) -> None:
         """Cancel a list of reservations (cleanup for failed random allocation)."""
         if not reservations:

@@ -78,9 +78,11 @@ class PaymentReminderService:
         try:
             total_seconds = self.timeout_minutes * 60
 
-            for elapsed in range(
-                self.interval_seconds, total_seconds + self.interval_seconds, self.interval_seconds
-            ):
+            # Stops at the deadline rather than one interval past it. The
+            # overshoot cost ten seconds when reminders were ten seconds
+            # apart; at a minute apart it would hold the timeout message back
+            # for a whole minute after the seat was already gone.
+            for elapsed in range(self.interval_seconds, total_seconds + 1, self.interval_seconds):
                 time.sleep(self.interval_seconds)
 
                 # Payment settled, or the window was closed by /cancel. Both

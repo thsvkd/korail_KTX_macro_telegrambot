@@ -122,7 +122,14 @@ class Settings:
 
     # Payment Reminder Configuration
     PAYMENT_TIMEOUT_MINUTES: int = int(os.environ.get("PAYMENT_TIMEOUT_MINUTES", "10"))
-    PAYMENT_REMINDER_INTERVAL_SECONDS: int = int(os.environ.get("PAYMENT_REMINDER_INTERVAL", "10"))
+    # One reminder a minute. At the old ten seconds a ten-minute payment
+    # window meant sixty messages, which is a phone buzzing continuously
+    # while someone is trying to type their card number into another app.
+    PAYMENT_REMINDER_INTERVAL_SECONDS: int = int(os.environ.get("PAYMENT_REMINDER_INTERVAL", "60"))
+    # How often the search process asks Korail whether the reservation it
+    # just made is still unpaid. One request each time, against a search that
+    # was making one every few seconds, so this is gentle by comparison.
+    PAYMENT_VERIFY_INTERVAL_SECONDS: int = int(os.environ.get("PAYMENT_VERIFY_INTERVAL", "30"))
 
     # Flask Configuration
     # In polling mode the only caller of the HTTP API is the background

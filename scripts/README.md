@@ -65,11 +65,12 @@ scripts/set-webhook.sh https://your.domain/telebot
   compose 가 Redis 를 `--requirepass` 로 띄우기 때문입니다.
 - **compose 의 Redis 는 호스트에 포트를 열지 않습니다.** 앱을 호스트에서
   직접 실행하는 `run.sh` 는 그래서 `dev-redis.sh` 가 띄우는 별도 인스턴스
-  (127.0.0.1 바인딩)를 사용합니다. `test.sh` 는 testcontainers 가 자체
-  Redis 를 띄우므로 둘 다 필요 없습니다.
-- Pipfile 은 Python 3.9 를 요구하지만 설치돼 있지 않으면 `setup.sh` 가
-  3.9 이상 인터프리터를 찾아 사용하고 경고를 남깁니다. Docker 이미지는
-  여전히 3.9 로 빌드되므로 릴리스 전 그쪽에서 확인하세요.
+  (127.0.0.1 바인딩)를 사용합니다.
+- `test.sh` 는 통합·e2e 테스트에서만 testcontainers 로 Redis 를 띄웁니다.
+  `test.sh tests/unit` 은 Redis 를 전혀 쓰지 않으므로 Docker 없이 돕니다.
+- 인터프리터는 `uv` 가 관리합니다. `pyproject.toml` 의 `requires-python`
+  (3.13) 에 맞는 버전을 호스트에 없으면 직접 내려받으므로, 별도로 파이썬을
+  설치해 둘 필요가 없습니다. Docker 이미지도 같은 3.13 으로 빌드됩니다.
 - 배포 서버에 물린 `docker-compose.yml` 은 Docker Hub 의
   `geunsam2/korailbot:latest` 를 받아서 실행합니다. 로컬에서 빌드한 이미지를
   쓰려면 태그를 맞추거나 compose override 를 두세요.

@@ -5,6 +5,9 @@
 ## 빠른 시작
 
 ```bash
+# uv 설치 (한 번만) - Python 인터프리터까지 알아서 받아옵니다
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
 # 프로젝트 클론
 git clone https://github.com/GeunSam2/korail_KTX_macro_telegrambot.git
 cd korail_KTX_macro_telegrambot
@@ -80,15 +83,17 @@ cd korail_KTX_macro_telegrambot
 ### Docker 배포
 
 ```bash
-# 1. requirements.txt 생성 (Pipfile에서)
-make requirements
-
-# 2. Docker 이미지 빌드
+# 1. Docker 이미지 빌드 (uv.lock 에서 바로 설치하므로 사전 생성 단계가 없습니다)
 ./scripts/docker-build.sh
 
-# 3. .env 준비 후 스택 기동 (앱 + Redis)
+# 2. .env 준비 후 스택 기동 (앱 + Redis)
 ./scripts/docker-up.sh
 ```
+
+이미지는 멀티 스테이지로 빌드되며, 런타임 스테이지에는 `.venv` 만 들어갑니다
+(`python:3.13-slim`, non-root 실행). 프로덕션 서버는 Flask 개발 서버가 아니라
+waitress 이고, 폴러가 중복 기동되지 않도록 의도적으로 단일 프로세스 + 스레드로
+동작합니다. CI 는 `linux/amd64` 와 `linux/arm64` 를 함께 빌드합니다.
 
 `docker-compose.yml` 은 Redis 를 호스트로 노출하지 않고 `--requirepass` 로
 띄웁니다. 따라서 `.env` 에 `REDIS_PASSWORD` 가 반드시 있어야 합니다
@@ -179,32 +184,39 @@ make test-unit
 - `tests/integration/` - Redis 와 서비스 계층 통합 테스트
 - `tests/e2e/` - 예약 플로우 전체 시나리오
 
+### 코드 품질
+
+```bash
+make lint        # ruff format --check + ruff check
+make format      # 포맷 및 자동 수정 적용
+make typecheck   # mypy
+```
+
+`uv run pre-commit install` 을 한 번 실행해 두면 커밋 시점에 같은 검사가
+자동으로 돕니다. CI 의 `check` 잡이 통과해야만 이미지 빌드와 배포가 진행됩니다.
+
 ### 의존성 추가 시
 ```bash
-# 1. Pipfile에 패키지 추가
-pipenv install [패키지명]
+# 1. 추가 (pyproject.toml 과 uv.lock 이 함께 갱신됩니다)
+uv add [패키지명]
+uv add --dev [패키지명]     # 개발 전용
 
-# 2. requirements.txt 재생성 (Docker 배포용)
-make requirements
-
-# 3. 커밋
-git add Pipfile Pipfile.lock requirements.txt
+# 2. 커밋 — Docker 도 uv.lock 에서 바로 설치하므로 별도 생성 단계가 없습니다
+git add pyproject.toml uv.lock
 git commit -m "feat: Add new dependency"
 ```
 
 ### korail2 라이브러리 업데이트
 ```bash
-# 최신 버전으로 업데이트
-pipenv update korail2
-
-# requirements.txt 재생성
-make requirements
+# 포크의 브랜치를 다시 가리키게 하여 잠금 커밋을 갱신
+uv lock --upgrade-package korail2
+git add uv.lock
 ```
 
 ## 프로젝트 구조
 
 ```
-src/
+src/korail_bot/                     # 설치 가능한 패키지 (src 레이아웃)
 ├── app.py                          # Flask 앱 진입점
 ├── config/                         # 설정 관리
 ├── models/                         # 데이터 모델
@@ -218,10 +230,16 @@ src/
 tests/                              # 테스트
 ```
 
+패키지로 설치되므로 `PYTHONPATH` 를 손댈 필요가 없습니다. 임포트는 모두
+`from korail_bot....` 형태입니다.
+
 ## 기술 스택
 
+- **패키징**: [uv](https://docs.astral.sh/uv/) + `pyproject.toml` + `uv.lock`
+- **Python**: 3.13
 - **Backend**: Flask, Flask-RESTful, Flask-CORS
-- **Telegram**: python-telegram-bot
+- **WSGI**: waitress (단일 프로세스 + 스레드)
 - **Korail API**: [dhfhfk/korail2](https://github.com/dhfhfk/korail2/tree/bypassDynapath)
-- **Testing**: pytest
-- **Deployment**: Docker
+- **품질**: ruff (lint + format), mypy, pre-commit
+- **Testing**: pytest, testcontainers
+- **Deployment**: Docker (멀티 스테이지, amd64 + arm64), GitHub Actions

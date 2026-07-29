@@ -17,15 +17,63 @@ on:
     push:
         branches:
             - 'master'
+    pull_request:
     workflow_dispatch:
 
 jobs:
-  cicd:
+  # Nothing is published or deployed until this passes. Before it existed a
+  # push to master went straight to the server with no test having run.
+  check:
     runs-on: ubuntu-latest
     steps:
     -
         name: Checkout
         uses: actions/checkout@v4
+    -
+        name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+            enable-cache: true
+    -
+        name: Install dependencies
+        run: uv sync --frozen
+    -
+        name: Lint
+        run: |
+            uv run --frozen ruff format --check .
+            uv run --frozen ruff check .
+    -
+        name: Unit tests
+        # No Docker needed: conftest.py starts the throwaway Redis only for
+        # the integration and e2e suites.
+        run: uv run --frozen pytest tests/unit -q
+    -
+        name: Integration and e2e tests
+        # Not blocking yet. 16 of these fail on master and did so before the
+        # toolchain work - they call service methods that no longer exist
+        # (e.g. PaymentReminderService.deactivate_reminders). Drop
+        # continue-on-error once that drift is repaired.
+        continue-on-error: true
+        run: uv run --frozen pytest tests/integration tests/e2e -q
+    -
+        name: Type check
+        # Not blocking yet: 65 pre-existing errors, mostly str|None reaching
+        # parameters typed int. Drop continue-on-error once they are cleared.
+        continue-on-error: true
+        run: uv run --frozen mypy
+
+  cicd:
+    needs: check
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+    -
+        name: Checkout
+        uses: actions/checkout@v4
+    -
+        name: Set up QEMU
+        # Needed to build the arm64 image on an amd64 runner.
+        uses: docker/setup-qemu-action@v3
     -
         name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -37,11 +85,13 @@ jobs:
             password: ${{ secrets.DOCKERHUB_TOKEN }}
     -
         name: Build Container Image
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v6
         with:
             context: .
             file: ./Dockerfile
-            platforms: linux/amd64
+            # arm64 as well as amd64, so the same published image runs on a
+            # Raspberry Pi instead of only on the deployment server.
+            platforms: linux/amd64,linux/arm64
             push: true
             tags: geunsam2/korailbot:latest
             cache-from: type=gha

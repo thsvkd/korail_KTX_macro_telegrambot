@@ -1,0 +1,34 @@
+# Install once with: uv run pre-commit install
+#
+# The same ruff rules the CI 'check' job enforces, applied before the commit
+# rather than after the push. Versions are pinned and kept current by
+# dependabot along with everything else.
+exclude: '^\.claude/|^\.omc/'
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.0
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.9.7
+    hooks:
+      # Fails when pyproject.toml has moved on without uv.lock being redone,
+      # which is what makes `uv sync --frozen` reproducible everywhere else.
+      - id: uv-lock
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      # Nothing in .env belongs in git; this catches a private key that slips
+      # past .gitignore too.
+      - id: detect-private-key

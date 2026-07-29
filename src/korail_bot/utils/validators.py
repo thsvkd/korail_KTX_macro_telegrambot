@@ -224,13 +224,21 @@ class InputValidator:
 
         # Check for invalid characters
         if not station.replace(" ", "").replace("-", "").isalnum():
-            # Allow Korean, numbers, spaces, and hyphens only
+            # Allow Korean, numbers, spaces, hyphens and brackets.
+            #
+            # Brackets are not decoration: Korail disambiguates four of its
+            # own stations with them - 울산(통도사), 진부(오대산), 판교(경기),
+            # 판교(충남). Refusing them here rejected the name the station
+            # list itself holds, so those four could not be reached at all,
+            # and the error blamed the user for a typo they had not made.
             if not all(
                 c.isalnum()
                 or c
                 in [
                     " ",
                     "-",
+                    "(",
+                    ")",
                     "ㄱ",
                     "ㄴ",
                     "ㄷ",

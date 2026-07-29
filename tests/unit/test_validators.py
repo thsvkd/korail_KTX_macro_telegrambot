@@ -234,6 +234,27 @@ class TestStationNameValidation:
         valid, error = InputValidator.validate_station_name("   ")
         assert valid is False
 
+    @pytest.mark.parametrize(
+        "station", ["울산(통도사)", "진부(오대산)", "판교(경기)", "판교(충남)"]
+    )
+    def test_valid_station_with_brackets(self, station):
+        """
+        Korail disambiguates four of its own stations with brackets.
+
+        These were refused as containing special characters, which put the
+        stations out of reach entirely and told the user their spelling was
+        wrong when it matched the station list exactly.
+        """
+        valid, error = InputValidator.validate_station_name(station)
+        assert valid is True, error
+
+    @pytest.mark.parametrize("station", ["서울;drop", "부산<script>", '대전"', "서울&부산"])
+    def test_invalid_station_special_characters_still_refused(self, station):
+        """Allowing brackets must not have opened the check up generally."""
+        valid, error = InputValidator.validate_station_name(station)
+        assert valid is False
+        assert "특수문자" in error
+
 
 class TestYesNoValidation:
     """Test yes/no validation."""

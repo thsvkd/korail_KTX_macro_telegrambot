@@ -32,8 +32,20 @@ typecheck:		## Run mypy
 	uv run --frozen mypy
 
 .PHONY: run
-run:			## Run the application locally
+run:			## Run the application locally (foreground, replaces a running one)
 	./scripts/run.sh
+
+.PHONY: daemon
+daemon:			## Run the application in the background, logging to .run/
+	./scripts/run.sh --daemon
+
+.PHONY: stop
+stop:			## Stop the running application
+	./scripts/run.sh --stop
+
+.PHONY: status
+status:			## Show what the application is doing
+	./scripts/status.sh
 
 .PHONY: dev-redis
 dev-redis:		## Start the local development Redis (127.0.0.1:6379)

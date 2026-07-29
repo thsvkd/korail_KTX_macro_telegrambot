@@ -21,7 +21,8 @@ scripts/set-webhook.sh https://your.domain/telebot
 | --- | --- |
 | `setup.sh` | `.env` 생성, 시크릿 발급, 의존성 설치. `--no-deps` 로 의존성 설치 생략 |
 | `gen-secrets.sh` | 비어 있는 시크릿 생성. `--print` 출력만, `--force` 재발급(로테이션) |
-| `run.sh` | 로컬에서 봇 실행. Redis 연결 확인 후 기동. `--debug` 는 로그 레벨만 DEBUG |
+| `run.sh` | 봇 실행. waitress 로 서비스하며, **이미 돌고 있는 봇이 있으면 정지시키고 새로 띄운다**. `--daemon` 백그라운드 실행(로그 `.run/korail-bot.log`), `--stop` 정지, `--debug` 는 로그 레벨만 DEBUG |
+| `status.sh` | 봇 상태 보고: 프로세스·기동 방식·포트·Redis·진행 중인 검색·결제 대기. `--log [N]` 로그 함께 출력. 봇이 꺼져 있으면 종료코드 1 |
 | `dev-redis.sh` | 로컬 개발용 Redis 컨테이너(127.0.0.1:6379). `stop`, `status` 인자 지원 |
 | `test.sh` | 테스트 실행. `tests/unit` 처럼 경로나 pytest 플래그를 그대로 전달 가능. Redis 는 testcontainers 가 띄우므로 Docker 필요 |
 | `security-check.sh` | 설정 점검(시크릿 누락, 디버그 모드, Redis 노출, `.env` 커밋 여부) |

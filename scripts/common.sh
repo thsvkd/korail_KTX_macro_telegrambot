@@ -198,3 +198,128 @@ can_import() {
     # shellcheck disable=SC2046
     $(python_runner) -c "import $1" >/dev/null 2>&1
 }
+
+# ==================== The running bot ====================
+#
+# Two consumers of one bot token means Telegram hands each update to whichever
+# asked first and answers the other with a 409, so a second copy of the bot is
+# never something to start alongside the first. Everything below exists to
+# find the one that is already running.
+
+RUN_DIR="${ROOT_DIR}/.run"
+PID_FILE="${RUN_DIR}/korail-bot.pid"
+LOG_FILE="${RUN_DIR}/korail-bot.log"
+
+# _pid_cmdline <pid> - the process's command line, spaces between arguments
+_pid_cmdline() {
+    local pid="$1"
+    [[ -r "/proc/${pid}/cmdline" ]] || return 1
+    tr '\0' ' ' < "/proc/${pid}/cmdline"
+}
+
+# _is_bot <pid> - true when the pid is really one of ours
+#
+# The number in the pidfile is only a claim. Pids get reused, so a stale file
+# can name a process that has nothing to do with us, and signalling that would
+# kill a stranger. The command line has to agree before we touch it.
+_is_bot() {
+    local pid="$1" cmd
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    cmd="$(_pid_cmdline "$pid")" || return 1
+    [[ "$cmd" == *korail_bot.app* ]]
+}
+
+# bot_pids - every pid belonging to a running bot, one per line
+#
+# The pidfile is only the first place to look. The app can be started by hand
+# and often is, and a copy started that way is exactly the duplicate this is
+# meant to catch, so the process table is consulted too.
+bot_pids_all() {
+    local pid
+    while read -r pid; do
+        _is_bot "$pid" && echo "$pid"
+    done < <({
+        [[ -f "$PID_FILE" ]] && cat "$PID_FILE" 2>/dev/null
+        # korail_bot[.]app: matches both `-m korail_bot.app` and the
+        # `korail_bot.app:application` waitress serves, without the pattern
+        # matching the pgrep that carries it.
+        pgrep -f 'korail_bot[.]app' 2>/dev/null || true
+    } | sort -u)
+}
+
+# bot_pids - one pid per running bot, the outermost process of each
+#
+# Started through 'uv run' the bot is a launcher holding an interpreter: two
+# processes, one bot. Counting both would report a duplicate, and a duplicate
+# is the thing worth shouting about, so anything whose parent is also on the
+# list is dropped.
+#
+# For signalling use bot_pids_all instead. Stopping only the outermost would
+# rely on the launcher passing the signal down, and a launcher that does not
+# leaves the interpreter running - which is the duplicate this was supposed
+# to prevent.
+bot_pids() {
+    local pid ppid found=()
+    while read -r pid; do found+=("$pid"); done < <(bot_pids_all)
+
+    for pid in "${found[@]:-}"; do
+        [[ -n "$pid" ]] || continue
+        ppid="$(awk '{print $4}' "/proc/${pid}/stat" 2>/dev/null || true)"
+        if [[ -n "$ppid" ]] && printf '%s\n' "${found[@]}" | grep -qx "$ppid"; then
+            continue
+        fi
+        echo "$pid"
+    done
+}
+
+# bot_pid - the pid to report, empty when nothing is running
+#
+# Takes the first line with a parameter expansion rather than piping into
+# head: under `set -o pipefail` head closes the pipe on the line it wanted and
+# the producer dies of SIGPIPE, which then reads as the whole command failing.
+bot_pid() {
+    local pids
+    pids="$(bot_pids)"
+    [[ -n "$pids" ]] || return 0
+    printf '%s\n' "${pids%%$'\n'*}"
+}
+
+# bot_uptime <pid> - how long the process has been up
+bot_uptime() { ps -o etime= -p "$1" 2>/dev/null | tr -d ' '; }
+
+# bot_stop [timeout] - stop the running bot and wait for it to be gone
+#
+# SIGTERM rather than SIGKILL, and then a wait: the app's handler takes its
+# search processes down with it and deliberately leaves their records in
+# Redis, which is what lets the next start pick the searches back up. Killed
+# outright it would leave them orphaned, still logged in and still asking
+# Korail for a train nobody is waiting for any more.
+bot_stop() {
+    local timeout="${1:-20}" pids waited=0
+    pids="$(bot_pids_all | tr '\n' ' ')"
+    [[ -n "${pids// /}" ]] || return 0
+
+    info "Stopping the running bot (pid ${pids% })"
+    # shellcheck disable=SC2086
+    kill -TERM $pids 2>/dev/null || true
+
+    while (( waited < timeout )); do
+        if [[ -z "$(bot_pids_all)" ]]; then
+            rm -f "$PID_FILE"
+            ok "Stopped"
+            return 0
+        fi
+        sleep 1
+        waited=$(( waited + 1 ))
+    done
+
+    warn "Still running after ${timeout}s - sending SIGKILL"
+    # shellcheck disable=SC2046
+    kill -KILL $(bot_pids_all | tr '\n' ' ') 2>/dev/null || true
+    sleep 1
+    rm -f "$PID_FILE"
+    [[ -z "$(bot_pids_all)" ]] || die "Could not stop the bot"
+    warn "Killed rather than asked. A search process may have outlived it;"
+    warn "the next start reconciles whatever Redis still has a record of."
+}

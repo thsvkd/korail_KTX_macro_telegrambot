@@ -24,3 +24,6 @@ htmlcov/
 # Agent scratch state
 .omc/
 .claude/
+
+# Runtime state for scripts/run.sh --daemon: pidfile and log.
+.run/

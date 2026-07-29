@@ -19,7 +19,15 @@ cd korail_KTX_macro_telegrambot
 
 # 실행 (기본값인 폴링 모드는 공인 IP·HTTPS 없이 바로 동작합니다)
 ./scripts/run.sh
+
+# 계속 띄워둘 거라면 백그라운드로. 상태는 status.sh 로 봅니다.
+./scripts/run.sh --daemon
+./scripts/status.sh
 ```
+
+봇은 한 번에 하나만 돌아야 합니다 — 같은 토큰을 둘이 물면 텔레그램이 한쪽에
+409 를 돌려주고 업데이트가 갈라집니다. 그래서 `run.sh` 는 기동 전에 이미
+돌고 있는 봇을 먼저 정지시킵니다.
 
 스크립트 전체 목록은 [scripts/README.md](scripts/README.md)를 참고하세요.
 
@@ -74,7 +82,10 @@ cd korail_KTX_macro_telegrambot
 **사용 가능한 명령어:** `make help` 또는 [scripts/README.md](scripts/README.md)
 
 - `make setup` / `./scripts/setup.sh` - 개발 환경 설정
-- `make run` / `./scripts/run.sh` - 애플리케이션 실행
+- `make run` / `./scripts/run.sh` - 애플리케이션 실행 (포그라운드)
+- `make daemon` / `./scripts/run.sh --daemon` - 백그라운드 실행
+- `make stop` / `./scripts/run.sh --stop` - 정지
+- `make status` / `./scripts/status.sh` - 상태 확인
 - `make test` / `./scripts/test.sh` - 테스트 실행
 - `make secrets` / `./scripts/gen-secrets.sh` - 시크릿 발급 및 로테이션
 - `make security-check` / `./scripts/security-check.sh` - 설정 보안 점검

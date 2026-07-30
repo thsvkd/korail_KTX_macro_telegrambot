@@ -335,6 +335,17 @@ class Settings:
         if not cls.ADMIN_PASSWORD:
             messages.append("ADMIN_PASSWORD is not set - all admin commands are disabled.")
 
+        # Typed anywhere in any chat, and a correct guess is a standing grant
+        # of the admin surface. Wrong guesses cannot be counted - every
+        # ordinary message would look like one - so length is the defence.
+        if cls.ADMIN_MAGIC_STRING and len(cls.ADMIN_MAGIC_STRING) < 16:
+            messages.append(
+                f"ADMIN_MAGIC_STRING is only {len(cls.ADMIN_MAGIC_STRING)} characters. "
+                "It turns any chat that types it into a developer chat, and failed "
+                "guesses cannot be rate limited, so use at least 16 characters of "
+                "something nobody would send by accident."
+            )
+
         if cls.has_preconfigured_korail_credentials():
             messages.append(
                 "USERID/USERPW are set - anyone who talks to the bot reserves "

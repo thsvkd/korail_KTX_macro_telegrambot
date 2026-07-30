@@ -584,23 +584,6 @@ class RedisStorage(StorageInterface):
 
     # ==================== Subscriber Management ====================
 
-    def is_subscriber(self, chat_id: int) -> bool:
-        """Check if user is a subscriber."""
-        return self.redis.sismember("subscribers", str(chat_id))
-
-    def add_subscriber(self, chat_id: int) -> None:
-        """Add subscriber."""
-        self.redis.sadd("subscribers", str(chat_id))
-
-    def remove_subscriber(self, chat_id: int) -> None:
-        """Remove subscriber."""
-        self.redis.srem("subscribers", str(chat_id))
-
-    def get_all_subscribers(self) -> list[int]:
-        """Get all subscriber chat IDs."""
-        members = self.redis.smembers("subscribers")
-        return [int(m) for m in members]
-
     # ==================== Admin Management ====================
 
     def is_admin_authenticated(self, chat_id: int) -> bool:

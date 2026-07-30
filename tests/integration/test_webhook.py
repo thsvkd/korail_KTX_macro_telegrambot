@@ -283,7 +283,7 @@ class TestTelegramWebhook:
 
         # Set waiting for admin password
         self.storage.set_waiting_for_admin_password(chat_id, True)
-        self.storage.set_pending_admin_command(chat_id, "/subscribe")
+        self.storage.set_pending_admin_command(chat_id, "/allusers")
 
         payload = {"message": {"chat": {"id": chat_id}, "text": "admin_password"}}
 
@@ -378,11 +378,11 @@ class TestWebhookCommandRouting:
         assert response.status_code == 200
         self.telegram.send_message.assert_called_once()
 
-    def test_subscribe_command_requires_auth(self):
-        """Test /subscribe command requires authentication."""
+    def test_admin_command_requires_auth(self):
+        """Test an admin command requires authentication."""
         chat_id = 12345
 
-        payload = {"message": {"chat": {"id": chat_id}, "text": "/subscribe"}}
+        payload = {"message": {"chat": {"id": chat_id}, "text": "/allusers"}}
 
         response = self.client.post("/telebot", json=payload, headers=self.auth_headers)
 

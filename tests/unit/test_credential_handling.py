@@ -40,7 +40,6 @@ def search_params():
 @pytest.fixture
 def service():
     storage = Mock(spec=StorageInterface)
-    storage.get_all_subscribers.return_value = []
     storage.get_user_session.return_value = None
     # Nothing running for this chat; otherwise the duplicate guard refuses to
     # start, because a bare Mock answers every lookup with a truthy Mock.
@@ -152,12 +151,3 @@ class TestStatusPrivacy:
         assert "20991231" in status
         # Not even the caller's own number needs to be echoed back.
         assert USERNAME not in status
-
-    def test_subscriber_notification_masks_the_phone_number(self, service, search_params):
-        service.storage.get_all_subscribers.return_value = [1, 2]
-
-        service._notify_subscribers_start(USERNAME, search_params)
-
-        message = service.telegram.send_to_multiple.call_args[0][1]
-        assert USERNAME not in message
-        assert "010-****-5678" in message

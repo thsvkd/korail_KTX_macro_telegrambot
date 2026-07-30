@@ -8,7 +8,6 @@ from korail_bot.handlers import TelegramUpdateProcessor
 from korail_bot.services import PaymentReminderService, ReservationService, TelegramService
 from korail_bot.storage.base import StorageInterface
 from korail_bot.utils.logger import get_logger
-from korail_bot.utils.privacy import mask_phone
 
 logger = get_logger(__name__)
 
@@ -181,14 +180,6 @@ class TelegramWebhook(Resource):
                 self.storage.delete_running_reservation(chat_id)
                 self.storage.delete_resume_credentials(chat_id)
                 self.storage.delete_app_session_start(chat_id)
-
-                # Notify subscribers
-                subscribers = self.storage.get_all_subscribers()
-                if session and session.credentials:
-                    user_id = mask_phone(session.credentials.korail_id)
-                    self.telegram.send_to_multiple(
-                        subscribers, f"{user_id}의 예약이 종료되었습니다."
-                    )
 
             return make_response("OK")
 

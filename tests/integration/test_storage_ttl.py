@@ -83,7 +83,7 @@ CASES = [
     ),
     (
         "pending admin command",
-        lambda s: s.set_pending_admin_command(CHAT_ID, "/subscribe"),
+        lambda s: s.set_pending_admin_command(CHAT_ID, "/allusers"),
         f"pending_admin_command:{CHAT_ID}",
         300,
     ),

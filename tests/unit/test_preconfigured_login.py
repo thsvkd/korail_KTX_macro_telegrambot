@@ -32,7 +32,6 @@ def handler(session):
     storage = Mock(spec=StorageInterface)
     storage.get_user_session.return_value = session
     storage.get_or_create_app_session_start.return_value = 1700000000
-    storage.get_all_subscribers.return_value = []
     return ConversationHandler(storage, Mock(spec=TelegramService), Mock(spec=ReservationService))
 
 

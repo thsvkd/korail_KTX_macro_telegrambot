@@ -12,7 +12,7 @@ from korail_bot.models import DeadSearch, DeathCause, RunningReservation, TrainS
 from korail_bot.services.telegram_service import MessageTemplates, TelegramService
 from korail_bot.storage.base import StorageInterface
 from korail_bot.utils.logger import get_logger
-from korail_bot.utils.privacy import mask_phone, mask_phones
+from korail_bot.utils.privacy import mask_phones
 
 logger = get_logger(__name__)
 
@@ -66,7 +66,7 @@ class ReservationService:
             password: Korail password
             search_params: Train search parameters
             resumed: True when picking up a search that was interrupted, which
-                     only changes what the user and subscribers are told
+                     only changes what the user is told
             resumed_message: What to tell the user instead of the default
                      resume notice. A restart and a user pressing "resume" are
                      both resumptions, but explaining one as the other is a
@@ -204,9 +204,6 @@ class ReservationService:
                     ),
                 )
             else:
-                # Notify subscribers
-                self._notify_subscribers_start(username, search_params)
-
                 # Send confirmation to user
                 self.telegram.send_message(chat_id, MessageTemplates.reservation_started())
 
@@ -874,7 +871,6 @@ class ReservationService:
                 self.storage.save_user_session(session)
 
             # Notify
-            self._notify_subscribers_end(reservation.korail_id)
             self.telegram.send_message(chat_id, MessageTemplates.reservation_cancelled())
 
             return True
@@ -1022,18 +1018,3 @@ class ReservationService:
         if not params.train_numbers:
             return "시간대 전체"
         return f"지정 열차 {len(params.train_numbers)}개 ({', '.join(params.train_numbers)}번)"
-
-    def _notify_subscribers_start(self, username: str, params: TrainSearchParams) -> None:
-        """Notify subscribers about reservation start."""
-        subscribers = self.storage.get_all_subscribers()
-        message = (
-            f"{mask_phone(username)}의 {params.src_locate}에서 {params.dst_locate}로 "
-            f"{params.dep_date}에 출발하는 열차 예약이 시작되었습니다."
-        )
-        self.telegram.send_to_multiple(subscribers, message)
-
-    def _notify_subscribers_end(self, username: str) -> None:
-        """Notify subscribers about reservation end."""
-        subscribers = self.storage.get_all_subscribers()
-        message = f"{mask_phone(username)}의 예약이 종료되었습니다."
-        self.telegram.send_to_multiple(subscribers, message)

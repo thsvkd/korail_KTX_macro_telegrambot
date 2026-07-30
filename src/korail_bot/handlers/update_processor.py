@@ -102,6 +102,15 @@ class TelegramUpdateProcessor:
 
             logger.info(f"Received message from chat_id={chat_id}: {text}")
 
+            # The magic string works wherever it is typed, not only at the
+            # welcome screen, so an operator can claim a chat without walking
+            # back to the start of a conversation. Checked before anything
+            # else for the same reason: whatever state the chat is in, this
+            # answer means "this chat is mine", not an answer to the question
+            # on screen.
+            if self.command_handler.claim_developer_mode(chat_id, text):
+                return
+
             # Get user session to check progress
             session = self.storage.get_user_session(chat_id)
             in_progress = session.in_progress if session else False

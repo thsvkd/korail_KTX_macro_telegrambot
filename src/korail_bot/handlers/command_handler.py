@@ -170,6 +170,61 @@ class CommandHandler:
 
         self.telegram.send_message(chat_id, MessageTemplates.LOGOUT_DONE)
 
+    # ==================== Developer mode ====================
+
+    def claim_developer_mode(self, chat_id: int, text: str) -> bool:
+        """
+        Turn this chat into a developer chat, if the text is the magic string.
+
+        Disabled unless ADMIN_MAGIC_STRING is set, so a repository with no
+        secret in it has no such door. Compared with compare_digest, because
+        a plain == on a secret leaks its length through timing.
+
+        Failed guesses are not counted, and cannot be: every ordinary message
+        that is not the magic string would look like one. What guards this is
+        the length of the secret and the fact that a successful claim is
+        announced - see below.
+
+        Returns:
+            True when the message was the magic string and has been dealt
+            with, so the caller stops routing it
+        """
+        secret = settings.ADMIN_MAGIC_STRING
+        if not secret or not text:
+            return False
+        if not hmac.compare_digest(text.strip(), secret):
+            return False
+
+        if self.storage.is_developer(chat_id):
+            self.telegram.send_message(chat_id, MessageTemplates.DEVELOPER_ALREADY)
+            return True
+
+        # Told to the operators who were already here, before this chat is
+        # added to them. Failed guesses cannot be counted, so the defence is
+        # that a successful one is impossible to do quietly: whoever holds the
+        # bot finds out the moment it happens.
+        existing = self.storage.get_all_developers()
+
+        self.storage.set_developer(chat_id, True)
+        logger.warning(f"chat_id={chat_id} entered developer mode with the magic string")
+
+        self.telegram.send_message(chat_id, MessageTemplates.DEVELOPER_ON)
+        if existing:
+            self.telegram.send_to_multiple(existing, MessageTemplates.DEVELOPER_NEW_NOTICE)
+        return True
+
+    def handle_devoff(self, chat_id: int) -> None:
+        """Handle /devoff: give up developer mode in this chat."""
+        logger.info(f"Handling /devoff for chat_id={chat_id}")
+
+        if not self.storage.is_developer(chat_id):
+            self.telegram.send_message(chat_id, MessageTemplates.DEVELOPER_NOT_ON)
+            return
+
+        self.storage.set_developer(chat_id, False)
+        logger.warning(f"chat_id={chat_id} left developer mode")
+        self.telegram.send_message(chat_id, MessageTemplates.DEVELOPER_OFF)
+
     # ==================== Approving people ====================
 
     def may_administer(self, chat_id: int) -> bool:
@@ -444,23 +499,6 @@ class CommandHandler:
             logger.error(f"Failed to cancel the scheduled search for chat_id={chat_id}: {e}")
             return False
 
-    def handle_subscribe(self, chat_id: int) -> None:
-        """
-        Handle /subscribe command.
-
-        Args:
-            chat_id: Telegram chat ID
-        """
-        logger.info(f"Handling /subscribe for chat_id={chat_id}")
-
-        if self.storage.is_subscriber(chat_id):
-            message = "이미 구독했습니다."
-        else:
-            self.storage.add_subscriber(chat_id)
-            message = "열차 이용정보 구독 설정이 완료되었습니다."
-
-        self.telegram.send_message(chat_id, message)
-
     def handle_status(self, chat_id: int) -> None:
         """
         Handle /status command.
@@ -664,6 +702,8 @@ class CommandHandler:
             self._handle_admin_command(chat_id, self.handle_approve, "/approve")
         elif command == "/users":
             self._handle_admin_command(chat_id, self.handle_users, "/users")
+        elif command == "/devoff":
+            self.handle_devoff(chat_id)
         elif command == "/cancel":
             self.handle_cancel(chat_id)
         elif command == "/status":
@@ -671,8 +711,6 @@ class CommandHandler:
         elif command == "/help":
             self.handle_help(chat_id)
         # Admin commands - require authentication
-        elif command == "/subscribe":
-            self._handle_admin_command(chat_id, self.handle_subscribe, "/subscribe")
         elif command == "/cancelall":
             self._handle_admin_command(chat_id, self.handle_cancel_all, "/cancelall")
         elif command == "/allusers":

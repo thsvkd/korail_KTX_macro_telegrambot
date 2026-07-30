@@ -223,27 +223,6 @@ class StorageInterface(ABC):
         """Delete payment status."""
         pass
 
-    # Subscriber Management
-    @abstractmethod
-    def add_subscriber(self, chat_id: int) -> None:
-        """Add a subscriber for notifications."""
-        pass
-
-    @abstractmethod
-    def remove_subscriber(self, chat_id: int) -> None:
-        """Remove a subscriber."""
-        pass
-
-    @abstractmethod
-    def get_all_subscribers(self) -> list[int]:
-        """Get all subscriber chat IDs."""
-        pass
-
-    @abstractmethod
-    def is_subscriber(self, chat_id: int) -> bool:
-        """Check if chat ID is a subscriber."""
-        pass
-
     # Admin Session Management
     @abstractmethod
     def is_admin_authenticated(self, chat_id: int) -> bool:

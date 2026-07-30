@@ -60,22 +60,6 @@ class TestRefactoredArchitecture:
         updated = self.storage.get_payment_status(12345)
         assert updated.completed is True
 
-    def test_storage_subscribers(self):
-        """Test storage can manage subscribers."""
-        assert len(self.storage.get_all_subscribers()) == 0
-
-        self.storage.add_subscriber(111)
-        self.storage.add_subscriber(222)
-
-        assert len(self.storage.get_all_subscribers()) == 2
-        assert self.storage.is_subscriber(111)
-        assert self.storage.is_subscriber(222)
-        assert not self.storage.is_subscriber(333)
-
-        self.storage.remove_subscriber(111)
-        assert len(self.storage.get_all_subscribers()) == 1
-        assert not self.storage.is_subscriber(111)
-
     def test_command_handler_initialization(self):
         """Test command handler can be initialized."""
         handler = CommandHandler(

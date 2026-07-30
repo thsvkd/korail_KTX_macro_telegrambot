@@ -27,6 +27,7 @@ class CommandHandler:
         telegram_service: TelegramService,
         reservation_service: ReservationService,
         payment_reminder_service: PaymentReminderService,
+        conversation_handler=None,
     ):
         """
         Initialize command handler.
@@ -36,11 +37,16 @@ class CommandHandler:
             telegram_service: Telegram messaging service
             reservation_service: Reservation service
             payment_reminder_service: Payment reminder service
+            conversation_handler: Used by /start to log in with an account the
+                chat registered earlier, which is the conversation's job and
+                is done there. Optional so that tests exercising the plain
+                commands do not have to build one.
         """
         self.storage = storage
         self.telegram = telegram_service
         self.reservation = reservation_service
         self.payment_reminder = payment_reminder_service
+        self.conversation = conversation_handler
 
     def handle_start(self, chat_id: int) -> None:
         """
@@ -62,6 +68,25 @@ class CommandHandler:
         session.last_action = UserProgress.STARTED
         self.storage.save_user_session(session)
 
+        # An account registered earlier means the two login questions have
+        # already been answered, so /start goes straight to picking a date.
+        # The operator's own account (USERID/USERPW) wins over a registration,
+        # because that setting exists to make the bot use one account for
+        # everyone regardless of what anyone registered.
+        if self.conversation and not settings.has_preconfigured_korail_credentials():
+            if self.conversation.resume_with_registered_account(chat_id, session):
+                return
+
+            # Nothing registered: say what registering is before asking for a
+            # Korail password. The generic welcome does not mention that the
+            # login is kept, and that is the part a user should agree to.
+            self.telegram.send_message(
+                chat_id,
+                MessageTemplates.ONBOARDING_INTRO,
+                reply_markup=keyboards.onboarding_start_keyboard(),
+            )
+            return
+
         # Send welcome message
         self.telegram.send_message(
             chat_id,
@@ -70,6 +95,74 @@ class CommandHandler:
             ),
             reply_markup=keyboards.start_confirm_keyboard(),
         )
+
+    def handle_onboarding(self, chat_id: int) -> None:
+        """
+        Handle /onboarding (/init): register a Korail account.
+
+        Separate from /start because re-registering is a thing people need to
+        do on purpose - a changed Korail password, a different account - and
+        /start deliberately skips straight past the login once one is stored.
+        """
+        logger.info(f"Handling /onboarding for chat_id={chat_id}")
+
+        if settings.has_preconfigured_korail_credentials():
+            # Registering would achieve nothing: the operator's account is
+            # used for everyone and a stored one would never be consulted.
+            self.telegram.send_message(chat_id, MessageTemplates.ONBOARDING_NOT_NEEDED)
+            return
+
+        session = self.storage.get_user_session(chat_id)
+        if not session:
+            session = UserSession(chat_id=chat_id, in_progress=False, last_action=UserProgress.INIT)
+
+        existing = self.storage.get_onboarded_account(chat_id)
+        if existing:
+            session.in_progress = True
+            session.last_action = UserProgress.ONBOARDING_OVERWRITE_PENDING
+            self.storage.save_user_session(session)
+            self.telegram.send_message(
+                chat_id,
+                MessageTemplates.ONBOARDING_ALREADY.format(
+                    korailId=mask_phone(existing.korail_id),
+                    onboardedAt=f"{existing.onboarded_at:%m월 %d일 %H:%M}",
+                ),
+                reply_markup=keyboards.onboarding_overwrite_keyboard(),
+            )
+            return
+
+        session.in_progress = True
+        session.last_action = UserProgress.STARTED
+        self.storage.save_user_session(session)
+        self.telegram.send_message(
+            chat_id,
+            MessageTemplates.ONBOARDING_INTRO,
+            reply_markup=keyboards.onboarding_start_keyboard(),
+        )
+
+    def handle_logout(self, chat_id: int) -> None:
+        """
+        Handle /logout: forget the registered Korail account.
+
+        Only the registration is dropped. A search that is already running
+        keeps its own copy of the login and is left alone - stopping someone's
+        search is what /cancel is for, and doing it here would be a surprise.
+        """
+        logger.info(f"Handling /logout for chat_id={chat_id}")
+
+        if not self.storage.get_onboarded_account(chat_id):
+            self.telegram.send_message(chat_id, MessageTemplates.LOGOUT_NOTHING)
+            return
+
+        self.storage.delete_onboarded_account(chat_id)
+
+        session = self.storage.get_user_session(chat_id)
+        if session:
+            session.credentials = None
+            session.reset()
+            self.storage.save_user_session(session)
+
+        self.telegram.send_message(chat_id, MessageTemplates.LOGOUT_DONE)
 
     def handle_cancel(self, chat_id: int) -> None:
         """
@@ -354,6 +447,10 @@ class CommandHandler:
         # Public commands
         if command == "/start":
             self.handle_start(chat_id)
+        elif command in ("/onboarding", "/init"):
+            self.handle_onboarding(chat_id)
+        elif command == "/logout":
+            self.handle_logout(chat_id)
         elif command == "/cancel":
             self.handle_cancel(chat_id)
         elif command == "/status":

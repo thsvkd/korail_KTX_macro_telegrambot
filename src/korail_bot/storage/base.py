@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from korail_bot.models import (
     DeadSearch,
     MultiReservationStatus,
+    OnboardedAccount,
     PaymentStatus,
     RunningReservation,
     ScheduledSearch,
@@ -92,6 +93,22 @@ class StorageInterface(ABC):
     @abstractmethod
     def delete_dead_search(self, chat_id: int) -> None:
         """Forget a stopped search."""
+        pass
+
+    # Onboarded Account Management
+    @abstractmethod
+    def save_onboarded_account(self, account: "OnboardedAccount") -> None:
+        """Store the Korail account a chat registered."""
+        pass
+
+    @abstractmethod
+    def get_onboarded_account(self, chat_id: int) -> "OnboardedAccount | None":
+        """Get the account a chat registered."""
+        pass
+
+    @abstractmethod
+    def delete_onboarded_account(self, chat_id: int) -> None:
+        """Forget a registered account."""
         pass
 
     # Resume Credentials Management

@@ -38,6 +38,8 @@ STEP_SCHEDULE = "sch"
 STEP_CANCEL = "x"
 # Offered with the news that a search died, not as part of the conversation.
 STEP_DEAD = "dd"
+# Whether to replace an already registered Korail account.
+STEP_ONBOARD_OVERWRITE = "obw"
 
 # Answers to STEP_CONFIRM that are neither yes nor no.
 CONFIRM_SCHEDULE = "*schedule"
@@ -75,6 +77,7 @@ STEP_PROGRESS = {
     STEP_TRAIN_SELECT: UserProgress.SEAT_STRATEGY_INPUT_SUCCESS,
     STEP_CONFIRM: UserProgress.TRAIN_SELECT_INPUT_SUCCESS,
     STEP_SCHEDULE: UserProgress.SCHEDULE_INPUT_PENDING,
+    STEP_ONBOARD_OVERWRITE: UserProgress.ONBOARDING_OVERWRITE_PENDING,
 }
 
 # Steps whose question survives being answered.
@@ -325,6 +328,33 @@ def schedule_keyboard(now: datetime | None = None) -> InlineKeyboard:
         [_manual_button(STEP_SCHEDULE)],
         [_button("◀️ 뒤로", STEP_SCHEDULE, SCHEDULE_BACK)],
         _cancel_row(),
+    )
+
+
+def onboarding_start_keyboard() -> InlineKeyboard:
+    """
+    The way into registering a Korail account.
+
+    Same shape as the welcome confirmation, and deliberately so: registering
+    is what "yes, go ahead" means for someone who has not done it yet.
+    """
+    return _keyboard(
+        [_button("🔑 계정 등록 시작", STEP_START_CONFIRM, "Y")],
+        [_button("❌ 그만두기", STEP_START_CONFIRM, "N")],
+    )
+
+
+def onboarding_overwrite_keyboard() -> InlineKeyboard:
+    """
+    Whether to replace an account that is already registered.
+
+    Registering again throws away a working login, so it is confirmed rather
+    than done on the way past - and "keep" is the safe answer, so it is the
+    one that needs no thought.
+    """
+    return _keyboard(
+        [_button("🔄 다시 등록", STEP_ONBOARD_OVERWRITE, "Y")],
+        [_button("❌ 그대로 두기", STEP_ONBOARD_OVERWRITE, "N")],
     )
 
 

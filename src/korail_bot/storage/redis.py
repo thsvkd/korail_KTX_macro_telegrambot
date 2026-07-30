@@ -11,6 +11,7 @@ from korail_bot.models import (
     DeadSearch,
     DeathCause,
     MultiReservationStatus,
+    OnboardedAccount,
     PaymentStatus,
     RunningReservation,
     ScheduledSearch,
@@ -260,6 +261,61 @@ class RedisStorage(StorageInterface):
                 except (json.JSONDecodeError, KeyError):
                     continue
         return reservations
+
+    # ==================== Onboarded accounts ====================
+
+    def save_onboarded_account(self, account: OnboardedAccount) -> None:
+        """
+        Store the Korail account a chat registered, encrypted.
+
+        Unlike the resume credentials, this outlives the booking it was
+        entered for - that is what registering once buys. It is kept in a key
+        of its own rather than on the session, because the session is reset at
+        the end of every flow and would take the registration with it.
+        """
+        key = f"user_credentials:{account.chat_id}"
+        box = get_secret_box()
+        data = json.dumps(
+            {
+                "korail_id": box.encrypt(account.korail_id),
+                "korail_pw": box.encrypt(account.korail_pw),
+                "onboarded_at": account.onboarded_at.isoformat(),
+            }
+        )
+        self.redis.set(key, data, ex=settings.CREDENTIAL_TTL_SECONDS)
+        logger.debug(f"Saved onboarded account for chat_id={account.chat_id}")
+
+    def get_onboarded_account(self, chat_id: int) -> OnboardedAccount | None:
+        """
+        Get the account a chat registered.
+
+        Returns:
+            The account, or None when absent or undecryptable. The latter
+            happens when SESSION_SECRET changed, and the caller then treats
+            the chat as not registered - which is the truth, since nothing
+            can log in with what cannot be read.
+        """
+        data = self.redis.get(f"user_credentials:{chat_id}")
+        if not data:
+            return None
+
+        try:
+            stored = json.loads(data)
+            box = get_secret_box()
+            return OnboardedAccount(
+                chat_id=chat_id,
+                korail_id=box.decrypt(stored["korail_id"]),
+                korail_pw=box.decrypt(stored["korail_pw"]),
+                onboarded_at=datetime.fromisoformat(stored["onboarded_at"]),
+            )
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            logger.error(f"Could not read the onboarded account for chat_id={chat_id}: {e}")
+            return None
+
+    def delete_onboarded_account(self, chat_id: int) -> None:
+        """Forget a registered account."""
+        self.redis.delete(f"user_credentials:{chat_id}")
+        logger.debug(f"Deleted onboarded account for chat_id={chat_id}")
 
     # ==================== Resume Credentials Management ====================
 

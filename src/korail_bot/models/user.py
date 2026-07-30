@@ -1,6 +1,7 @@
 """User data models."""
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -13,6 +14,27 @@ class UserCredentials:
 
     korail_id: str  # Phone number format: 010-xxxx-xxxx
     korail_pw: str
+
+
+@dataclass
+class OnboardedAccount:
+    """
+    The Korail account a chat registered once and reuses from then on.
+
+    Held apart from the session because the session is reset at the end of
+    every booking, and a registration that disappeared with the booking it was
+    made for would not be a registration at all. Encrypted at rest, given an
+    expiry, and deleted the moment the user logs out or blocks the bot.
+    """
+
+    chat_id: int
+    korail_id: str
+    korail_pw: str
+    onboarded_at: datetime = field(default_factory=lambda: datetime.now())
+
+    def as_credentials(self) -> UserCredentials:
+        """The same account in the shape the conversation flow expects."""
+        return UserCredentials(korail_id=self.korail_id, korail_pw=self.korail_pw)
 
 
 @dataclass
@@ -74,3 +96,7 @@ class UserProgress:
     # Waiting for the time at which the search should begin. Only reached by
     # asking for it from the summary - the default is still to start now.
     SCHEDULE_INPUT_PENDING = 16
+    # Waiting on whether to replace an account that is already registered.
+    # Registering again is rare and destructive - it throws away a working
+    # login - so it is confirmed rather than done on the way past.
+    ONBOARDING_OVERWRITE_PENDING = 17

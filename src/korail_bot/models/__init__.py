@@ -11,12 +11,18 @@ from korail_bot.models.reservation import (
     SingleReservationInfo,
     TrainSearchParams,
 )
-from korail_bot.models.user import UserCredentials, UserProgress, UserSession
+from korail_bot.models.user import (
+    OnboardedAccount,
+    UserCredentials,
+    UserProgress,
+    UserSession,
+)
 
 __all__ = [
     "DeadSearch",
     "DeathCause",
     "MultiReservationStatus",
+    "OnboardedAccount",
     "PaymentStatus",
     "ReservationPaymentStatus",
     "RunningReservation",

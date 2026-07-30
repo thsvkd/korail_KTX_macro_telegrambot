@@ -48,12 +48,18 @@ class TelegramUpdateProcessor:
         # Initialize multi-reservation reminder service (singleton for thread tracking)
         self.multi_reminder = MultiReservationReminderService(storage, telegram_service)
 
-        # Initialize handlers
-        self.command_handler = CommandHandler(
-            storage, telegram_service, reservation_service, payment_reminder_service
-        )
+        # Initialize handlers. The conversation is built first: /start hands
+        # over to it when the chat already registered a Korail account, so the
+        # command handler needs it to exist.
         self.conversation_handler = ConversationHandler(
             storage, telegram_service, reservation_service
+        )
+        self.command_handler = CommandHandler(
+            storage,
+            telegram_service,
+            reservation_service,
+            payment_reminder_service,
+            conversation_handler=self.conversation_handler,
         )
 
     def process(self, update: dict) -> None:
@@ -68,8 +74,15 @@ class TelegramUpdateProcessor:
             update: Telegram update object as delivered by the Bot API
         """
         try:
-            # Ignore edited messages and chat member updates
-            if "edited_message" in update or "my_chat_member" in update:
+            # An edit is not a new answer, so it is ignored.
+            if "edited_message" in update:
+                return
+
+            # Being blocked or having the chat deleted is the user withdrawing
+            # from the bot, and the Korail login they registered has no reason
+            # to outlive that. This is the only notice Telegram gives.
+            if "my_chat_member" in update:
+                self.process_membership_change(update["my_chat_member"])
                 return
 
             # A button press arrives as its own update kind, carrying no
@@ -176,6 +189,37 @@ class TelegramUpdateProcessor:
 
         except Exception as e:
             logger.error(f"Error handling update: {e}", exc_info=True)
+
+    def process_membership_change(self, membership: dict) -> None:
+        """
+        Handle the user blocking the bot or deleting the chat.
+
+        Telegram reports this as a new_chat_member status of 'kicked' (blocked)
+        or 'left'. Either way the person is gone, and the Korail password they
+        registered should not sit in Redis waiting for them to come back.
+
+        A running search is left alone deliberately: it holds its own copy of
+        the login and may be minutes away from catching a seat the user asked
+        for. Ending searches is what /cancel and the watchdog are for.
+        """
+        try:
+            chat_id = int(membership["chat"]["id"])
+            status = membership["new_chat_member"]["status"]
+        except (KeyError, TypeError, ValueError):
+            logger.warning("Ignoring a my_chat_member update in an unexpected shape")
+            return
+
+        if status not in ("kicked", "left"):
+            # Anything else is the user starting or unblocking the bot, which
+            # needs nothing done: the next /start goes through the normal flow.
+            logger.info(f"Chat membership for chat_id={chat_id} changed to {status}")
+            return
+
+        logger.info(f"chat_id={chat_id} {status} the bot - dropping the registered account")
+        try:
+            self.storage.delete_onboarded_account(chat_id)
+        except Exception as e:
+            logger.error(f"Could not drop the account for chat_id={chat_id}: {e}")
 
     def process_callback_query(self, query: dict) -> None:
         """

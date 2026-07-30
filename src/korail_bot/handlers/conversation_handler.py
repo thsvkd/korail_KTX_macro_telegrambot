@@ -5,7 +5,13 @@ from datetime import datetime, timedelta
 from korail2 import ReserveOption
 
 from korail_bot.config.settings import settings
-from korail_bot.models import TrainSearchParams, UserCredentials, UserProgress, UserSession
+from korail_bot.models import (
+    OnboardedAccount,
+    TrainSearchParams,
+    UserCredentials,
+    UserProgress,
+    UserSession,
+)
 from korail_bot.services import KorailService, MessageTemplates, ReservationService, TelegramService
 from korail_bot.storage.base import StorageInterface
 from korail_bot.telegramBot import keyboards
@@ -92,6 +98,8 @@ class ConversationHandler:
             self._handle_final_confirmation(chat_id, text, session)
         elif progress == UserProgress.SCHEDULE_INPUT_PENDING:
             self._handle_schedule_input(chat_id, text, session)
+        elif progress == UserProgress.ONBOARDING_OVERWRITE_PENDING:
+            self._handle_onboarding_overwrite(chat_id, text, session)
         else:
             logger.error(f"Unknown progress state: {progress}")
             self.telegram.send_message(
@@ -217,6 +225,97 @@ class ConversationHandler:
 
             self.telegram.send_message(chat_id, Messages.ERROR_ADMIN_LOGIN)
 
+    def _handle_onboarding_overwrite(self, chat_id: int, text: str, session: UserSession) -> None:
+        """Handle the answer to 'you already have an account registered'."""
+        is_yes, error = InputValidator.validate_yes_no(text)
+
+        if is_yes is True:
+            # Dropped before asking for the new one. Half-finished registration
+            # would otherwise leave the old account in place while the user
+            # believes they replaced it.
+            self.storage.delete_onboarded_account(chat_id)
+            session.credentials = None
+            session.last_action = UserProgress.START_ACCEPTED
+            self.storage.save_user_session(session)
+            self.telegram.send_message(
+                chat_id,
+                MessageTemplates.request_phone_number(),
+                reply_markup=keyboards.cancel_only_keyboard(),
+            )
+        elif is_yes is False:
+            session.reset()
+            self.storage.save_user_session(session)
+            self.telegram.send_message(
+                chat_id, "기존 등록을 그대로 두었습니다.\n/start 로 예약을 시작할 수 있습니다."
+            )
+        else:
+            self.telegram.send_message(
+                chat_id, error, reply_markup=keyboards.onboarding_overwrite_keyboard()
+            )
+
+    def _remember_account(self, chat_id: int, username: str, password: str) -> None:
+        """
+        Store a verified Korail login so the user does not type it again.
+
+        Best effort: the booking the user is in the middle of matters more
+        than the convenience of the next one, so a storage failure is logged
+        and the flow carries on.
+        """
+        try:
+            self.storage.save_onboarded_account(
+                OnboardedAccount(chat_id=chat_id, korail_id=username, korail_pw=password)
+            )
+            logger.info(f"Registered Korail account for chat_id={chat_id}")
+        except Exception as e:
+            logger.error(f"Could not register the account for chat_id={chat_id}: {e}")
+
+    def resume_with_registered_account(self, chat_id: int, session: UserSession) -> bool:
+        """
+        Log in with the account this chat registered earlier.
+
+        Called instead of asking for a phone number and a password. The stored
+        password is verified against Korail rather than trusted: people change
+        their Korail password without telling the bot, and finding that out
+        here is far better than finding it out from a search that never runs.
+
+        Returns:
+            True when the session is logged in and ready for the date step
+        """
+        account = self.storage.get_onboarded_account(chat_id)
+        if not account:
+            return False
+
+        korail = KorailService(
+            app_session_start=self.storage.get_or_create_app_session_start(chat_id)
+        )
+        if not korail.login(account.korail_id, account.korail_pw):
+            # The registration is no longer usable, so it goes. Leaving it
+            # would fail this same way on every /start from now on.
+            logger.info(f"Registered account for chat_id={chat_id} no longer logs in")
+            self.storage.delete_onboarded_account(chat_id)
+            session.reset()
+            session.in_progress = True
+            session.last_action = UserProgress.STARTED
+            self.storage.save_user_session(session)
+            self.telegram.send_message(
+                chat_id,
+                MessageTemplates.ONBOARDING_STALE,
+                reply_markup=keyboards.onboarding_start_keyboard(),
+            )
+            return True
+
+        session.credentials = account.as_credentials()
+        session.last_action = UserProgress.PW_INPUT_SUCCESS
+        self.storage.save_user_session(session)
+
+        logger.info(f"Logged in with the registered account for chat_id={chat_id}")
+        self.telegram.send_message(
+            chat_id,
+            MessageTemplates.WELCOME_RETURNING.format(korailId=mask_phone(account.korail_id)),
+            reply_markup=keyboards.date_keyboard(),
+        )
+        return True
+
     def _handle_phone_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle phone number input."""
         is_valid, error = InputValidator.validate_phone_number(text)
@@ -279,6 +378,13 @@ class ConversationHandler:
         if korail.login(username, password):
             session.last_action = UserProgress.PW_INPUT_SUCCESS
             self.storage.save_user_session(session)
+
+            # A login that works is worth keeping. Everything after this point
+            # is the booking flow, which resets the session when it ends - so
+            # the registration is written to a key of its own here, at the one
+            # moment the password is known to be correct.
+            self._remember_account(chat_id, username, password)
+
             self.telegram.send_message(
                 chat_id, MessageTemplates.login_success(), reply_markup=keyboards.date_keyboard()
             )

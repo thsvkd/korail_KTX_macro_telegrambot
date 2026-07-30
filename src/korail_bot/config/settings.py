@@ -198,6 +198,18 @@ class Settings:
     # Backstop only: the credentials are deleted when the search finishes.
     RESUME_TTL_SECONDS: int = int(os.environ.get("RESUME_TTL_SECONDS", "259200"))
 
+    # ==================== Onboarding ====================
+
+    # How long a registered Korail account is kept before the user has to
+    # register again. Default 90 days.
+    #
+    # This is the one credential in the system that outlives the booking it
+    # was entered for: registering once and reusing it is the whole point.
+    # That convenience is paid for by the password sitting in Redis between
+    # bookings rather than only during one, so it is encrypted, expires on
+    # its own, and is deleted the moment the user logs out or blocks the bot.
+    CREDENTIAL_TTL_SECONDS: int = int(os.environ.get("CREDENTIAL_TTL_SECONDS", "7776000"))
+
     # ==================== Scheduled searches ====================
 
     # How far ahead a search may be booked. Bounded by RESUME_TTL_SECONDS

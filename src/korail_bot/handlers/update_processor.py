@@ -280,6 +280,27 @@ class TelegramUpdateProcessor:
             self._handle_dead_search(chat_id, value)
             return
 
+        # Asking to keep using the bot. Like the dead-search buttons, this is
+        # not a step of the conversation - the session was reset when the
+        # trial ran out - and the answer stays valid however long it sits.
+        if step == keyboards.STEP_ACCESS:
+            self.telegram.answer_callback_query(query_id)
+            self._settle_keyboard(chat_id, message_id, message, data)
+            if value == keyboards.ACCESS_ASK:
+                self.conversation_handler.request_access(chat_id)
+            return
+
+        # The operator's own lists. Guarded by the same admin check the
+        # commands that open them use, because a keyboard is only as private
+        # as the chat it was sent to - and messages get forwarded.
+        if step in (keyboards.STEP_APPROVE, keyboards.STEP_USERS):
+            self.telegram.answer_callback_query(query_id)
+            if not self.command_handler.may_administer(chat_id):
+                self._remove_keyboard(chat_id, message_id)
+                return
+            self.command_handler.handle_access_callback(chat_id, message_id, step, value)
+            return
+
         expected_progress = keyboards.STEP_PROGRESS.get(step)
         if expected_progress is None:
             logger.warning(f"Unknown callback step {step!r} from chat_id={chat_id}")

@@ -1,5 +1,6 @@
 """Services for business logic."""
 
+from korail_bot.services.access_service import AccessDecision, AccessLevel, AccessService
 from korail_bot.services.korail_service import KorailService
 from korail_bot.services.multi_reservation_reminder_service import MultiReservationReminderService
 from korail_bot.services.payment_reminder_service import PaymentReminderService
@@ -13,6 +14,9 @@ from korail_bot.services.telegram_poller import TelegramPoller
 from korail_bot.services.telegram_service import MessageTemplates, TelegramService
 
 __all__ = [
+    "AccessDecision",
+    "AccessLevel",
+    "AccessService",
     "KorailService",
     "MessageTemplates",
     "MultiReservationReminderService",

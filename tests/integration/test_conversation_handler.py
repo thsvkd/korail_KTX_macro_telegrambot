@@ -64,7 +64,7 @@ class TestConversationHandler:
         self.storage.save_user_session(session)
 
         # Add to allow list
-        with patch("korail_bot.config.settings.settings.is_user_allowed", return_value=True):
+        with patch("korail_bot.config.settings.settings.is_preapproved", return_value=True):
             self.handler.handle_message(chat_id, "010-1234-5678")
 
         updated_session = self.storage.get_user_session(chat_id)
@@ -96,21 +96,26 @@ class TestConversationHandler:
         call_args = self.telegram.send_message.call_args
         assert "다시" in call_args[0][1] or "하이픈" in call_args[0][1]
 
-    def test_phone_input_not_in_allow_list(self):
-        """Test phone number not in allow list."""
+    def test_a_number_nobody_preapproved_still_gets_to_the_password(self):
+        """
+        Access is decided when a search starts, not here.
+
+        Refusing at the phone prompt would mean telling someone they are not
+        welcome only after they have typed a Korail password - and the trial
+        allowance means most of them are welcome anyway.
+        """
         chat_id = 12345
         session = UserSession(
             chat_id=chat_id, in_progress=True, last_action=UserProgress.START_ACCEPTED
         )
         self.storage.save_user_session(session)
 
-        with patch("korail_bot.config.settings.settings.is_user_allowed", return_value=False):
+        with patch("korail_bot.config.settings.settings.is_preapproved", return_value=False):
             self.handler.handle_message(chat_id, "010-9999-9999")
 
         updated_session = self.storage.get_user_session(chat_id)
-        # Should be reset
-        assert updated_session.in_progress is False
-        self.telegram.send_message.assert_called()
+        assert updated_session.in_progress is True
+        assert updated_session.last_action == UserProgress.ID_INPUT_SUCCESS
 
     @patch("korail_bot.services.korail_service.KorailService.login")
     def test_password_input_success(self, mock_login):

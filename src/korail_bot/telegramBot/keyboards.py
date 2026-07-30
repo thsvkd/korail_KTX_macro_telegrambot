@@ -40,6 +40,11 @@ STEP_CANCEL = "x"
 STEP_DEAD = "dd"
 # Whether to replace an already registered Korail account.
 STEP_ONBOARD_OVERWRITE = "obw"
+# Asking the operator for continued access, once the trial runs out.
+STEP_ACCESS = "ac"
+# The operator answering those requests, and managing who is approved.
+STEP_APPROVE = "ap"
+STEP_USERS = "us"
 
 # Answers to STEP_CONFIRM that are neither yes nor no.
 CONFIRM_SCHEDULE = "*schedule"
@@ -56,6 +61,23 @@ TRAIN_SELECT_REFRESH = "*refresh"
 # Answers to STEP_DEAD: start the same search again, or be done with it.
 DEAD_RESUME = "resume"
 DEAD_DISCARD = "discard"
+
+# Answers to STEP_ACCESS.
+ACCESS_ASK = "ask"
+ACCESS_DISMISS = "dismiss"
+
+# Prefixes for the operator's lists. The rest of the value is a phone hash,
+# which is 32 hex characters - well inside the 64-byte callback_data limit.
+APPROVE_PICK = "p:"
+APPROVE_YES = "y:"
+APPROVE_NO = "n:"
+APPROVE_CLOSE = "*close"
+APPROVE_BACK = "*back"
+
+USERS_PICK = "p:"
+USERS_REVOKE = "r:"
+USERS_CLOSE = "*close"
+USERS_BACK = "*back"
 
 # The progress state at which each step's answer is expected.
 #
@@ -355,6 +377,89 @@ def onboarding_overwrite_keyboard() -> InlineKeyboard:
     return _keyboard(
         [_button("🔄 다시 등록", STEP_ONBOARD_OVERWRITE, "Y")],
         [_button("❌ 그대로 두기", STEP_ONBOARD_OVERWRITE, "N")],
+    )
+
+
+def access_request_keyboard(pending: bool = False) -> InlineKeyboard:
+    """
+    The way out of a used-up trial.
+
+    Someone who tried the bot and hit the wall should be one press away from
+    being let in, rather than reading an instruction to contact a stranger by
+    some means the bot never mentions.
+    """
+    if pending:
+        return _keyboard([_button("⏳ 요청 처리를 기다리는 중", STEP_ACCESS, ACCESS_DISMISS)])
+    return _keyboard(
+        [_button("🙋 사용 승인 요청", STEP_ACCESS, ACCESS_ASK)],
+        [_button("❌ 닫기", STEP_ACCESS, ACCESS_DISMISS)],
+    )
+
+
+def approve_list_keyboard(requests: list) -> InlineKeyboard:
+    """
+    Pending access requests, one per row.
+
+    Args:
+        requests: AccessRequest objects, oldest first
+
+    Returns:
+        The keyboard the operator picks from
+    """
+    rows = [
+        [
+            _button(
+                f"{request.masked_phone}  ·  {request.requested_at:%m/%d %H:%M}",
+                STEP_APPROVE,
+                f"{APPROVE_PICK}{request.phone_hash}",
+            )
+        ]
+        for request in requests
+    ]
+    rows.append([_button("❌ 닫기", STEP_APPROVE, APPROVE_CLOSE)])
+    return _keyboard(*rows)
+
+
+def approve_decision_keyboard(phone_hash: str) -> InlineKeyboard:
+    """Approve or turn down one request."""
+    return _keyboard(
+        [
+            _button("✅ 승인", STEP_APPROVE, f"{APPROVE_YES}{phone_hash}"),
+            _button("🚫 거절", STEP_APPROVE, f"{APPROVE_NO}{phone_hash}"),
+        ],
+        [_button("◀️ 뒤로", STEP_APPROVE, APPROVE_BACK)],
+    )
+
+
+def users_list_keyboard(users: list) -> InlineKeyboard:
+    """
+    Approved users, one per row.
+
+    Args:
+        users: ApprovedUser objects, most recent first
+
+    Returns:
+        The keyboard the operator picks from
+    """
+    rows = [
+        [
+            _button(
+                f"{user.masked_phone}  ·  {user.approved_at:%m/%d}",
+                STEP_USERS,
+                f"{USERS_PICK}{user.phone_hash}",
+            )
+        ]
+        for user in users
+    ]
+    rows.append([_button("❌ 닫기", STEP_USERS, USERS_CLOSE)])
+    return _keyboard(*rows)
+
+
+def users_revoke_keyboard(phone_hash: str) -> InlineKeyboard:
+    """Confirm withdrawing one approval."""
+    return _keyboard(
+        [_button("🚫 승인 취소", STEP_USERS, f"{USERS_REVOKE}{phone_hash}")],
+        [_button("◀️ 뒤로", STEP_USERS, USERS_BACK)],
     )
 
 

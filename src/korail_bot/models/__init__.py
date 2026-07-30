@@ -12,6 +12,8 @@ from korail_bot.models.reservation import (
     TrainSearchParams,
 )
 from korail_bot.models.user import (
+    AccessRequest,
+    ApprovedUser,
     OnboardedAccount,
     UserCredentials,
     UserProgress,
@@ -19,6 +21,8 @@ from korail_bot.models.user import (
 )
 
 __all__ = [
+    "AccessRequest",
+    "ApprovedUser",
     "DeadSearch",
     "DeathCause",
     "MultiReservationStatus",

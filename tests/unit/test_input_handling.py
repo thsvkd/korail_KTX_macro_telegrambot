@@ -68,28 +68,35 @@ class TestPhoneNormalization:
         assert "010-1234-5678" in error
 
 
-class TestAllowList:
-    """The list should not care how a number was written down."""
+class TestPreapprovedUsers:
+    """
+    Numbers the operator listed in the environment.
+
+    One of several ways to be allowed rather than the whole gate, so an empty
+    list means "nobody is pre-approved" - not "nobody may use the bot". What
+    happens to everyone else is decided by the trial allowance and the
+    approval flow, which are tested in test_access_control.py.
+    """
 
     def test_hyphenless_input_matches_a_hyphenated_entry(self):
-        with patch.object(Settings, "ALLOW_LIST", ["010-1234-5678"]):
-            assert settings.is_user_allowed("01012345678") is True
+        with patch.object(Settings, "PREAPPROVED_USERS", ["010-1234-5678"]):
+            assert settings.is_preapproved("01012345678") is True
 
     def test_hyphenated_input_matches_a_hyphenless_entry(self):
-        with patch.object(Settings, "ALLOW_LIST", ["01012345678"]):
-            assert settings.is_user_allowed("010-1234-5678") is True
+        with patch.object(Settings, "PREAPPROVED_USERS", ["01012345678"]):
+            assert settings.is_preapproved("010-1234-5678") is True
 
-    def test_a_different_number_is_still_refused(self):
-        with patch.object(Settings, "ALLOW_LIST", ["010-1234-5678"]):
-            assert settings.is_user_allowed("010-9999-8888") is False
+    def test_a_different_number_is_not_preapproved(self):
+        with patch.object(Settings, "PREAPPROVED_USERS", ["010-1234-5678"]):
+            assert settings.is_preapproved("010-9999-8888") is False
 
-    def test_an_empty_list_allows_everyone(self):
-        with patch.object(Settings, "ALLOW_LIST", []):
-            assert settings.is_user_allowed("010-1234-5678") is True
+    def test_an_empty_list_preapproves_nobody(self):
+        with patch.object(Settings, "PREAPPROVED_USERS", []):
+            assert settings.is_preapproved("010-1234-5678") is False
 
-    def test_blank_entries_do_not_allow_everyone(self):
-        with patch.object(Settings, "ALLOW_LIST", ["010-1234-5678", " "]):
-            assert settings.is_user_allowed("010-0000-0000") is False
+    def test_blank_entries_preapprove_nobody(self):
+        with patch.object(Settings, "PREAPPROVED_USERS", ["010-1234-5678", " "]):
+            assert settings.is_preapproved("010-0000-0000") is False
 
 
 class TestPasswordValidation:

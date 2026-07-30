@@ -12,9 +12,16 @@ from korail_bot.models import (
     UserProgress,
     UserSession,
 )
-from korail_bot.services import KorailService, MessageTemplates, ReservationService, TelegramService
+from korail_bot.services import (
+    AccessService,
+    KorailService,
+    MessageTemplates,
+    ReservationService,
+    TelegramService,
+)
 from korail_bot.storage.base import StorageInterface
 from korail_bot.telegramBot import keyboards
+from korail_bot.utils.crypto import identity_hash
 from korail_bot.utils.logger import get_logger
 from korail_bot.utils.privacy import mask_phone
 from korail_bot.utils.validators import InputValidator
@@ -30,6 +37,7 @@ class ConversationHandler:
         storage: StorageInterface,
         telegram_service: TelegramService,
         reservation_service: ReservationService,
+        access_service: AccessService | None = None,
     ):
         """
         Initialize conversation handler.
@@ -38,10 +46,14 @@ class ConversationHandler:
             storage: Storage interface
             telegram_service: Telegram messaging service
             reservation_service: Reservation service
+            access_service: Decides who may run a search. Built from the
+                storage when not supplied, so callers that do not care about
+                access control do not have to construct one.
         """
         self.storage = storage
         self.telegram = telegram_service
         self.reservation = reservation_service
+        self.access = access_service or AccessService(storage)
 
     def handle_message(self, chat_id: int, text: str) -> None:
         """
@@ -325,21 +337,13 @@ class ConversationHandler:
             return
 
         # Store the canonical form: Korail expects the hyphenated number, and
-        # everything downstream (allow list, logs, masking) compares against it.
+        # everything downstream (approvals, logs, masking) compares against it.
         text = InputValidator.normalize_phone_number(text) or text
 
-        # Check allow list
-        if not settings.is_user_allowed(text):
-            # Notify subscribers
-            subscribers = self.storage.get_all_subscribers()
-            self.telegram.send_to_multiple(
-                subscribers, f"{mask_phone(text)}가 구독자 목록에 없어서 실행에 실패했음."
-            )
-
-            session.reset()
-            self.storage.save_user_session(session)
-            self.telegram.send_message(chat_id, MessageTemplates.not_in_allow_list())
-            return
+        # No gate here any more. Whether this number may run a search is
+        # decided when one is about to start, because that is what costs
+        # something - and refusing at the password prompt would mean telling
+        # someone they are not welcome only after they typed a password.
 
         # Save phone number
         if not session.credentials:
@@ -1126,6 +1130,18 @@ class ConversationHandler:
 
     def _start_reservation(self, chat_id: int, session: UserSession) -> None:
         """Start the reservation background process."""
+        username = session.credentials.korail_id
+        password = session.credentials.korail_pw
+
+        # The gate goes here rather than earlier: what costs the operator is a
+        # process asking Korail for seats every few seconds, and this is where
+        # one begins. Asking questions is free, and charging someone for a
+        # summary screen they backed out of would be indefensible.
+        decision = self.access.evaluate(username, is_developer=self._is_developer(chat_id))
+        if not decision.allowed:
+            self._offer_access_request(chat_id, session, username, decision)
+            return
+
         # Create search params
         search_params = self._build_search_params(session)
 
@@ -1133,15 +1149,23 @@ class ConversationHandler:
         session.last_action = UserProgress.FINDING_TICKET
         self.storage.save_user_session(session)
 
-        # Start reservation
-        username = session.credentials.korail_id
-        password = session.credentials.korail_pw
-
         success = self.reservation.start_reservation_process(
             chat_id=chat_id, username=username, password=password, search_params=search_params
         )
 
         if success:
+            # Charged only once the search is really running. A refusal - the
+            # duplicate guard, a process that died on startup - must not cost
+            # an allowance for a search that never happened.
+            self.access.consume(username, decision)
+            if decision.counts_against_trial and decision.limit >= 0:
+                self.telegram.send_message(
+                    chat_id,
+                    MessageTemplates.TRIAL_REMAINING.format(
+                        used=decision.used + 1,
+                        limit=decision.limit,
+                    ),
+                )
             # The background process now owns the password; there is no reason
             # to keep a copy at rest for the lifetime of the search.
             session.credentials.korail_pw = ""
@@ -1154,6 +1178,76 @@ class ConversationHandler:
             from korail_bot.telegramBot.messages import Messages
 
             self.telegram.send_message(chat_id, Messages.ERROR_RESERVATION_START_FAILED)
+
+    def _is_developer(self, chat_id: int) -> bool:
+        """Whether this chat is in developer mode, and so has no limits."""
+        return self.storage.is_developer(chat_id)
+
+    def _offer_access_request(
+        self, chat_id: int, session: UserSession, username: str, decision
+    ) -> None:
+        """
+        Tell the user their trial is over, and offer to ask the operator.
+
+        The dead end is the thing to avoid here. Someone who tried the bot,
+        liked it, and hit the wall should be one button away from being let
+        in - not reading an instruction to contact a stranger by some means
+        the bot never mentions.
+        """
+        session.reset()
+        self.storage.save_user_session(session)
+
+        already_pending = bool(self.storage.get_access_request(identity_hash(username)))
+        self.telegram.send_message(
+            chat_id,
+            MessageTemplates.TRIAL_EXHAUSTED.format(used=decision.used, limit=decision.limit),
+            reply_markup=keyboards.access_request_keyboard(pending=already_pending),
+        )
+
+    def request_access(self, chat_id: int) -> None:
+        """
+        Act on the 'ask the operator' button.
+
+        The number comes from the registered account rather than the session,
+        which has been reset by the time this is pressed - and which is the
+        right source anyway: it is the Korail account being asked about.
+        """
+        account = self.storage.get_onboarded_account(chat_id)
+        if not account:
+            self.telegram.send_message(chat_id, MessageTemplates.ACCESS_REQUEST_NO_ACCOUNT)
+            return
+
+        request = self.access.request_access(chat_id, account.korail_id)
+        if not request:
+            self.telegram.send_message(chat_id, MessageTemplates.ACCESS_REQUEST_ALREADY)
+            return
+
+        self.telegram.send_message(chat_id, MessageTemplates.ACCESS_REQUEST_SENT)
+        self._notify_operators(request)
+
+    def _notify_operators(self, request) -> None:
+        """
+        Tell every developer chat that someone is waiting.
+
+        All of them rather than one: an operator who is asleep should not be
+        the reason a request sits unanswered, and there is no way to tell from
+        here which of them is awake.
+        """
+        operators = self.storage.get_all_developers()
+        if not operators:
+            logger.warning(
+                f"Access request from {request.masked_phone} has nobody to notify - "
+                f"no chat is in developer mode"
+            )
+            return
+
+        self.telegram.send_to_multiple(
+            operators,
+            MessageTemplates.ACCESS_REQUEST_NOTICE.format(
+                maskedPhone=request.masked_phone,
+                requestedAt=f"{request.requested_at:%m월 %d일 %H:%M}",
+            ),
+        )
 
     def _handle_already_processing(self, chat_id: int, session: UserSession) -> None:
         """Handle message when reservation is already in progress."""

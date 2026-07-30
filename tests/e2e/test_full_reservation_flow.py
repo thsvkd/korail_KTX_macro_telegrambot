@@ -57,7 +57,7 @@ class TestFullReservationFlow:
         assert session.last_action == UserProgress.START_ACCEPTED
 
         # Step 3: Enter phone number
-        with patch("korail_bot.config.settings.settings.is_user_allowed", return_value=True):
+        with patch("korail_bot.config.settings.settings.is_preapproved", return_value=True):
             self.conversation_handler.handle_message(chat_id, "010-1234-5678")
         session = self.storage.get_user_session(chat_id)
         assert session.last_action == UserProgress.ID_INPUT_SUCCESS
@@ -149,7 +149,7 @@ class TestFullReservationFlow:
         self.command_handler.route_command(chat_id, "/start")
         self.conversation_handler.handle_message(chat_id, "Y")
 
-        with patch("korail_bot.config.settings.settings.is_user_allowed", return_value=True):
+        with patch("korail_bot.config.settings.settings.is_preapproved", return_value=True):
             self.conversation_handler.handle_message(chat_id, "010-1234-5678")
 
         self.conversation_handler.handle_message(chat_id, "password123")
@@ -196,7 +196,7 @@ class TestFullReservationFlow:
         self.command_handler.route_command(chat_id, "/start")
         self.conversation_handler.handle_message(chat_id, "Y")
 
-        with patch("korail_bot.config.settings.settings.is_user_allowed", return_value=True):
+        with patch("korail_bot.config.settings.settings.is_preapproved", return_value=True):
             self.conversation_handler.handle_message(chat_id, "010-1234-5678")
 
         self.conversation_handler.handle_message(chat_id, "password123")
@@ -236,7 +236,7 @@ class TestFullReservationFlow:
         self.command_handler.route_command(chat_id, "/start")
         self.conversation_handler.handle_message(chat_id, "Y")
 
-        with patch("korail_bot.config.settings.settings.is_user_allowed", return_value=True):
+        with patch("korail_bot.config.settings.settings.is_preapproved", return_value=True):
             self.conversation_handler.handle_message(chat_id, "010-1234-5678")
 
         self.conversation_handler.handle_message(chat_id, "password123")
@@ -262,7 +262,7 @@ class TestFullReservationFlow:
         self.command_handler.route_command(chat_id, "/start")
         self.conversation_handler.handle_message(chat_id, "Y")
 
-        with patch("korail_bot.config.settings.settings.is_user_allowed", return_value=True):
+        with patch("korail_bot.config.settings.settings.is_preapproved", return_value=True):
             self.conversation_handler.handle_message(chat_id, "010-1234-5678")
 
         # First password attempt - fails

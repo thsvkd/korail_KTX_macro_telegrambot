@@ -8,6 +8,8 @@ import redis
 
 from korail_bot.config.settings import settings
 from korail_bot.models import (
+    AccessRequest,
+    ApprovedUser,
     DeadSearch,
     DeathCause,
     MultiReservationStatus,
@@ -316,6 +318,136 @@ class RedisStorage(StorageInterface):
         """Forget a registered account."""
         self.redis.delete(f"user_credentials:{chat_id}")
         logger.debug(f"Deleted onboarded account for chat_id={chat_id}")
+
+    # ==================== Trials, requests and approvals ====================
+
+    def get_trial_count(self, phone_hash: str) -> int:
+        """How many trial searches this number has used."""
+        value = self.redis.get(f"trial:{phone_hash}")
+        try:
+            return int(value) if value else 0
+        except (TypeError, ValueError):
+            return 0
+
+    def increment_trial_count(self, phone_hash: str) -> int:
+        """
+        Record one used trial search.
+
+        Returns:
+            The new total
+        """
+        return int(self.redis.incr(f"trial:{phone_hash}"))
+
+    def save_access_request(self, request: AccessRequest) -> None:
+        """Record someone asking to keep using the bot."""
+        key = f"access_request:{request.phone_hash}"
+        data = json.dumps(
+            {
+                "phone_hash": request.phone_hash,
+                "chat_id": request.chat_id,
+                "masked_phone": request.masked_phone,
+                "requested_at": request.requested_at.isoformat(),
+            }
+        )
+        self.redis.set(key, data, ex=settings.REQUEST_TTL_SECONDS)
+
+    def get_access_request(self, phone_hash: str) -> AccessRequest | None:
+        """Get one pending request."""
+        data = self.redis.get(f"access_request:{phone_hash}")
+        if not data:
+            return None
+        return self._deserialize_access_request(json.loads(data))
+
+    def delete_access_request(self, phone_hash: str) -> None:
+        """Forget a request, answered or withdrawn."""
+        self.redis.delete(f"access_request:{phone_hash}")
+
+    def get_all_access_requests(self) -> list[AccessRequest]:
+        """Every request still waiting on an answer, oldest first."""
+        requests = []
+        for key in self._scan_keys("access_request:*"):
+            data = self.redis.get(key)
+            if not data:
+                continue
+            try:
+                requests.append(self._deserialize_access_request(json.loads(data)))
+            except (json.JSONDecodeError, KeyError, ValueError):
+                continue
+        return sorted(requests, key=lambda r: r.requested_at)
+
+    def _deserialize_access_request(self, data: dict) -> AccessRequest:
+        """Deserialize dict to AccessRequest."""
+        return AccessRequest(
+            phone_hash=data["phone_hash"],
+            chat_id=data["chat_id"],
+            masked_phone=data["masked_phone"],
+            requested_at=datetime.fromisoformat(data["requested_at"]),
+        )
+
+    def save_approved_user(self, user: ApprovedUser) -> None:
+        """Record an approval. No expiry: an approval is not a lease."""
+        key = f"approved:{user.phone_hash}"
+        data = json.dumps(
+            {
+                "phone_hash": user.phone_hash,
+                "masked_phone": user.masked_phone,
+                "approved_at": user.approved_at.isoformat(),
+                "approved_by": user.approved_by,
+            }
+        )
+        self.redis.set(key, data)
+
+    def is_approved(self, phone_hash: str) -> bool:
+        """Whether this number has been approved."""
+        return bool(self.redis.exists(f"approved:{phone_hash}"))
+
+    def delete_approved_user(self, phone_hash: str) -> None:
+        """Withdraw an approval."""
+        self.redis.delete(f"approved:{phone_hash}")
+
+    def get_all_approved_users(self) -> list[ApprovedUser]:
+        """Everyone approved from the chat, most recent first."""
+        users = []
+        for key in self._scan_keys("approved:*"):
+            data = self.redis.get(key)
+            if not data:
+                continue
+            try:
+                stored = json.loads(data)
+                users.append(
+                    ApprovedUser(
+                        phone_hash=stored["phone_hash"],
+                        masked_phone=stored["masked_phone"],
+                        approved_at=datetime.fromisoformat(stored["approved_at"]),
+                        approved_by=stored.get("approved_by", 0),
+                    )
+                )
+            except (json.JSONDecodeError, KeyError, ValueError):
+                continue
+        return sorted(users, key=lambda u: u.approved_at, reverse=True)
+
+    # ==================== Developer chats ====================
+
+    def is_developer(self, chat_id: int) -> bool:
+        """Whether this chat is in developer mode."""
+        return bool(self.redis.sismember("developers", str(chat_id)))
+
+    def set_developer(self, chat_id: int, enabled: bool = True) -> None:
+        """
+        Turn developer mode on or off for a chat.
+
+        Kept in a set rather than on the session, because it has to outlive
+        every reset the booking flow performs - an operator does not expect
+        to lose their tools by finishing a booking.
+        """
+        if enabled:
+            self.redis.sadd("developers", str(chat_id))
+        else:
+            self.redis.srem("developers", str(chat_id))
+
+    def get_all_developers(self) -> list[int]:
+        """Every chat in developer mode."""
+        return [int(value) for value in self.redis.smembers("developers")]
 
     # ==================== Resume Credentials Management ====================
 

@@ -5,6 +5,7 @@ import hmac
 from korail_bot.config.settings import settings
 from korail_bot.models import UserProgress, UserSession
 from korail_bot.services import (
+    AccessService,
     MessageTemplates,
     PaymentReminderService,
     ReservationService,
@@ -47,6 +48,11 @@ class CommandHandler:
         self.reservation = reservation_service
         self.payment_reminder = payment_reminder_service
         self.conversation = conversation_handler
+        # Shares the conversation's view of who is allowed, so an approval
+        # granted here is visible to the gate immediately.
+        self.access = (
+            conversation_handler.access if conversation_handler else AccessService(storage)
+        )
 
     def handle_start(self, chat_id: int) -> None:
         """
@@ -163,6 +169,209 @@ class CommandHandler:
             self.storage.save_user_session(session)
 
         self.telegram.send_message(chat_id, MessageTemplates.LOGOUT_DONE)
+
+    # ==================== Approving people ====================
+
+    def may_administer(self, chat_id: int) -> bool:
+        """
+        Whether this chat may use the operator's tools right now.
+
+        Two ways in: developer mode, which is deliberate and lasts, and the
+        password check, which is per-session. Callbacks are re-checked through
+        this rather than trusting that a keyboard was only ever sent to an
+        operator - a message can be forwarded, and the button would come back
+        carrying whatever chat pressed it.
+        """
+        return self.storage.is_developer(chat_id) or self.storage.is_admin_authenticated(chat_id)
+
+    def handle_approve(self, chat_id: int) -> None:
+        """Handle /approve: show pending access requests as buttons."""
+        logger.info(f"Handling /approve for chat_id={chat_id}")
+
+        requests = self.access.pending_requests()
+        if not requests:
+            self.telegram.send_message(chat_id, MessageTemplates.APPROVE_EMPTY)
+            return
+
+        self.telegram.send_message(
+            chat_id,
+            MessageTemplates.APPROVE_LIST.format(count=len(requests)),
+            reply_markup=keyboards.approve_list_keyboard(requests),
+        )
+
+    def handle_users(self, chat_id: int) -> None:
+        """Handle /users: show approved users as buttons."""
+        logger.info(f"Handling /users for chat_id={chat_id}")
+
+        users = self.access.approved_users()
+        if not users:
+            self.telegram.send_message(chat_id, MessageTemplates.USERS_EMPTY)
+            return
+
+        self.telegram.send_message(
+            chat_id,
+            MessageTemplates.USERS_LIST.format(count=len(users)),
+            reply_markup=keyboards.users_list_keyboard(users),
+        )
+
+    def handle_access_callback(
+        self, chat_id: int, message_id: int | None, step: str, value: str
+    ) -> None:
+        """
+        Act on a press in the approve or users list.
+
+        Args:
+            chat_id: The operator's chat
+            message_id: The message the keyboard is on, so it can be updated
+                        in place rather than pushing a new one per press
+            step: Which list it came from
+            value: The prefixed action, carrying a phone hash where needed
+        """
+        if step == keyboards.STEP_APPROVE:
+            self._handle_approve_callback(chat_id, message_id, value)
+        else:
+            self._handle_users_callback(chat_id, message_id, value)
+
+    def _handle_approve_callback(self, chat_id: int, message_id: int | None, value: str) -> None:
+        """Act on a press in the pending-requests list."""
+        if value == keyboards.APPROVE_CLOSE:
+            self._close_list(chat_id, message_id, "닫았습니다.")
+            return
+
+        if value == keyboards.APPROVE_BACK:
+            requests = self.access.pending_requests()
+            if not requests:
+                self._close_list(chat_id, message_id, MessageTemplates.APPROVE_EMPTY)
+                return
+            self._edit_list(
+                chat_id,
+                message_id,
+                MessageTemplates.APPROVE_LIST.format(count=len(requests)),
+                keyboards.approve_list_keyboard(requests),
+            )
+            return
+
+        if value.startswith(keyboards.APPROVE_PICK):
+            phone_hash = value[len(keyboards.APPROVE_PICK) :]
+            request = self.storage.get_access_request(phone_hash)
+            if not request:
+                self._close_list(chat_id, message_id, MessageTemplates.APPROVE_GONE)
+                return
+            self._edit_list(
+                chat_id,
+                message_id,
+                MessageTemplates.APPROVE_CONFIRM.format(
+                    maskedPhone=request.masked_phone,
+                    requestedAt=f"{request.requested_at:%m월 %d일 %H:%M}",
+                ),
+                keyboards.approve_decision_keyboard(phone_hash),
+            )
+            return
+
+        if value.startswith(keyboards.APPROVE_YES):
+            phone_hash = value[len(keyboards.APPROVE_YES) :]
+            request = self.access.approve(phone_hash, approved_by=chat_id)
+            if not request:
+                self._close_list(chat_id, message_id, MessageTemplates.APPROVE_GONE)
+                return
+            self._close_list(
+                chat_id,
+                message_id,
+                MessageTemplates.APPROVE_DONE.format(maskedPhone=request.masked_phone),
+            )
+            # The whole point of approving is that the person finds out.
+            self.telegram.send_message(request.chat_id, MessageTemplates.ACCESS_APPROVED)
+            return
+
+        if value.startswith(keyboards.APPROVE_NO):
+            phone_hash = value[len(keyboards.APPROVE_NO) :]
+            request = self.access.reject(phone_hash)
+            if not request:
+                self._close_list(chat_id, message_id, MessageTemplates.APPROVE_GONE)
+                return
+            self._close_list(
+                chat_id,
+                message_id,
+                MessageTemplates.APPROVE_REJECTED.format(maskedPhone=request.masked_phone),
+            )
+            self.telegram.send_message(request.chat_id, MessageTemplates.ACCESS_REJECTED)
+            return
+
+        logger.warning(f"Unknown approve action {value!r} from chat_id={chat_id}")
+
+    def _handle_users_callback(self, chat_id: int, message_id: int | None, value: str) -> None:
+        """Act on a press in the approved-users list."""
+        if value == keyboards.USERS_CLOSE:
+            self._close_list(chat_id, message_id, "닫았습니다.")
+            return
+
+        if value == keyboards.USERS_BACK:
+            users = self.access.approved_users()
+            if not users:
+                self._close_list(chat_id, message_id, MessageTemplates.USERS_EMPTY)
+                return
+            self._edit_list(
+                chat_id,
+                message_id,
+                MessageTemplates.USERS_LIST.format(count=len(users)),
+                keyboards.users_list_keyboard(users),
+            )
+            return
+
+        if value.startswith(keyboards.USERS_REVOKE):
+            phone_hash = value[len(keyboards.USERS_REVOKE) :]
+            user = self.access.revoke(phone_hash)
+            if not user:
+                self._close_list(chat_id, message_id, MessageTemplates.USERS_REVOKE_GONE)
+                return
+            self._close_list(
+                chat_id,
+                message_id,
+                MessageTemplates.USERS_REVOKED.format(maskedPhone=user.masked_phone),
+            )
+            return
+
+        if value.startswith(keyboards.USERS_PICK):
+            phone_hash = value[len(keyboards.USERS_PICK) :]
+            user = next(
+                (u for u in self.access.approved_users() if u.phone_hash == phone_hash), None
+            )
+            if not user:
+                self._close_list(chat_id, message_id, MessageTemplates.USERS_REVOKE_GONE)
+                return
+            self._edit_list(
+                chat_id,
+                message_id,
+                MessageTemplates.USERS_REVOKE_CONFIRM.format(maskedPhone=user.masked_phone),
+                keyboards.users_revoke_keyboard(phone_hash),
+            )
+            return
+
+        logger.warning(f"Unknown users action {value!r} from chat_id={chat_id}")
+
+    def _edit_list(self, chat_id: int, message_id: int | None, text: str, markup: dict) -> None:
+        """Replace a list in place, so pressing through it does not spam."""
+        if message_id is None:
+            self.telegram.send_message(chat_id, text, reply_markup=markup)
+            return
+        try:
+            self.telegram.edit_message_text(chat_id, message_id, text, reply_markup=markup)
+        except Exception as e:
+            logger.warning(f"Could not update the list on message {message_id}: {e}")
+            self.telegram.send_message(chat_id, text, reply_markup=markup)
+
+    def _close_list(self, chat_id: int, message_id: int | None, text: str) -> None:
+        """Finish with a list: leave the outcome, take the buttons away."""
+        if message_id is None:
+            self.telegram.send_message(chat_id, text)
+            return
+        try:
+            self.telegram.edit_message_text(
+                chat_id, message_id, text, reply_markup=keyboards.empty_keyboard()
+            )
+        except Exception as e:
+            logger.warning(f"Could not close the list on message {message_id}: {e}")
+            self.telegram.send_message(chat_id, text)
 
     def handle_cancel(self, chat_id: int) -> None:
         """
@@ -451,6 +660,10 @@ class CommandHandler:
             self.handle_onboarding(chat_id)
         elif command == "/logout":
             self.handle_logout(chat_id)
+        elif command == "/approve":
+            self._handle_admin_command(chat_id, self.handle_approve, "/approve")
+        elif command == "/users":
+            self._handle_admin_command(chat_id, self.handle_users, "/users")
         elif command == "/cancel":
             self.handle_cancel(chat_id)
         elif command == "/status":
@@ -514,8 +727,10 @@ class CommandHandler:
             )
             return
 
-        if self.storage.is_admin_authenticated(chat_id):
-            # Already authenticated, execute command
+        # Developer mode is a standing grant, so it answers before the
+        # password does - an operator should not be asked to authenticate in
+        # the chat they deliberately marked as theirs.
+        if self.storage.is_developer(chat_id) or self.storage.is_admin_authenticated(chat_id):
             handler_func(chat_id)
             return
 

@@ -131,11 +131,6 @@ class Settings:
         "KORAIL_STATION_LIST_URL", "https://www.korail.com/ticket/train/stationGuide/station"
     )
 
-    # User Access Control
-    ALLOW_LIST: list[str] = (
-        os.environ.get("ALLOW_LIST", "").split(",") if os.environ.get("ALLOW_LIST") else []
-    )
-
     # Payment Reminder Configuration
     PAYMENT_TIMEOUT_MINUTES: int = int(os.environ.get("PAYMENT_TIMEOUT_MINUTES", "10"))
     # One reminder a minute. At the old ten seconds a ten-minute payment
@@ -209,6 +204,36 @@ class Settings:
     # bookings rather than only during one, so it is encrypted, expires on
     # its own, and is deleted the moment the user logs out or blocks the bot.
     CREDENTIAL_TTL_SECONDS: int = int(os.environ.get("CREDENTIAL_TTL_SECONDS", "7776000"))
+
+    # ==================== Who may use this bot ====================
+
+    # Numbers that never need approving. The old name was ALLOW_LIST, back
+    # when it was the only gate; it is still read so that existing .env files
+    # keep working.
+    #
+    # This is one of several ways to be allowed, not the list of everyone who
+    # is: people can also be approved from the chat, and everyone gets a few
+    # searches before either applies.
+    PREAPPROVED_USERS: list[str] = (
+        (os.environ.get("PREAPPROVED_USERS") or os.environ.get("ALLOW_LIST") or "").split(",")
+        if (os.environ.get("PREAPPROVED_USERS") or os.environ.get("ALLOW_LIST"))
+        else []
+    )
+    # How many searches someone may run before they need approving.
+    #
+    # The point is that a stranger who finds the bot can try it, while the
+    # server does not end up hammering Korail on behalf of everyone who ever
+    # typed /start. 0 means approval is required from the first search;
+    # a negative number means never require approval.
+    TRIAL_SEARCH_LIMIT: int = int(os.environ.get("TRIAL_SEARCH_LIMIT", "3"))
+    # How long an unanswered access request is kept. Default 30 days.
+    REQUEST_TTL_SECONDS: int = int(os.environ.get("REQUEST_TTL_SECONDS", "2592000"))
+    # Ceiling on searches running at once, across every user.
+    #
+    # Each search asks Korail for seats every few seconds, so this is what
+    # stands between a handful of approved users and an IP that Korail starts
+    # refusing. 0 disables the ceiling.
+    MAX_CONCURRENT_SEARCHES: int = int(os.environ.get("MAX_CONCURRENT_SEARCHES", "5"))
 
     # ==================== Scheduled searches ====================
 
@@ -313,7 +338,7 @@ class Settings:
         if cls.has_preconfigured_korail_credentials():
             messages.append(
                 "USERID/USERPW are set - anyone who talks to the bot reserves "
-                "with that Korail account, and ALLOW_LIST is not consulted "
+                "with that Korail account, and PREAPPROVED_USERS is not consulted "
                 "because no phone number is ever typed. Unset them to go back "
                 "to asking each user for their own credentials."
             )
@@ -344,17 +369,19 @@ class Settings:
         return bool(cls.KORAIL_ADMIN_USER_ID and cls.KORAIL_ADMIN_PASSWORD)
 
     @classmethod
-    def is_user_allowed(cls, phone_number: str) -> bool:
+    def is_preapproved(cls, phone_number: str) -> bool:
         """
-        Check if user phone number is in allow list.
+        Whether this number was approved in advance, in the environment.
+
+        One of several ways to be allowed, not the whole gate - people can
+        also be approved from the chat, and everyone gets TRIAL_SEARCH_LIMIT
+        searches before either matters. So an empty list means "nobody is
+        pre-approved", not "nobody may use the bot".
 
         Compared digit by digit so that '010-1234-5678' and '01012345678'
         are the same number, whichever form the list happens to use.
         """
-        if not cls.ALLOW_LIST or cls.ALLOW_LIST == [""]:
-            return True  # No restriction if ALLOW_LIST is empty
-
-        allowed = {_digits(entry) for entry in cls.ALLOW_LIST if _digits(entry)}
+        allowed = {_digits(entry) for entry in cls.PREAPPROVED_USERS if _digits(entry)}
         return _digits(phone_number) in allowed
 
 

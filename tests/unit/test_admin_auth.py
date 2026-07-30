@@ -23,6 +23,10 @@ def handler():
     storage.get_admin_lockout_remaining.return_value = 900
     storage.get_pending_admin_command.return_value = None
     storage.is_admin_authenticated.return_value = False
+    # Not a developer chat. Developer mode is a standing grant that skips the
+    # password entirely, so a bare Mock answering truthily here would let
+    # every one of these tests through the gate it means to exercise.
+    storage.is_developer.return_value = False
 
     return CommandHandler(storage, Mock(), Mock(), Mock())
 

@@ -85,6 +85,14 @@ class ReservationService:
             if not resumed and not self._may_start(chat_id):
                 return False
 
+            # Every search asks Korail for seats every few seconds, so the
+            # number of them running at once is what decides whether this
+            # server looks like a user or like an attack. A resumed search is
+            # exempt: it was counted when it first started, and refusing to
+            # bring it back after a restart would quietly lose it.
+            if not resumed and not self._under_concurrency_limit(chat_id):
+                return False
+
             # Credentials are deliberately absent from argv: anything passed on
             # a command line is world-readable through `ps` and /proc. They are
             # written to the child's stdin instead.
@@ -207,6 +215,41 @@ class ReservationService:
         except Exception as e:
             logger.error(f"Failed to start reservation process: {e}")
             return False
+
+    def _under_concurrency_limit(self, chat_id: int) -> bool:
+        """
+        Check that one more search would not put the server over the ceiling.
+
+        Korail sees one IP, not one user. Ten approved people searching at
+        once is ten times the request rate from where Korail is standing, and
+        the thing that gets rate limited or blocked is the operator's server -
+        which takes everyone else's searches down with it.
+
+        Returns:
+            True when there is room for another search
+        """
+        limit = settings.MAX_CONCURRENT_SEARCHES
+        if limit <= 0:
+            return True
+
+        try:
+            running = len(self.storage.get_all_running_reservations())
+        except Exception as e:
+            # Not a reason to refuse: failing to read the count is a storage
+            # problem, and the search is what the user is waiting for.
+            logger.error(f"Could not count running searches: {e}")
+            return True
+
+        if running < limit:
+            return True
+
+        logger.warning(
+            f"Refusing a search for chat_id={chat_id}: {running} already running, limit is {limit}"
+        )
+        from korail_bot.telegramBot.messages import Messages
+
+        self.telegram.send_message(chat_id, Messages.SERVER_BUSY.format(limit=limit))
+        return False
 
     def _confirm_started(
         self,

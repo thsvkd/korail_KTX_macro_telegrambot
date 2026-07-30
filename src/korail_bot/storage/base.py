@@ -3,6 +3,8 @@
 from abc import ABC, abstractmethod
 
 from korail_bot.models import (
+    AccessRequest,
+    ApprovedUser,
     DeadSearch,
     MultiReservationStatus,
     OnboardedAccount,
@@ -109,6 +111,73 @@ class StorageInterface(ABC):
     @abstractmethod
     def delete_onboarded_account(self, chat_id: int) -> None:
         """Forget a registered account."""
+        pass
+
+    # Trials, requests and approvals
+    @abstractmethod
+    def get_trial_count(self, phone_hash: str) -> int:
+        """How many trial searches this number has used."""
+        pass
+
+    @abstractmethod
+    def increment_trial_count(self, phone_hash: str) -> int:
+        """Record one used trial search and return the new total."""
+        pass
+
+    @abstractmethod
+    def save_access_request(self, request: "AccessRequest") -> None:
+        """Record someone asking to keep using the bot."""
+        pass
+
+    @abstractmethod
+    def get_access_request(self, phone_hash: str) -> "AccessRequest | None":
+        """Get one pending request."""
+        pass
+
+    @abstractmethod
+    def delete_access_request(self, phone_hash: str) -> None:
+        """Forget a request."""
+        pass
+
+    @abstractmethod
+    def get_all_access_requests(self) -> "list[AccessRequest]":
+        """Every request still waiting on an answer."""
+        pass
+
+    @abstractmethod
+    def save_approved_user(self, user: "ApprovedUser") -> None:
+        """Record an approval."""
+        pass
+
+    @abstractmethod
+    def is_approved(self, phone_hash: str) -> bool:
+        """Whether this number has been approved."""
+        pass
+
+    @abstractmethod
+    def delete_approved_user(self, phone_hash: str) -> None:
+        """Withdraw an approval."""
+        pass
+
+    @abstractmethod
+    def get_all_approved_users(self) -> "list[ApprovedUser]":
+        """Everyone approved from the chat."""
+        pass
+
+    # Developer chats
+    @abstractmethod
+    def is_developer(self, chat_id: int) -> bool:
+        """Whether this chat is in developer mode."""
+        pass
+
+    @abstractmethod
+    def set_developer(self, chat_id: int, enabled: bool = True) -> None:
+        """Turn developer mode on or off for a chat."""
+        pass
+
+    @abstractmethod
+    def get_all_developers(self) -> list[int]:
+        """Every chat in developer mode."""
         pass
 
     # Resume Credentials Management

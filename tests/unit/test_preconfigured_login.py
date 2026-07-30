@@ -127,11 +127,14 @@ class TestStartConfirmationWithEnvCredentials:
         korail_class.return_value.login.assert_called_once_with("010-1234-5678", ENV_PASSWORD)
         assert session.credentials.korail_id == "010-1234-5678"
 
-    def test_allow_list_is_not_consulted(self, handler):
+    def test_preapproved_users_is_not_consulted(self, handler):
         """No phone number is typed, so there is nothing to filter on."""
         patcher, _ = _korail(login_succeeds=True)
         try:
-            with _with_env_credentials(), patch.object(Settings, "ALLOW_LIST", ["010-9999-9999"]):
+            with (
+                _with_env_credentials(),
+                patch.object(Settings, "PREAPPROVED_USERS", ["010-9999-9999"]),
+            ):
                 handler.handle_message(CHAT_ID, "Y")
         finally:
             patcher.stop()
@@ -180,7 +183,7 @@ class TestPreconfiguredLoginFailure:
     def test_the_typed_number_still_works_afterwards(self, handler, session):
         patcher, _ = _korail(login_succeeds=False)
         try:
-            with _with_env_credentials(), patch.object(Settings, "ALLOW_LIST", []):
+            with _with_env_credentials(), patch.object(Settings, "PREAPPROVED_USERS", []):
                 handler.handle_message(CHAT_ID, "Y")
                 handler.telegram.send_message.reset_mock()
                 handler.handle_message(CHAT_ID, "01098765432")

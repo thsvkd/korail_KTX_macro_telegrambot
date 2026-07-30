@@ -13,6 +13,7 @@ in this codebase imports.
 
 import base64
 import hashlib
+import hmac
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -122,3 +123,29 @@ def get_secret_box() -> SecretBox:
     if _secret_box is None:
         _secret_box = SecretBox()
     return _secret_box
+
+
+def identity_hash(value: str) -> str:
+    """
+    A stable, non-reversible identifier for a phone number.
+
+    Trial counts and approvals hang off the Korail phone number rather than
+    the chat, because a new Telegram account is free and a new Korail account
+    is not. That means keeping the number - and a Redis dump full of readable
+    phone numbers is exactly the thing not to leave lying around.
+
+    Only equality is ever needed, so the number is never stored: this keys on
+    an HMAC of it. Encryption would be the wrong tool, since it would mean the
+    plaintext is recoverable by design.
+
+    Keyed with SESSION_SECRET, so the hashes are useless to anyone who reads
+    the database without also having the key - unkeyed digests of a
+    ten-digit number would fall to a lookup table in seconds.
+
+    Rotating SESSION_SECRET orphans every existing hash. That means trial
+    counts reset and approvals have to be granted again, which is the same
+    consequence rotation already has for stored credentials.
+    """
+    key = (settings.SESSION_SECRET or "").encode("utf-8")
+    digits = "".join(character for character in value if character.isdigit())
+    return hmac.new(key, digits.encode("utf-8"), hashlib.sha256).hexdigest()[:32]

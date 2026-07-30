@@ -131,6 +131,100 @@ class Messages:
 /start 로 바로 예약을 시작하세요.
 """
 
+    # ========== 체험과 사용 승인 ==========
+
+    TRIAL_REMAINING = """🎟️ 체험 {used}/{limit} 회를 사용했습니다.
+
+체험 횟수를 모두 쓰신 뒤에는 운영자 승인이 필요합니다.
+"""
+
+    TRIAL_EXHAUSTED = """🚫 체험 횟수를 모두 사용하셨습니다 ({used}/{limit})
+
+이 봇은 개인이 운영하는 서버에서 돌아갑니다. 검색 하나가 코레일에 몇 초마다
+요청을 보내기 때문에, 계속 쓰시려면 운영자의 승인이 필요합니다.
+
+아래 버튼을 누르면 운영자에게 요청이 전달됩니다.
+"""
+
+    ACCESS_REQUEST_SENT = """✅ 승인 요청을 보냈습니다.
+
+운영자가 승인하면 알려드리겠습니다.
+"""
+
+    ACCESS_REQUEST_ALREADY = """이미 승인 요청이 접수되어 있습니다.
+
+운영자가 확인하면 알려드리겠습니다.
+"""
+
+    ACCESS_REQUEST_NO_ACCOUNT = """등록된 코레일 계정이 없습니다.
+
+/onboarding 으로 먼저 계정을 등록해주세요.
+"""
+
+    ACCESS_REQUEST_NOTICE = """🙋 새 사용 승인 요청
+
+번호: {maskedPhone}
+요청 시각: {requestedAt}
+
+/approve 로 처리할 수 있습니다.
+"""
+
+    ACCESS_APPROVED = """🎉 사용이 승인되었습니다.
+
+이제 제한 없이 이용하실 수 있습니다. /start 로 예약을 시작하세요.
+"""
+
+    ACCESS_REJECTED = """죄송합니다. 이번에는 사용 승인이 이루어지지 않았습니다.
+
+운영자에게 직접 문의해보실 수 있습니다.
+"""
+
+    # ========== 승인 관리 (운영자) ==========
+
+    SERVER_BUSY = """⏳ 지금은 검색을 시작할 수 없습니다.
+
+이 서버에서 동시에 돌 수 있는 검색이 {limit}개인데 모두 사용 중입니다.
+코레일에 한꺼번에 너무 많은 요청을 보내면 서버 전체가 차단될 수 있어
+걸어둔 제한입니다.
+
+잠시 후 /start 로 다시 시도해주세요.
+"""
+
+    APPROVE_EMPTY = "대기 중인 승인 요청이 없습니다."
+
+    APPROVE_LIST = """🙋 승인 대기 중인 요청 ({count}건)
+
+처리할 요청을 선택하세요.
+"""
+
+    APPROVE_CONFIRM = """{maskedPhone} 을(를) 승인할까요?
+
+요청 시각: {requestedAt}
+"""
+
+    APPROVE_DONE = "✅ {maskedPhone} 을(를) 승인했습니다."
+    APPROVE_REJECTED = "🚫 {maskedPhone} 의 요청을 거절했습니다."
+    APPROVE_GONE = "이미 처리된 요청입니다."
+
+    USERS_EMPTY = """승인된 사용자가 없습니다.
+
+.env 의 PREAPPROVED_USERS 로 미리 승인된 번호는 여기 표시되지 않습니다.
+"""
+
+    USERS_LIST = """👥 승인된 사용자 ({count}명)
+
+승인을 취소하려면 선택하세요.
+(.env 의 PREAPPROVED_USERS 로 미리 승인된 번호는 표시되지 않습니다)
+"""
+
+    USERS_REVOKE_CONFIRM = """{maskedPhone} 의 승인을 취소할까요?
+
+취소해도 이미 쓴 체험 횟수는 복구되지 않으므로, 다시 쓰려면 승인이 필요합니다.
+"""
+
+    USERS_REVOKED = "🚫 {maskedPhone} 의 승인을 취소했습니다."
+    USERS_REVOKE_GONE = "이미 승인이 취소된 사용자입니다."
+
     HELP = """📌 사용 가능한 명령어
 
 🎫 예약 관련

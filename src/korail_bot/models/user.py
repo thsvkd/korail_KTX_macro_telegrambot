@@ -38,6 +38,36 @@ class OnboardedAccount:
 
 
 @dataclass
+class AccessRequest:
+    """
+    Someone asking to keep using the bot after their trial ran out.
+
+    Keyed by a hash of the Korail number rather than the chat, for the same
+    reason the trial count is: a new Telegram account costs nothing, so a
+    per-chat request would be a queue anyone could jump by starting over.
+    The masked number is carried along so the operator can tell who this is
+    without the real one being stored.
+    """
+
+    phone_hash: str
+    chat_id: int
+    masked_phone: str
+    requested_at: datetime = field(default_factory=lambda: datetime.now())
+
+
+@dataclass
+class ApprovedUser:
+    """A number the operator has allowed to use the bot without limit."""
+
+    phone_hash: str
+    masked_phone: str
+    approved_at: datetime = field(default_factory=lambda: datetime.now())
+    # Which chat approved it, for the audit trail. 0 when the approval came
+    # from PREAPPROVED_USERS rather than from someone pressing a button.
+    approved_by: int = 0
+
+
+@dataclass
 class UserSession:
     """User session data for conversation flow."""
 

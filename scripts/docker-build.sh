@@ -3,12 +3,12 @@
 # Build the application image from the local source.
 #
 # Usage:
-#   scripts/docker-build.sh                 # build geunsam2/korailbot:dev
+#   scripts/docker-build.sh                 # build korailbot:local
 #   scripts/docker-build.sh myname/bot:v4   # build under a different tag
 #
-# Note: docker-compose.yml runs the published geunsam2/korailbot:latest image.
-# To run what you just built, tag it accordingly or override the image in a
-# compose override file.
+# korailbot:local is what docker-compose.yml runs by default, so a plain
+# build here is immediately what `scripts/docker-up.sh` starts. Publishing
+# under your own namespace is the override, not the default.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
@@ -18,7 +18,7 @@ esac
 
 require_cmd docker
 
-IMAGE="${1:-geunsam2/korailbot:dev}"
+IMAGE="${1:-${IMAGE_NAME:-korailbot:local}}"
 
 cd "$ROOT_DIR"
 

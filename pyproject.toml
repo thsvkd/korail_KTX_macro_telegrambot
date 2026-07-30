@@ -30,7 +30,11 @@ dependencies = [
 containers = ["testcontainers[redis]>=4.8"]
 
 [project.urls]
-Homepage = "https://github.com/GeunSam2/korail_KTX_macro_telegrambot"
+Homepage = "https://github.com/thsvkd/korail_KTX_macro_telegrambot"
+# The repository this one was forked from. Kept in the metadata because most
+# of the original author's code is still here - see the attribution section
+# of the README.
+Original = "https://github.com/GeunSam2/korail_KTX_macro_telegrambot"
 
 [dependency-groups]
 dev = [

@@ -1,6 +1,10 @@
 services:
   app:
-    image: geunsam2/korailbot:latest
+    # Built locally by scripts/docker-build.sh. Set IMAGE_NAME in .env to run
+    # an image you publish yourself instead; there is no shared registry image
+    # to pull, on purpose - running a bot that handles Korail logins from an
+    # image someone else controls is not a default anyone should inherit.
+    image: ${IMAGE_NAME:-korailbot:local}
     container_name: korail_bot
     ports:
       - "8000:8080"

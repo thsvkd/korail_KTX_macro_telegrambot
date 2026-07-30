@@ -31,7 +31,7 @@ scripts/set-webhook.sh https://your.domain/telebot
 
 | 스크립트 | 설명 |
 | --- | --- |
-| `docker-build.sh [tag]` | 로컬 소스로 이미지 빌드 (기본 `geunsam2/korailbot:dev`) |
+| `docker-build.sh [tag]` | 로컬 소스로 이미지 빌드 (기본 `korailbot:local`) |
 | `docker-up.sh [service]` | 스택 기동. `--pull` 이미지 갱신, `--foreground` 로그 스트리밍 |
 | `docker-down.sh` | 스택 중지. `--volumes` 는 Redis 볼륨까지 삭제(확인 프롬프트) |
 | `docker-logs.sh [service]` | 로그 follow. `--tail N`, `--no-follow` |
@@ -77,6 +77,7 @@ scripts/set-webhook.sh https://your.domain/telebot
 - 인터프리터는 `uv` 가 관리합니다. `pyproject.toml` 의 `requires-python`
   (3.13) 에 맞는 버전을 호스트에 없으면 직접 내려받으므로, 별도로 파이썬을
   설치해 둘 필요가 없습니다. Docker 이미지도 같은 3.13 으로 빌드됩니다.
-- 배포 서버에 물린 `docker-compose.yml` 은 Docker Hub 의
-  `geunsam2/korailbot:latest` 를 받아서 실행합니다. 로컬에서 빌드한 이미지를
-  쓰려면 태그를 맞추거나 compose override 를 두세요.
+- `docker-compose.yml` 은 `docker-build.sh` 가 만드는 `korailbot:local` 을
+  그대로 실행합니다. 받아올 공용 이미지는 없습니다 — 코레일 로그인을 다루는
+  봇을 남이 관리하는 이미지로 띄우는 것이 기본값이어서는 안 되기 때문입니다.
+  직접 발행한 이미지를 쓰려면 `.env` 에 `IMAGE_NAME` 을 지정하세요.

@@ -1,21 +1,50 @@
 # 코레일 KTX 예매 텔레그램 챗봇
 
 매진된 KTX 열차를 자동으로 모니터링하여 좌석이 나오면 예약해주는 텔레그램 봇입니다.
+텔레그램에서 `/start` 를 누르고 버튼을 몇 번 누르면, 봇이 그 조건에 맞는 열차를
+계속 조회하다가 취소표가 나오는 순간 예약을 걸고 알려줍니다.
+
+> 이 저장소는 [GeunSam2/korail_KTX_macro_telegrambot](https://github.com/GeunSam2/korail_KTX_macro_telegrambot)
+> 의 fork 입니다. 자세한 내용은 [원작자 표기](#원작자-표기)와 [라이선스](#라이선스)를 읽어주세요.
+> 코레일과는 무관한 비공식 개인 프로젝트이며, 쓰기 전에 [주의사항](#주의사항)을 먼저 확인하세요.
+
+## 주요 기능
+
+- **취소표 감시 후 자동 예약** — 매진된 열차를 반복 조회하다가 좌석이 나오면 예약하고 알립니다.
+- **버튼으로 입력** — 날짜·역·시간대·좌석 종류처럼 선택지가 정해진 항목은 인라인 버튼으로 고릅니다. 직접 입력도 그대로 동작합니다.
+- **감시할 열차 고르기** — 해당 시간대 열차 목록에서 여러 개를 골라 그 열차만 감시할 수 있습니다. 고르지 않으면 시간대 전체를 감시합니다.
+- **검색 시작 시각 예약** — 명절 예매처럼 표가 풀리는 시각에 맞춰 검색을 예약합니다(최대 3일 뒤까지). 그때까지는 코레일에 요청을 보내지 않습니다.
+- **결제 확인** — 예약 후 1분 간격으로 결제를 재촉하고, 코레일에 실제로 결제됐는지 확인해서 알림을 멈추거나 좌석을 잃었음을 알려줍니다.
+- **재시작 복구와 멈춘 검색 감시** — 앱이 재시작되면 중단된 검색을 이어받고, 검색 프로세스가 죽으면 사용자에게 알리고 재개 버튼을 보냅니다.
+- **폴링 / 웹훅 두 가지 수신 방식** — 기본값인 폴링 모드는 공인 IP 나 인증서 없이 공유기 뒤에서도 동작합니다.
+- **자격증명 보호** — 코레일 비밀번호는 암호화해 저장하고, 로그와 알림의 전화번호는 마스킹합니다.
 
 ## 빠른 시작
+
+### 필요한 것
+
+- **텔레그램 봇 토큰** — 텔레그램에서 [@BotFather](https://t.me/BotFather) 에게 `/newbot` 을 보내 봇을 만들면 토큰을 받습니다.
+- **코레일 회원 계정** — 봇이 사용자의 휴대전화번호와 비밀번호로 코레일에 로그인합니다. 미리 가입되어 있어야 합니다.
+- **Docker** — 로컬 Redis(`dev-redis.sh`)와 통합·E2E 테스트(testcontainers)에 필요합니다.
+- **uv** — 아래 첫 명령으로 설치합니다. Python 3.13 은 uv 가 알아서 받아옵니다.
+
+### 설치와 실행
 
 ```bash
 # uv 설치 (한 번만) - Python 인터프리터까지 알아서 받아옵니다
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # 프로젝트 클론
-git clone https://github.com/GeunSam2/korail_KTX_macro_telegrambot.git
+git clone https://github.com/thsvkd/korail_KTX_macro_telegrambot.git
 cd korail_KTX_macro_telegrambot
 
 # .env 생성 + 시크릿 발급 + 의존성 설치 (처음 한 번만)
 ./scripts/setup.sh
 
 # .env 에 BOTTOKEN 입력
+
+# 개발용 Redis 기동 (Redis 가 없으면 run.sh 가 기동을 거부합니다)
+./scripts/dev-redis.sh
 
 # 실행 (기본값인 폴링 모드는 공인 IP·HTTPS 없이 바로 동작합니다)
 ./scripts/run.sh
@@ -123,21 +152,15 @@ cd korail_KTX_macro_telegrambot
 1. 귀경길 기차 예매를 하지 못한 안타까운 영혼들을 위해 만든 프로그램이므로, 개인용 목적이 아닌 상업적 목적등으로 이용하는 것을 엄중히 금합니다.
 2. 본 프로그램을 사용할 경우, 기본으로 설정된 1초에 1번 조회 요청에 대한 설정 값 이상으로 빠르게 설정하지 마십시오. 코레일 서버에 무리가 갈 뿐 아니라, 단위 시간내에 보다 빠른 값으로 조회를 요청할 경우, 계정이 정지될 수 있습니다.
 3. 본 프로그램은 2026-04-08일 기준으로 정상 동작하지만, 사이트의 구성이나 변수명 변경등에 따라 언제든 동작하지 않을 수 있습니다.
+4. 이 프로젝트는 코레일(한국철도공사)과 아무 관계가 없는 비공식 개인 프로젝트입니다. 코레일의 승인이나 지원을 받지 않았습니다.
+5. 자동화된 조회·예약은 코레일 이용약관에 저촉될 수 있습니다. 사용 여부는 본인이 판단해야 하며, 계정 제재를 포함해 사용에 따르는 책임은 사용자에게 있습니다.
+6. **본인 명의의 계정으로만 사용하십시오.** 봇은 입력받은 휴대전화번호와 비밀번호로 코레일에 로그인하므로, 타인의 계정 정보를 넣어 돌리는 것은 사용 범위 밖입니다.
+7. 조회 간격(`SEARCH_INTERVAL`)은 기본값인 1초 이상으로 두고, 필요 이상으로 여러 검색을 동시에 돌리지 마세요. 검색 시작 시각 예약을 쓰면 표가 풀리기 전까지 요청을 아예 보내지 않으므로 미리 돌리는 것보다 요청 수가 훨씬 적습니다.
 
 ## 설정법
 
-### 로컬 개발 (macOS/Linux)
-
-```bash
-# 1. .env 생성 + 시크릿 발급 + 의존성 설치
-./scripts/setup.sh
-
-# 2. .env 를 열어 BOTTOKEN 입력
-
-# 3. 개발용 Redis 기동 후 실행
-./scripts/dev-redis.sh
-./scripts/run.sh
-```
+로컬 개발(macOS/Linux) 절차는 위 [빠른 시작](#설치와-실행)과 같습니다 —
+`setup.sh` → `.env` 에 `BOTTOKEN` 입력 → `dev-redis.sh` → `run.sh`.
 
 ### 업데이트 수신 방식 (`RECEIVE_MODE`)
 
@@ -272,34 +295,23 @@ waitress 이고, 폴러가 중복 기동되지 않도록 의도적으로 단일 
 
 ## 개발 워크플로우
 
-### 테스트 실행
-
 ```bash
-# 전체 테스트 실행 (testcontainers 가 Redis 를 띄우므로 Docker 필요)
-make test
-
-# 단위 테스트만 (Redis 불필요)
-make test-unit
-
-# 특정 테스트만
-./scripts/test.sh -k credential
-```
-
-**테스트 구성:**
-- `tests/unit/` - 순수 단위 테스트 (입력 검증, 암호화, 마스킹, 자격증명 전달)
-- `tests/integration/` - Redis 와 서비스 계층 통합 테스트
-- `tests/e2e/` - 예약 플로우 전체 시나리오
-
-### 코드 품질
-
-```bash
+make test        # 전체 682개 (testcontainers 가 Redis 를 띄우므로 Docker 필요)
+make test-unit   # 단위 538개 (Docker 불필요)
 make lint        # ruff format --check + ruff check
 make format      # 포맷 및 자동 수정 적용
 make typecheck   # mypy
 ```
 
-`uv run pre-commit install` 을 한 번 실행해 두면 커밋 시점에 같은 검사가
-자동으로 돕니다. CI 의 `check` 잡이 통과해야만 이미지 빌드와 배포가 진행됩니다.
+부분 실행 방법, pre-commit 설치, 커밋 규약, mypy 가 아직 CI 게이트가 아니라는
+점 등 기여에 필요한 내용은 **[CONTRIBUTING.md](CONTRIBUTING.md)** 에 정리되어
+있습니다. CI 의 `check` 잡이 통과해야만 이미지 빌드와 배포가 진행됩니다.
+
+**테스트 구성:**
+- `tests/unit/` (538개) - Redis 없이 도는 단위 테스트 (입력 검증, 키보드, 암호화,
+  마스킹, 자격증명 전달, 스케줄, 재시작 복구 등)
+- `tests/integration/` (137개) - Redis 와 서비스 계층 통합 테스트
+- `tests/e2e/` (7개) - 예약 플로우 전체 시나리오
 
 ### 의존성 추가 시
 ```bash
@@ -309,7 +321,7 @@ uv add --dev [패키지명]     # 개발 전용
 
 # 2. 커밋 — Docker 도 uv.lock 에서 바로 설치하므로 별도 생성 단계가 없습니다
 git add pyproject.toml uv.lock
-git commit -m "feat: Add new dependency"
+git commit -m "build: 의존성에 <패키지명> 을 추가한다"
 ```
 
 ### korail2 라이브러리 업데이트
@@ -349,3 +361,55 @@ tests/                              # 테스트
 - **품질**: ruff (lint + format), mypy, pre-commit
 - **Testing**: pytest, testcontainers
 - **Deployment**: Docker (멀티 스테이지, amd64 + arm64), GitHub Actions
+
+## 문서
+
+| 문서 | 내용 |
+| --- | --- |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 개발 환경 세팅, 커밋 규약, PR 절차 |
+| [SECURITY.md](SECURITY.md) | 취약점 신고 절차와 이 프로젝트 특유의 보안 사항 |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | 서버 배포 |
+| [CONVERSATION_FLOW.md](CONVERSATION_FLOW.md) | 대화 단계별 상태 흐름 |
+| [scripts/README.md](scripts/README.md) | 스크립트 전체 목록과 실전 주의점 |
+| [tests/README.md](tests/README.md) | 테스트 구조와 실행 방법 |
+
+## 원작자 표기
+
+이 저장소는 **[GeunSam2/korail_KTX_macro_telegrambot](https://github.com/GeunSam2/korail_KTX_macro_telegrambot)
+의 fork** 입니다. 봇의 기본 발상과 토대가 되는 코드는 원저작자 GeunSam2 가 만든 것입니다.
+
+- 분기 시점: upstream `8095525` (2026-06-05). upstream 커밋을 하나도 빠뜨리지 않고 모두 포함합니다.
+- 이 fork 의 자체 커밋: 32개, 117 파일 `+18,202 / -4,689` (2026-07-30 기준)
+- `git blame` 실측으로 현재 `src/**/*.py` 10,967 줄 중 **4,587 줄(41.8%)이 upstream 유래**이고
+  6,380 줄(58.2%)이 이 fork 에서 작성되었습니다. 즉 원본 코드가 여전히 실질적인 비중을 차지합니다.
+
+이 fork 에서 달라진 주요 항목:
+
+- 기능: 감시할 열차 고르기, 검색 시작 시각 예약, 결제 여부 확인, 인라인 버튼 UI,
+  재시작 복구와 멈춘 검색 감시, 폴링 모드
+- 구조: `src/korail_bot/` src 레이아웃으로 전환, Pipenv → uv + `pyproject.toml` + `uv.lock`
+- 품질: 테스트 2,400 줄 → 7,872 줄, ruff·mypy·pre-commit·dependabot 도입, `scripts/` 15개 추가
+
+## 라이선스
+
+이 저장소는 [MIT 라이선스](LICENSE)로 배포합니다. 저작권 표기에는 원저작자 GeunSam2 와
+이 fork 의 기여분이 함께 들어갑니다 — 위 [원작자 표기](#원작자-표기)에서 보듯 현재 코드의
+41.8% 가 원본 유래이므로, 원저작자 표기를 빼고 재배포하는 것은 라이선스 조건 위반입니다.
+
+한 가지 밝혀둘 점이 있습니다. **원본 저장소에는 LICENSE 파일이 없습니다.** 이 fork 는
+`pyproject.toml` 에 이미 선언되어 있던 MIT 표기를 따라 LICENSE 파일을 갖추고 원저작자를
+함께 표기하는 쪽을 택했으나, 원저작자가 명시적으로 MIT 를 선언한 적은 없습니다. 원저작자의
+의사가 다르다면 알려주시는 대로 따르겠습니다. 상업적 이용 등 이용 범위가 중요한 경우에는
+원저작자에게 직접 확인하시기를 권합니다.
+
+의존 라이브러리 [korail2](https://github.com/dhfhfk/korail2/tree/bypassDynapath)(원작
+[carpedm20/korail2](https://github.com/carpedm20/korail2), Copyright (c) 2014 Taehoon Kim)는
+BSD 3-Clause 라이선스이며, 원 LICENSE 파일이 설치 패키지에 포함되어 배포 이미지에도 함께 들어갑니다.
+
+## 기여
+
+기여를 환영합니다. 개발 환경 세팅, 커밋 규약(한국어 Conventional Commits), 코드 스타일
+(문서는 한국어 / 주석과 docstring 은 영어), PR 절차, CI 가 무엇을 막고 무엇을 막지 않는지는
+**[CONTRIBUTING.md](CONTRIBUTING.md)** 에 정리되어 있습니다.
+
+보안 취약점은 공개 이슈로 올리지 말고 [SECURITY.md](SECURITY.md) 의 절차를 따라주세요.

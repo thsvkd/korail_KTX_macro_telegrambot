@@ -1,6 +1,12 @@
-name: Build Image
+name: CI/CD
 
-# Required repository secrets:
+# The `check` job deliberately references no secret. It has to run to
+# completion on a pull request opened from a fork, where GitHub injects no
+# secrets at all, otherwise an outside contributor has no way to tell whether
+# their change is sound. Everything that needs a credential lives in `cicd`,
+# which never runs on a pull request.
+#
+# Required repository secrets (cicd only):
 #   DOCKERHUB_USERNAME, DOCKERHUB_TOKEN
 #   SSH_USERNAME, SSH_PASSWORD
 #   TELEGRAM_BOTTOKEN          - bot token
@@ -8,23 +14,47 @@ name: Build Image
 #   SESSION_SECRET             - credential encryption key material
 #   ADMIN_COMMAND_PASSWORD     - admin command password (NOT the Korail one)
 #   REDIS_PASSWORD             - Redis AUTH password
+#   ALLOW_LIST                 - phone numbers allowed to use the bot. A secret
+#                                rather than a variable because GitHub masks
+#                                `secrets.*` in run logs and `vars.*` not.
 #   ADMIN_USERID, ADMIN_PASSWD - optional Korail account for the magic login
 #   ADMIN_MAGIC_STRING         - optional trigger for that shortcut
-# Repository variables:
-#   ALLOW_LIST
+# Required repository variables (cicd only):
+#   IMAGE_NAME                 - image to build and push, e.g. you/korailbot:latest.
+#                                Unset means "this checkout is not the one that
+#                                publishes"; the whole cicd job is skipped.
+#   DEPLOY_HOST                - host to deploy to. Unset skips the deploy steps
+#                                but still builds and pushes the image.
+# Both used to be hardcoded to the upstream owner's Docker Hub namespace and
+# personal server. They are variables now so that a fork cannot push to, or
+# SSH into, infrastructure it does not own.
 
 on:
     push:
         branches:
             - 'master'
     pull_request:
+        branches:
+            - 'master'
     workflow_dispatch:
+
+# Least privilege. `check` executes code that arrived in a pull request -
+# `uv sync` runs build backends and pytest runs the PR's own test files - so
+# the token it gets should not be able to write anything.
+permissions:
+    contents: read
 
 jobs:
   # Nothing is published or deployed until this passes. Before it existed a
   # push to master went straight to the server with no test having run.
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+        # Pushing a fixup to a pull request should abandon the previous run
+        # rather than queue behind it.
+        group: check-${{ github.workflow }}-${{ github.ref }}
+        cancel-in-progress: true
     steps:
     -
         name: Checkout
@@ -55,15 +85,41 @@ jobs:
         run: uv run --frozen pytest tests/integration tests/e2e -q
     -
         name: Type check
-        # Not blocking yet: 65 pre-existing errors, mostly str|None reaching
-        # parameters typed int. Drop continue-on-error once they are cleared.
+        # Not blocking yet: 55 pre-existing errors in 12 files as of 2026-07-30,
+        # mostly str|None reaching parameters typed int, concentrated in
+        # handlers/conversation_handler.py and api/telegram_webhook.py. A failure
+        # here does not stop a merge, so do not read a green tick on this job as
+        # "mypy is clean". Drop continue-on-error once the backlog is cleared.
         continue-on-error: true
         run: uv run --frozen mypy
 
   cicd:
     needs: check
-    if: github.event_name != 'pull_request'
+    # Three guards, each closing a different hole:
+    #   - not a pull_request: a fork PR must never reach a step that reads a
+    #     secret or pushes an image. GitHub already withholds secrets from fork
+    #     PRs, but relying on empty credentials as the safety net is not a
+    #     safety net.
+    #   - master only: `workflow_dispatch` otherwise lets any branch be built
+    #     and shipped to production without review.
+    #   - this repository only: `on: push` fires in forks too, so without this
+    #     a contributor who enables Actions on their fork starts deploying to
+    #     someone else's server on every push to their own master.
+    # vars.IMAGE_NAME acts as the opt-in: a checkout that has not been told
+    # where to publish skips the job instead of failing loudly on every push.
+    if: >-
+        github.event_name != 'pull_request'
+        && github.ref == 'refs/heads/master'
+        && github.repository == 'thsvkd/korail_KTX_macro_telegrambot'
+        && vars.IMAGE_NAME != ''
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+        # Two pushes in quick succession must not run `docker compose down` and
+        # `up -d` against the same host at the same time. Serialise instead of
+        # cancelling: a half-applied deploy is worse than a slow one.
+        group: deploy-production
+        cancel-in-progress: false
     steps:
     -
         name: Checkout
@@ -91,7 +147,7 @@ jobs:
             # Raspberry Pi instead of only on the deployment server.
             platforms: linux/amd64,linux/arm64
             push: true
-            tags: geunsam2/korailbot:latest
+            tags: ${{ vars.IMAGE_NAME }}
             cache-from: type=gha
             cache-to: type=gha,mode=max
 
@@ -99,9 +155,10 @@ jobs:
         name: Copy docker-compose.yml to server
         # Pinned to a release: @master would run whatever the action author
         # pushes next, with our deploy credentials.
+        if: vars.DEPLOY_HOST != ''
         uses: appleboy/scp-action@v0.1.7
         with:
-            host: server.geunsam2.xyz
+            host: ${{ vars.DEPLOY_HOST }}
             username: ${{ secrets.SSH_USERNAME }}
             password: ${{ secrets.SSH_PASSWORD }}
             port: 22
@@ -110,9 +167,10 @@ jobs:
 
     -
         name: Deploy with Docker Compose
+        if: vars.DEPLOY_HOST != ''
         uses: appleboy/ssh-action@v1.2.0
         with:
-            host: server.geunsam2.xyz
+            host: ${{ vars.DEPLOY_HOST }}
             username: ${{ secrets.SSH_USERNAME }}
             password: ${{ secrets.SSH_PASSWORD }}
             port: 22
@@ -125,6 +183,11 @@ jobs:
                 # of being expanded by the remote shell.
                 umask 077
                 cat > .env << 'EOF'
+                # The image compose runs. Without this, docker-compose.yml
+                # falls back to korailbot:local - the tag a local build
+                # produces - and the image pulled just above would sit unused
+                # while compose failed to find one that was never built here.
+                IMAGE_NAME=${{ vars.IMAGE_NAME }}
                 BOTTOKEN=${{ secrets.TELEGRAM_BOTTOKEN }}
                 TELEGRAM_WEBHOOK_SECRET=${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
                 SESSION_SECRET=${{ secrets.SESSION_SECRET }}
@@ -132,7 +195,7 @@ jobs:
                 ADMIN_MAGIC_STRING=${{ secrets.ADMIN_MAGIC_STRING }}
                 USERID=${{ secrets.ADMIN_USERID }}
                 USERPW=${{ secrets.ADMIN_PASSWD }}
-                ALLOW_LIST=${{ vars.ALLOW_LIST }}
+                ALLOW_LIST=${{ secrets.ALLOW_LIST || vars.ALLOW_LIST }}
                 REDIS_HOST=redis
                 REDIS_PORT=6379
                 REDIS_DB=0
@@ -149,7 +212,7 @@ jobs:
                   docker login -u '${{ secrets.DOCKERHUB_USERNAME }}' --password-stdin
 
                 # Pull latest image
-                docker pull geunsam2/korailbot:latest
+                docker pull '${{ vars.IMAGE_NAME }}'
 
                 # Stop and remove old containers
                 docker compose down
@@ -157,9 +220,8 @@ jobs:
                 # Start services with Docker Compose
                 docker compose up -d
 
-                # Show status
+                # Show status. Deliberately no `docker compose logs`: this
+                # repository is public, so the run log is public too, and the
+                # application logs carry unmasked chat_id values.
                 echo "=== Docker Compose Status ==="
                 docker compose ps
-                echo ""
-                echo "=== Recent Logs ==="
-                docker compose logs --tail=30

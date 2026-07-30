@@ -8,23 +8,47 @@ This test suite provides comprehensive coverage for the Korail KTX Telegram Bot 
 - **Integration Tests**: Test service interactions and workflows
 - **E2E Tests**: Test complete user journeys
 
-**Total Tests: 119+**
+**Total Tests: 682** (unit 538, integration 137, e2e 7) as of 2026-07-30.
+
+Verify with `uv run pytest --collect-only -q`; the per-file counts below drift as
+tests are added, so treat them as a map rather than a contract.
 
 ## Test Structure
 
 ```
 tests/
-├── unit/                    # Unit tests
-│   └── test_validators.py  # Input validation tests (47 tests)
-├── integration/            # Integration tests
-│   ├── test_refactored_app.py       # Basic architecture tests (9 tests)
-│   ├── test_conversation_handler.py # Conversation flow tests (18 tests)
-│   ├── test_reservation_service.py  # Reservation management tests (8 tests)
-│   ├── test_payment_reminder.py     # Payment reminder tests (11 tests)
-│   └── test_webhook.py              # Webhook handling tests (15 tests)
-├── e2e/                    # End-to-end tests
-│   └── test_full_reservation_flow.py # Complete flows (7 tests)
-└── conftest.py            # Shared fixtures (Redis container)
+├── unit/                                  # No Redis, no Docker
+│   ├── test_keyboards.py                  # Inline keyboard building (114)
+│   ├── test_validators.py                 # Input validation (85)
+│   ├── test_train_selection.py            # Picking trains to watch (41)
+│   ├── test_callback_routing.py           # Button callback dispatch (40)
+│   ├── test_scheduled_search.py           # Search start scheduling (40)
+│   ├── test_input_handling.py             # Text input handling (32)
+│   ├── test_telegram_poller.py            # Polling mode (28)
+│   ├── test_restart_recovery.py           # Resume after restart (26)
+│   ├── test_payment_verification.py       # Payment confirmation (24)
+│   ├── test_search_failure_handling.py    # Korail failure backoff (18)
+│   ├── test_security.py                   # Auth and internal callback (18)
+│   ├── test_search_pacing.py              # Interval and jitter (17)
+│   ├── test_korail_client.py              # Korail client wrapper (16)
+│   ├── test_preconfigured_login.py        # USERID/USERPW path (15)
+│   ├── test_admin_auth.py                 # Admin command auth (12)
+│   ├── test_credential_handling.py        # Credential passing (8)
+│   └── test_search_process_shutdown.py    # Child process shutdown (4)
+├── integration/                           # Needs Redis (testcontainers)
+│   ├── test_dead_search.py                # Stalled search watchdog (25)
+│   ├── test_webhook.py                    # Webhook handling (22)
+│   ├── test_conversation_handler.py       # Conversation flow (19)
+│   ├── test_storage_scheduled_search.py   # Scheduled search storage (15)
+│   ├── test_payment_reminder.py           # Payment reminders (11)
+│   ├── test_shutdown_and_resume.py        # Shutdown and resume (11)
+│   ├── test_storage_ttl.py                # Key expiry (11)
+│   ├── test_refactored_app.py             # Basic architecture (9)
+│   ├── test_reservation_service.py        # Reservation management (8)
+│   └── test_storage_scan.py               # SCAN-based key listing (6)
+├── e2e/                                   # Needs Redis (testcontainers)
+│   └── test_full_reservation_flow.py      # Complete flows (7)
+└── conftest.py                            # Shared fixtures (Redis container)
 ```
 
 ## Running Tests

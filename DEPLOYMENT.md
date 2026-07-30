@@ -37,7 +37,7 @@ GitHub Actions가 자동으로 복사하지만, 수동으로도 가능합니다:
 scp docker-compose.yml user@server:/home/user/korail_bot/
 
 # 또는 서버에서 직접 다운로드
-wget https://raw.githubusercontent.com/your-repo/master/docker-compose.yml
+wget https://raw.githubusercontent.com/thsvkd/korail_KTX_macro_telegrambot/master/docker-compose.yml
 ```
 
 ### 4. .env 파일 생성
@@ -117,8 +117,9 @@ git push origin master
 ```bash
 cd ~/korail_bot
 
-# 최신 이미지 다운로드
-docker pull geunsam2/korailbot:latest
+# 최신 소스로 이미지 재빌드 (기본 태그 korailbot:local)
+git pull
+./scripts/docker-build.sh
 
 # 컨테이너 재시작
 docker compose down
@@ -219,8 +220,9 @@ docker compose down -v
 ### 이미지 업데이트
 
 ```bash
-# 최신 이미지 다운로드
-docker pull geunsam2/korailbot:latest
+# 최신 소스로 이미지 재빌드
+git pull
+./scripts/docker-build.sh
 
 # 기존 컨테이너 삭제 후 재시작
 docker compose up -d --force-recreate
@@ -370,9 +372,13 @@ sudo systemctl restart docker
 
 문제 발생 시:
 1. 로그 확인: `docker compose logs -f`
-2. Redis 상태: `docker exec korail_redis redis-cli PING`
-3. 이슈 등록: GitHub Issues
-4. 문서 참조: REDIS_MIGRATION.md
+2. Redis 상태: `./scripts/redis-cli.sh PING` (compose 의 Redis 는 `--requirepass`
+   로 뜨므로 인증 없이 `redis-cli PING` 을 보내면 실패합니다)
+3. 제보: [GitHub Issues](https://github.com/thsvkd/korail_KTX_macro_telegrambot/issues)
+   에 올려주세요. 무엇을 붙이고 무엇을 지워야 하는지는
+   [CONTRIBUTING.md](CONTRIBUTING.md) 의 '버그 제보' 절에 있습니다. 보안
+   문제라면 [SECURITY.md](SECURITY.md) 의 비공개 신고 경로를 이용하십시오.
+4. 문서 참조: [README.md](README.md), [scripts/README.md](scripts/README.md)
 
 ---
 

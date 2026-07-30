@@ -1,0 +1,21 @@
+# 이슈 템플릿 설정
+#
+# 주의: 이 저장소는 현재 GitHub 설정에서 Issues 가 비활성화되어 있습니다.
+# 아래 템플릿은 Settings > General > Features 에서 Issues 를 켜야 실제로
+# 사용자에게 노출됩니다.
+
+# 빈 이슈를 막습니다. 버그인지 제안인지부터 갈라놓는 편이 답하기 쉽습니다.
+blank_issues_enabled: false
+
+contact_links:
+  - name: 보안 취약점 신고
+    url: https://github.com/thsvkd/korail_KTX_macro_telegrambot/security/advisories/new
+    about: 자격증명 노출이나 인증 우회 같은 보안 문제는 공개 이슈가 아니라 비공개 신고로 알려주십시오. SECURITY.md 를 함께 읽어주십시오.
+
+  - name: 설정과 실행 방법 (README)
+    url: https://github.com/thsvkd/korail_KTX_macro_telegrambot#readme
+    about: 환경변수, 실행 방법, 대화 흐름은 README 에 정리되어 있습니다. 이슈를 올리기 전에 확인해 주십시오.
+
+  - name: 배포 관련 문제 (DEPLOYMENT.md)
+    url: https://github.com/thsvkd/korail_KTX_macro_telegrambot/blob/master/DEPLOYMENT.md
+    about: Docker, 웹훅 등록, 서버 배포에 관한 내용입니다.

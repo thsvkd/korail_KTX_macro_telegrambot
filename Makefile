@@ -1,4 +1,8 @@
-IMAGE_NAME := geunsam2/korailbot:v3
+# The image the compose stack runs. Defaults to a local tag with no registry
+# in it: anyone self-hosting this builds their own rather than pulling an
+# image someone else controls. Override to publish under your own namespace:
+#   IMAGE_NAME=you/korailbot:latest make docker-build docker-push
+IMAGE_NAME ?= korailbot:local
 
 # Thin wrappers around scripts/ - see scripts/README.md for the full options.
 

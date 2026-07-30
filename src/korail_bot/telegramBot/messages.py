@@ -6,6 +6,8 @@
 
 from typing import ClassVar
 
+from korail_bot.config.settings import settings
+
 
 class Messages:
     """봇 메시지 템플릿 클래스"""
@@ -141,22 +143,25 @@ class Messages:
 """
 
     # ========== 예약 정보 입력 메시지 ==========
-    REQUEST_DATE = """✅ 출발일 입력 완료
+    # 역 목록 주소는 설정에서 가져온다. 코레일이 사이트를 개편하면서 예전
+    # 주소가 죽은 적이 있는데, 같은 주소를 여기 두 번 적어두면 그때 고칠
+    # 곳이 세 군데가 된다.
+    REQUEST_DATE = f"""✅ 출발일 입력 완료
 
 🚉 출발역을 입력해주세요.
 예시: 광명, 서울, 부산 등
 
 💡 역 이름만 입력 ('역' 제외)
-📍 역 목록: http://www.letskorail.com/ebizprd/stationKtxList.do
+📍 역 목록: {settings.KORAIL_STATION_LIST_URL}
 """
 
-    REQUEST_SRC_STATION = """✅ 출발역 입력 완료
+    REQUEST_SRC_STATION = f"""✅ 출발역 입력 완료
 
 🏁 도착역을 입력해주세요.
 예시: 광주송정, 대전, 동대구 등
 
 💡 역 이름만 입력 ('역' 제외)
-📍 역 목록: http://www.letskorail.com/ebizprd/stationKtxList.do
+📍 역 목록: {settings.KORAIL_STATION_LIST_URL}
 """
 
     REQUEST_DST_STATION = """✅ 도착역 입력 완료

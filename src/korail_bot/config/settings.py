@@ -112,8 +112,24 @@ class Settings:
     # for when Korail stops serving that build and the library has not caught
     # up yet. Unset means whatever the library ships.
     KORAIL_APP_VERSION: str | None = os.environ.get("KORAIL_APP_VERSION") or None
-    KORAIL_STATION_LIST_URL: str = "http://www.letskorail.com/ebizprd/stationKtxList.do"
-    KORAIL_PAYMENT_URL: str = "https://www.letskorail.com/ebizprd/EbizPrdTicketpr13500W_pr13510.do?"
+    # Where the user is sent to pay for a seat the bot just reserved.
+    #
+    # Korail moved letskorail.com to korail.com and rebuilt the site as a
+    # single-page app, which took the old .do pages with it: the address this
+    # used to carry now redirects to a 404. Overridable, because that has
+    # happened once and the link is only useful while it points somewhere.
+    #
+    # /ticket/reservation/list is the reservation list - the site's own
+    # RESERVATION_LIST route - and it is where an unpaid reservation is paid
+    # for. Signed-out visitors are asked to log in and returned here
+    # afterwards, so the link works whatever state the browser is in.
+    KORAIL_PAYMENT_URL: str = os.environ.get(
+        "KORAIL_PAYMENT_URL", "https://www.korail.com/ticket/reservation/list"
+    )
+    # The station guide, offered when a station name has to be typed.
+    KORAIL_STATION_LIST_URL: str = os.environ.get(
+        "KORAIL_STATION_LIST_URL", "https://www.korail.com/ticket/train/stationGuide/station"
+    )
 
     # User Access Control
     ALLOW_LIST: list[str] = (

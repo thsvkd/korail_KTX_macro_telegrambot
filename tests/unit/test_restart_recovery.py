@@ -178,7 +178,10 @@ class TestResume:
 
         message = service.telegram.send_message.call_args[0][1]
         assert "중복" in message
-        assert "letskorail" in message
+        # The configured payment link, not a hardcoded domain: Korail has
+        # already moved the site once, and what this test is about is that
+        # the notice points somewhere the user can pay.
+        assert settings.KORAIL_PAYMENT_URL in message
 
     def test_one_broken_record_does_not_stop_the_others(self, service, search_params):
         good = make_reservation(search_params, chat_id=111)

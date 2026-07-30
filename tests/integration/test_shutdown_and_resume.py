@@ -17,6 +17,7 @@ from korail_bot.config.settings import settings
 from korail_bot.models import TrainSearchParams
 from korail_bot.services import ReservationService, TelegramService
 from korail_bot.storage import RedisStorage
+from tests.fixtures.processes import make_alive
 
 FIRST_RUN = "run-before-the-restart"
 SECOND_RUN = "run-after-the-restart"
@@ -57,7 +58,7 @@ def _service(storage):
 def _start(service, search_params, pid=424242):
     """Start a search with a stand-in for the child process."""
     with patch("subprocess.Popen") as popen:
-        popen.return_value.pid = pid
+        make_alive(popen, pid)
         started = service.start_reservation_process(
             chat_id=CHAT_ID, username=USERNAME, password=PASSWORD, search_params=search_params
         )
@@ -117,7 +118,7 @@ class TestRestartResumesTheSearch:
             patch.object(second, "_owns_process", return_value=False),
             patch("subprocess.Popen") as popen,
         ):
-            popen.return_value.pid = 525252
+            make_alive(popen, 525252)
             summary = second.reconcile_after_restart()
         return summary, second, popen
 
@@ -189,7 +190,7 @@ class TestAppSessionOutlivesTheRestart:
             patch.object(second, "_owns_process", return_value=False),
             patch("subprocess.Popen") as popen,
         ):
-            popen.return_value.pid = 525252
+            make_alive(popen, 525252)
             summary = second.reconcile_after_restart()
 
         assert summary["resumed"] == 1

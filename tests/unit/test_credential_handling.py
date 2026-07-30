@@ -6,6 +6,7 @@ line is readable by every process on the host via `ps` or /proc.
 """
 
 import json
+import sys
 from unittest.mock import Mock, patch
 
 import pytest
@@ -13,6 +14,7 @@ import pytest
 from korail_bot.models import TrainSearchParams
 from korail_bot.services.reservation_service import ReservationService
 from korail_bot.storage.base import StorageInterface
+from tests.fixtures.processes import make_alive
 
 USERNAME = "010-1234-5678"
 PASSWORD = "sup3r-s3cret-pw"
@@ -43,15 +45,15 @@ def service():
     # Nothing running for this chat; otherwise the duplicate guard refuses to
     # start, because a bare Mock answers every lookup with a truthy Mock.
     storage.get_running_reservation.return_value = None
+    # Likewise nothing left over from a search that died.
+    storage.get_dead_search.return_value = None
     return ReservationService(storage, Mock())
 
 
 def _start(service, search_params):
     """Run start_reservation_process against a mocked Popen."""
     with patch("subprocess.Popen") as popen:
-        process = Mock()
-        process.pid = 4242
-        popen.return_value = process
+        process = make_alive(popen)
 
         success = service.start_reservation_process(
             chat_id=555, username=USERNAME, password=PASSWORD, search_params=search_params
@@ -78,7 +80,7 @@ class TestCredentialHandoff:
         _, popen, _ = _start(service, search_params)
 
         argv = popen.call_args[0][0]
-        assert argv[:3] == ["python", "-m", "korail_bot.telegramBot.telebotBackProcess"]
+        assert argv[:3] == [sys.executable, "-m", "korail_bot.telegramBot.telebotBackProcess"]
         # Order must match what telebotBackProcess reads.
         assert argv[3:] == [
             "20991231",

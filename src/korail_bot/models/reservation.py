@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import Enum, StrEnum
 
 
 @dataclass
@@ -105,6 +105,41 @@ class RunningReservation:
     def is_stale(self, current_run_id: str) -> bool:
         """Check whether this record outlived the process that owned it."""
         return self.run_id != current_run_id
+
+
+class DeathCause(StrEnum):
+    """Why a search stopped without saying so."""
+
+    # Never got going: the process was spawned and was gone moments later.
+    START_FAILED = "start_failed"
+    # Ran for a while and then vanished, without the callback that a search
+    # ending normally always sends.
+    CRASHED = "crashed"
+
+
+@dataclass
+class DeadSearch:
+    """
+    A search that stopped without finishing, kept so it can be picked back up.
+
+    A search ending normally - a seat booked, or the attempt given up on -
+    calls back to the app, which is what clears its record away. Nothing calls
+    back when the process simply dies, and the difference matters to the user:
+    they are waiting on a search that no longer exists, and the tickets they
+    were waiting for are still out there. So the details are moved here, where
+    they are no longer mistaken for a running search but are still everything
+    needed to start the same search again.
+    """
+
+    chat_id: int
+    korail_id: str
+    search_params: TrainSearchParams
+    cause: DeathCause
+    # Whether the login kept for restarts was still there when the death was
+    # noticed. Without it a search cannot be resumed, and the user is better
+    # told that up front than offered a button that fails.
+    resumable: bool = True
+    died_at: datetime = field(default_factory=lambda: datetime.now())
 
 
 @dataclass

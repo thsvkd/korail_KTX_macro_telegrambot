@@ -3,6 +3,7 @@
 from abc import ABC, abstractmethod
 
 from korail_bot.models import (
+    DeadSearch,
     MultiReservationStatus,
     PaymentStatus,
     RunningReservation,
@@ -75,6 +76,22 @@ class StorageInterface(ABC):
     @abstractmethod
     def get_all_scheduled_searches(self) -> "list[ScheduledSearch]":
         """Every search waiting to start."""
+        pass
+
+    # Dead Search Management
+    @abstractmethod
+    def get_dead_search(self, chat_id: int) -> "DeadSearch | None":
+        """Get the stopped search a chat has yet to deal with."""
+        pass
+
+    @abstractmethod
+    def save_dead_search(self, search: "DeadSearch") -> None:
+        """Keep a stopped search so the user can resume or discard it."""
+        pass
+
+    @abstractmethod
+    def delete_dead_search(self, chat_id: int) -> None:
+        """Forget a stopped search."""
         pass
 
     # Resume Credentials Management

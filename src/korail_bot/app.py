@@ -21,6 +21,7 @@ from korail_bot.services import (
     PaymentReminderService,
     ReservationService,
     ScheduledSearchService,
+    SearchWatchdogService,
     TelegramPoller,
     TelegramService,
 )
@@ -67,6 +68,7 @@ telegram_service = TelegramService(settings.TELEGRAM_BOT_TOKEN)
 reservation_service = ReservationService(storage, telegram_service)
 payment_reminder_service = PaymentReminderService(storage, telegram_service)
 scheduled_search_service = ScheduledSearchService(storage, telegram_service, reservation_service)
+search_watchdog_service = SearchWatchdogService(reservation_service)
 
 # Configure API resources with dependency injection
 api.add_resource(
@@ -150,6 +152,13 @@ if not is_running_from_reloader():
 if not is_running_from_reloader():
     scheduled_search_service.start()
 
+# A search that dies takes its record with it into a lie: the record says a
+# search is running, and nothing else is watching to contradict it. This
+# thread does, and tells the user, because the alternative is them waiting out
+# the afternoon on a process that stopped at lunchtime.
+if not is_running_from_reloader():
+    search_watchdog_service.start()
+
 poller = None
 if settings.RECEIVE_MODE == "polling" and not is_running_from_reloader():
     poller = TelegramPoller(
@@ -184,6 +193,7 @@ def shutdown() -> None:
         poller.stop()
 
     scheduled_search_service.stop()
+    search_watchdog_service.stop()
 
     try:
         reservation_service.shutdown()

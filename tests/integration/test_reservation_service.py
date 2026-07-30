@@ -12,6 +12,7 @@ import pytest
 from korail_bot.models import RunningReservation, TrainSearchParams
 from korail_bot.services import ReservationService, TelegramService
 from korail_bot.storage import RedisStorage
+from tests.fixtures.processes import alive_process
 
 
 class TestReservationService:
@@ -42,8 +43,7 @@ class TestReservationService:
     @patch("subprocess.Popen")
     def test_start_reservation_process_success(self, mock_popen):
         """Test starting a reservation process successfully."""
-        mock_process = Mock()
-        mock_process.pid = 12345
+        mock_process = alive_process(12345)
         mock_popen.return_value = mock_process
 
         chat_id = 99999
@@ -133,8 +133,7 @@ class TestReservationService:
     def test_cancel_reservation_success(self, mock_popen):
         """Test cancelling a running reservation."""
         # Start a reservation first
-        mock_process = Mock()
-        mock_process.pid = 12345
+        mock_process = alive_process(12345)
         mock_popen.return_value = mock_process
 
         chat_id = 99999
@@ -229,10 +228,8 @@ class TestReservationService:
     @patch("subprocess.Popen")
     def test_cancel_all_reservations(self, mock_popen):
         """Test cancelling all reservations."""
-        mock_process1 = Mock()
-        mock_process1.pid = 11111
-        mock_process2 = Mock()
-        mock_process2.pid = 22222
+        mock_process1 = alive_process(11111)
+        mock_process2 = alive_process(22222)
 
         mock_popen.side_effect = [mock_process1, mock_process2]
 
@@ -259,12 +256,18 @@ class TestReservationService:
         # that the search actually went away, and a kill() that never fails
         # describes a process nothing can stop.
         stopped = set()
+        children = {11111: mock_process1, 22222: mock_process2}
 
         def kill(pid, sig):
             if pid in stopped:
                 raise ProcessLookupError(pid)
             if sig != 0:  # signal 0 only asks whether the process is there
                 stopped.add(pid)
+                # The search acts on the signal. Said through the process
+                # handle because that is what the app asks: a child of its own
+                # is polled, not signalled, so a handle that keeps answering
+                # "still running" would earn a SIGKILL it never needed.
+                children[pid].poll.return_value = 0
 
         with (
             patch("os.kill", side_effect=kill) as mock_kill,

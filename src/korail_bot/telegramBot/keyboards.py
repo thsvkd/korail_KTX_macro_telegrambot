@@ -36,6 +36,8 @@ STEP_TRAIN_SELECT = "trs"
 STEP_CONFIRM = "cf"
 STEP_SCHEDULE = "sch"
 STEP_CANCEL = "x"
+# Offered with the news that a search died, not as part of the conversation.
+STEP_DEAD = "dd"
 
 # Answers to STEP_CONFIRM that are neither yes nor no.
 CONFIRM_SCHEDULE = "*schedule"
@@ -48,6 +50,10 @@ SCHEDULE_BACK = "*back"
 TRAIN_SELECT_DONE = "*done"
 TRAIN_SELECT_ALL = "*all"
 TRAIN_SELECT_REFRESH = "*refresh"
+
+# Answers to STEP_DEAD: start the same search again, or be done with it.
+DEAD_RESUME = "resume"
+DEAD_DISCARD = "discard"
 
 # The progress state at which each step's answer is expected.
 #
@@ -320,6 +326,29 @@ def schedule_keyboard(now: datetime | None = None) -> InlineKeyboard:
         [_button("◀️ 뒤로", STEP_SCHEDULE, SCHEDULE_BACK)],
         _cancel_row(),
     )
+
+
+def dead_search_keyboard(resumable: bool = True) -> InlineKeyboard:
+    """
+    What to do about a search that stopped on its own.
+
+    Offered with the message announcing the death rather than left to the
+    user to work out: they were waiting on a search, and the two things worth
+    doing about it are doing it again and letting it go.
+
+    The resume button is left off when there is no stored login to resume
+    with - a button that can only fail is worse than its absence.
+
+    Not part of the conversation, so it carries no progress state and the
+    router handles it before the staleness check. A search that died stays
+    dead however long the message sits unread, and the answer to it is just
+    as valid an hour later.
+    """
+    rows = []
+    if resumable:
+        rows.append([_button("🔄 같은 조건으로 재개", STEP_DEAD, DEAD_RESUME)])
+    rows.append([_button("🗑️ 그만두기", STEP_DEAD, DEAD_DISCARD)])
+    return _keyboard(*rows)
 
 
 def empty_keyboard() -> InlineKeyboard:

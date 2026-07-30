@@ -474,6 +474,49 @@ class Messages:
 
 남은 좌석이 필요하시면 /start 로 다시 시작해주세요."""
 
+    # ========== 검색이 예고 없이 멈춘 경우 ==========
+
+    # 검색은 끝날 때 스스로 알려온다. 아무 말 없이 사라졌다는 것은
+    # 사고이고, 사용자는 있지도 않은 검색을 기다리고 있다는 뜻이다.
+    SEARCH_DIED = """⚠️ 검색이 멈췄습니다
+
+{causeLine}
+
+📋 {srcLocate} → {dstLocate}
+📅 {depDate}
+🕐 {depTime}~{maxDepTime}
+👥 {passengerCount}명
+🔍 {watch}
+⏱️ 멈춘 시각: {diedAt}
+
+같은 조건으로 다시 시작할까요?"""
+
+    SEARCH_DIED_CAUSE_START_FAILED = "검색 프로세스가 시작 직후 종료되었습니다."
+    SEARCH_DIED_CAUSE_CRASHED = "검색 프로세스가 예기치 않게 종료되었습니다."
+
+    # 재개 버튼을 줄 수 없는 경우. 저장된 로그인 정보가 사라지면
+    # 다시 로그인할 방법이 없어 처음부터 다시 받는 수밖에 없다.
+    SEARCH_DIED_NOT_RESUMABLE = """
+⚠️ 저장된 로그인 정보가 없어 자동 재개는 할 수 없습니다.
+/start 로 다시 시작해주세요."""
+
+    SEARCH_RESUMED = """🔄 검색을 다시 시작했습니다
+
+📍 {srcLocate} → {dstLocate}
+📅 {depDate}
+
+취소표가 나오면 바로 알려드립니다."""
+
+    SEARCH_RESUME_FAILED = """❌ 검색을 다시 시작하지 못했습니다
+
+/start 로 처음부터 다시 시도해주세요."""
+
+    SEARCH_DEAD_DISCARDED = """🗑️ 멈춘 검색을 정리했습니다.
+
+/start 를 입력하여 새로 시작할 수 있습니다."""
+
+    SEARCH_DEAD_GONE = "이미 정리된 검색입니다.\n/start 로 새로 시작해주세요."
+
     # ========== 관리자 메시지 ==========
     ADMIN_AUTH_REQUIRED = "🔐 관리자 인증이 필요합니다.\n관리자 비밀번호를 입력해주세요."
     ADMIN_AUTH_SUCCESS = "✅ 관리자 인증 성공!"

@@ -224,6 +224,18 @@ class TelegramUpdateProcessor:
             self.command_handler.handle_cancel(chat_id)
             return
 
+        # Answering for a search that died, which is not a step of the
+        # conversation and so is handled before the progress check below. The
+        # conversation has already been reset by the time this message is sent
+        # - there is no progress for it to match - and unlike a question in
+        # the flow, the answer is just as good an hour later: the search stays
+        # dead until something is done about it.
+        if step == keyboards.STEP_DEAD:
+            self.telegram.answer_callback_query(query_id)
+            self._settle_keyboard(chat_id, message_id, message, data)
+            self._handle_dead_search(chat_id, value)
+            return
+
         expected_progress = keyboards.STEP_PROGRESS.get(step)
         if expected_progress is None:
             logger.warning(f"Unknown callback step {step!r} from chat_id={chat_id}")
@@ -267,6 +279,29 @@ class TelegramUpdateProcessor:
             self._settle_keyboard(chat_id, message_id, message, data)
 
         self.conversation_handler.handle_message(chat_id, value)
+
+    def _handle_dead_search(self, chat_id: int, choice: str) -> None:
+        """
+        Act on what the user chose to do about a search that stopped.
+
+        Both outcomes are terminal and both report themselves: resuming sends
+        the search's own start notice, discarding confirms. Neither returns to
+        the conversation, which was reset when the search died.
+        """
+        from korail_bot.telegramBot.messages import Messages
+
+        if choice == keyboards.DEAD_RESUME:
+            self.reservation.resume_dead_search(chat_id)
+            return
+
+        if choice == keyboards.DEAD_DISCARD:
+            if self.reservation.discard_dead_search(chat_id):
+                self.telegram.send_message(chat_id, Messages.SEARCH_DEAD_DISCARDED)
+            else:
+                self.telegram.send_message(chat_id, Messages.SEARCH_DEAD_GONE)
+            return
+
+        logger.warning(f"Unknown dead-search choice {choice!r} from chat_id={chat_id}")
 
     def _settle_keyboard(
         self, chat_id: int, message_id: int | None, message: dict, data: str

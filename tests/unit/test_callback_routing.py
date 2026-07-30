@@ -367,3 +367,68 @@ class TestAnsweredQuestionIsRecorded:
         # process() swallows the exception, so the dispatch is what proves
         # the edit is not on the critical path.
         assert self.processor.conversation_handler.handle_message.called
+
+
+class TestDeadSearchButtons:
+    """
+    The buttons offered when a search stopped on its own.
+
+    Not part of the conversation: the conversation was reset when the search
+    died, so there is no progress state for these to match and the staleness
+    check that guards every other button would refuse them all. They are also
+    genuinely not stale-able - a search stays dead until something is done
+    about it, and the answer is as good an hour later as it was at the time.
+    """
+
+    def setup_method(self):
+        self.storage = Mock(spec=StorageInterface)
+        self.telegram = Mock(spec=TelegramService)
+        self.reservation = Mock(spec=ReservationService)
+        self.processor = TelegramUpdateProcessor(
+            self.storage,
+            self.telegram,
+            self.reservation,
+            Mock(spec=PaymentReminderService),
+        )
+        self.processor.conversation_handler = Mock()
+        self.processor.command_handler = Mock()
+        # No conversation in progress, which is the state a death leaves
+        # behind and the one that would fail a progress check.
+        self.storage.get_user_session.return_value = None
+
+    def test_resume_starts_the_search_again(self):
+        self.processor.process(callback_update(f"{keyboards.STEP_DEAD}:{keyboards.DEAD_RESUME}"))
+
+        self.reservation.resume_dead_search.assert_called_once_with(CHAT_ID)
+
+    def test_discard_drops_it(self):
+        self.reservation.discard_dead_search.return_value = True
+
+        self.processor.process(callback_update(f"{keyboards.STEP_DEAD}:{keyboards.DEAD_DISCARD}"))
+
+        self.reservation.discard_dead_search.assert_called_once_with(CHAT_ID)
+        assert "정리" in self.telegram.send_message.call_args.args[1]
+
+    def test_discarding_one_already_gone_says_so(self):
+        self.reservation.discard_dead_search.return_value = False
+
+        self.processor.process(callback_update(f"{keyboards.STEP_DEAD}:{keyboards.DEAD_DISCARD}"))
+
+        assert "이미 정리된" in self.telegram.send_message.call_args.args[1]
+
+    def test_the_press_is_not_refused_as_stale(self):
+        """
+        The guard that protects the conversation must not reach these. With
+        no session at all, a progress check would reject the press and the
+        user would be left with a dead search and no way to act on it.
+        """
+        self.processor.process(callback_update(f"{keyboards.STEP_DEAD}:{keyboards.DEAD_RESUME}"))
+
+        self.telegram.answer_callback_query.assert_called_once_with("cbq-1")
+        self.reservation.resume_dead_search.assert_called_once()
+
+    def test_the_conversation_never_sees_it(self):
+        """These answer no question the conversation asked."""
+        self.processor.process(callback_update(f"{keyboards.STEP_DEAD}:{keyboards.DEAD_DISCARD}"))
+
+        self.processor.conversation_handler.handle_message.assert_not_called()

@@ -1,6 +1,8 @@
 """Data models for the application."""
 
 from korail_bot.models.reservation import (
+    DeadSearch,
+    DeathCause,
     MultiReservationStatus,
     PaymentStatus,
     ReservationPaymentStatus,
@@ -12,6 +14,8 @@ from korail_bot.models.reservation import (
 from korail_bot.models.user import UserCredentials, UserProgress, UserSession
 
 __all__ = [
+    "DeadSearch",
+    "DeathCause",
     "MultiReservationStatus",
     "PaymentStatus",
     "ReservationPaymentStatus",

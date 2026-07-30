@@ -82,6 +82,10 @@ class TestTelegramWebhook:
 
         payload = {"message": {"chat": {"id": chat_id}, "text": "/cancel"}}
 
+        # Nothing died and is waiting to be dealt with, so /cancel is about
+        # the running search. A bare Mock would claim otherwise.
+        self.reservation.discard_dead_search.return_value = False
+
         response = self.client.post("/telebot", json=payload, headers=self.auth_headers)
 
         assert response.status_code == 200

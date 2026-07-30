@@ -8,6 +8,8 @@ import redis
 
 from korail_bot.config.settings import settings
 from korail_bot.models import (
+    DeadSearch,
+    DeathCause,
     MultiReservationStatus,
     PaymentStatus,
     RunningReservation,
@@ -191,6 +193,52 @@ class RedisStorage(StorageInterface):
             korail_id=data["korail_id"],
             start_at=datetime.fromisoformat(data["start_at"]),
             created_at=datetime.fromisoformat(data["created_at"]),
+            search_params=self._deserialize_search_params(data["search_params"]),
+        )
+
+    # ==================== Searches that died ====================
+
+    def get_dead_search(self, chat_id: int) -> DeadSearch | None:
+        """Get the stopped search a chat has yet to deal with."""
+        data = self.redis.get(f"dead_search:{chat_id}")
+        if not data:
+            return None
+        return self._deserialize_dead_search(json.loads(data))
+
+    def save_dead_search(self, search: DeadSearch) -> None:
+        """
+        Keep a stopped search so the user can resume or discard it.
+
+        Expires with the login that resuming needs: past that the buttons
+        offered with it would have nothing to act on.
+        """
+        key = f"dead_search:{search.chat_id}"
+        data = json.dumps(self._serialize_dead_search(search))
+        self.redis.set(key, data, ex=settings.DEAD_SEARCH_TTL_SECONDS)
+
+    def delete_dead_search(self, chat_id: int) -> None:
+        """Forget a stopped search."""
+        self.redis.delete(f"dead_search:{chat_id}")
+
+    def _serialize_dead_search(self, search: DeadSearch) -> dict:
+        """Serialize DeadSearch to dict."""
+        return {
+            "chat_id": search.chat_id,
+            "korail_id": search.korail_id,
+            "cause": search.cause.value,
+            "resumable": search.resumable,
+            "died_at": search.died_at.isoformat(),
+            "search_params": self._serialize_search_params(search.search_params),
+        }
+
+    def _deserialize_dead_search(self, data: dict) -> DeadSearch:
+        """Deserialize dict to DeadSearch."""
+        return DeadSearch(
+            chat_id=data["chat_id"],
+            korail_id=data["korail_id"],
+            cause=DeathCause(data["cause"]),
+            resumable=data.get("resumable", True),
+            died_at=datetime.fromisoformat(data["died_at"]),
             search_params=self._deserialize_search_params(data["search_params"]),
         )
 

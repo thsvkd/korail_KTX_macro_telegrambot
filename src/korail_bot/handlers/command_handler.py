@@ -85,9 +85,17 @@ class CommandHandler:
         # and starts the very search the user just cancelled.
         scheduled_cancelled = self._cancel_scheduled_search(chat_id)
 
+        # A search that died is waiting on the user to resume or drop it.
+        # /cancel is them dropping it, and leaving the record would have
+        # /status go on reporting a stopped search after they cancelled it.
+        # Taken before cancel_reservation, which reports "nothing running"
+        # when it finds nothing - true, and not what happened here.
+        discarded = self.reservation.discard_dead_search(chat_id)
+
         # Cancel any running reservation. Returns False when there was none,
-        # having told the user so itself.
-        cancelled = self.reservation.cancel_reservation(chat_id)
+        # having told the user so itself - unless a dead search was just
+        # dropped, which is the answer to /cancel and gets its own reply.
+        cancelled = False if discarded else self.reservation.cancel_reservation(chat_id)
 
         # The rest runs either way: /cancel is also how a user gets out of a
         # half-finished conversation, and that state outlives the search.
@@ -111,6 +119,8 @@ class CommandHandler:
 
         if cancelled:
             self.telegram.send_message(chat_id, "✅ 예약이 취소되었습니다.")
+        elif discarded:
+            self.telegram.send_message(chat_id, "✅ 멈춰 있던 검색을 정리했습니다.")
         elif scheduled_cancelled:
             # cancel_reservation stays quiet when there was no running search,
             # which for a booked-but-not-started one would be no reply at all.

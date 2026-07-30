@@ -199,6 +199,27 @@ class Settings:
     # booked search is noticed.
     SCHEDULE_POLL_SECONDS: float = float(os.environ.get("SCHEDULE_POLL_SECONDS", "30"))
 
+    # ==================== Watching the search processes ====================
+
+    # How long a freshly spawned search is given to prove it is alive.
+    #
+    # A search that cannot start at all - a broken interpreter, a missing
+    # dependency - dies within milliseconds of exec. Waiting this long before
+    # reporting success costs nothing on the path that works and is the only
+    # thing standing between the user and a "search started" message about a
+    # process that is already gone.
+    PROCESS_START_GRACE_SECONDS: float = float(os.environ.get("PROCESS_START_GRACE_SECONDS", "1.0"))
+    # How often the running searches are checked for still existing. A search
+    # that dies is not noticed until the next pass, so this is roughly how
+    # long the user waits to be told.
+    WATCHDOG_POLL_SECONDS: float = float(os.environ.get("WATCHDOG_POLL_SECONDS", "30"))
+    # How long a dead search's details are kept so the user can resume it.
+    # Bounded by RESUME_TTL_SECONDS: past that the stored login is gone and
+    # resuming would have nothing to log in with.
+    DEAD_SEARCH_TTL_SECONDS: int = int(
+        os.environ.get("DEAD_SEARCH_TTL_SECONDS", str(RESUME_TTL_SECONDS))
+    )
+
     # Identifies this run of the application. Reservations carry it, so
     # anything left over from an earlier run is recognisable as abandoned.
     RUN_ID: str = secrets.token_hex(8)

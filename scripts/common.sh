@@ -323,3 +323,56 @@ bot_stop() {
     warn "Killed rather than asked. A search process may have outlived it;"
     warn "the next start reconciles whatever Redis still has a record of."
 }
+
+# ==================== Asking the user things ====================
+#
+# lower is used by ask_yn to accept Y as well as y.
+
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+#
+# Prompts go to stderr so that the answer can be captured with $(...).
+# Shared by setup.sh and onboarding.sh.
+
+clean_default() {
+    local value="$1"
+    [[ "$value" =~ ^your_.*_here$ ]] && value=""
+    printf '%s' "$value"
+}
+
+# ask <prompt> [default] - prompts on stderr so the answer can be captured
+ask() {
+    local prompt="$1" default="${2:-}" answer
+    if [[ -n "$default" ]]; then
+        printf '  %s [%s]: ' "$prompt" "$default" >&2
+    else
+        printf '  %s: ' "$prompt" >&2
+    fi
+    read -r answer
+    printf '%s' "${answer:-$default}"
+}
+
+# ask_secret <prompt> - same, without echoing what is typed
+ask_secret() {
+    local prompt="$1" answer
+    printf '  %s: ' "$prompt" >&2
+    read -r -s answer
+    printf '\n' >&2
+    printf '%s' "$answer"
+}
+
+# ask_yn <prompt> [y|n] - returns 0 for yes
+ask_yn() {
+    local prompt="$1" default="${2:-y}" answer hint
+    if [[ "$default" == "y" ]]; then hint="Y/n"; else hint="y/N"; fi
+    while true; do
+        printf '  %s [%s]: ' "$prompt" "$hint" >&2
+        read -r answer
+        answer="$(lower "${answer:-$default}")"
+        case "$answer" in
+            y|yes|예|ㅇ) return 0 ;;
+            n|no|아니오|ㄴ) return 1 ;;
+            *) printf '  %s\n' "y 또는 n으로 답해주세요." >&2 ;;
+        esac
+    done
+}
+

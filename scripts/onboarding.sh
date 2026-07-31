@@ -38,53 +38,9 @@ step() {
 say()  { printf '  %s\n' "$*"; }
 note() { printf '  %s %s\n' "${C_YELLOW}!${C_RESET}" "$*"; }
 
-lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 # clean_default <value> - drop .env.example placeholders so that pressing
 # Enter never stores a sample value as if it were real
-clean_default() {
-    local value="$1"
-    [[ "$value" =~ ^your_.*_here$ ]] && value=""
-    printf '%s' "$value"
-}
-
-# ask <prompt> [default] - prompts on stderr so the answer can be captured
-ask() {
-    local prompt="$1" default="${2:-}" answer
-    if [[ -n "$default" ]]; then
-        printf '  %s [%s]: ' "$prompt" "$default" >&2
-    else
-        printf '  %s: ' "$prompt" >&2
-    fi
-    read -r answer
-    printf '%s' "${answer:-$default}"
-}
-
-# ask_secret <prompt> - same, without echoing what is typed
-ask_secret() {
-    local prompt="$1" answer
-    printf '  %s: ' "$prompt" >&2
-    read -r -s answer
-    printf '\n' >&2
-    printf '%s' "$answer"
-}
-
-# ask_yn <prompt> [y|n] - returns 0 for yes
-ask_yn() {
-    local prompt="$1" default="${2:-y}" answer hint
-    if [[ "$default" == "y" ]]; then hint="Y/n"; else hint="y/N"; fi
-    while true; do
-        printf '  %s [%s]: ' "$prompt" "$hint" >&2
-        read -r answer
-        answer="$(lower "${answer:-$default}")"
-        case "$answer" in
-            y|yes|예|ㅇ) return 0 ;;
-            n|no|아니오|ㄴ) return 1 ;;
-            *) printf '  %s\n' "y 또는 n으로 답해주세요." >&2 ;;
-        esac
-    done
-}
-
 # ask_choice <prompt> <default_index> <label...> - echoes the chosen index
 ask_choice() {
     local prompt="$1" default="$2"; shift 2
@@ -390,6 +346,9 @@ if [[ "$USAGE_MODE" == "solo" ]]; then
     say "매번 채팅에 비밀번호를 입력하지 않아도 되고, 무엇보다"
     say "${C_YELLOW}비밀번호가 텔레그램 대화 기록에 남지 않습니다.${C_RESET}"
     echo
+    say "저장한 계정은 ${C_YELLOW}개발자 방에서만${C_RESET} 쓰입니다. 아래에서 만들어 드리는"
+    say "문구를 텔레그램으로 보내면 그 채팅방이 개발자 방이 됩니다."
+    echo
 
     if ask_yn "코레일 계정을 저장할까요?" y; then
         KORAIL_ID="$(ask "코레일 회원번호 (예: 010-1234-5678)" "$(clean_default "$(env_value USERID)")")"
@@ -399,18 +358,17 @@ if [[ "$USAGE_MODE" == "solo" ]]; then
             set_env_key USERID "$KORAIL_ID"
             set_env_key USERPW "$KORAIL_PW"
 
-            echo
-            say "이 계정으로 로그인할 때 채팅에 입력할 암호 문구를 정해주세요."
-            say "(/start 후 이 문구를 보내면 로그인이 끝납니다)"
-            MAGIC="$(ask "암호 문구" "$(env_value ADMIN_MAGIC_STRING)")"
+            # 직접 정하게 두지 않는다. 이 문구를 아는 사람은 누구나 개발자 방을
+            # 만들 수 있는데, 사람이 고른 문구는 짧고 추측하기 쉽다.
+            MAGIC="$(env_value ADMIN_MAGIC_STRING)"
+            [[ -n "$MAGIC" ]] || MAGIC="$(gen_secret 24)"
+            set_env_key ADMIN_MAGIC_STRING "$MAGIC"
 
-            if [[ -n "$MAGIC" ]]; then
-                set_env_key ADMIN_MAGIC_STRING "$MAGIC"
-                ok "설정 완료. /start 후 '${MAGIC}' 를 보내면 바로 로그인됩니다."
-            else
-                note "문구가 비어 있어 간편 로그인은 꺼둡니다."
-                set_env_key ADMIN_MAGIC_STRING ""
-            fi
+            echo
+            ok "설정 완료. 봇을 띄운 뒤 아래 문구를 텔레그램으로 보내세요."
+            say "${C_YELLOW}${MAGIC}${C_RESET}"
+            say "보낸 채팅방이 개발자 방이 되고, 그 방에서는 로그인 없이 바로 예약합니다."
+            say "해제는 /devoff, 공유는 금물입니다."
         else
             note "입력이 비어 있어 건너뜁니다."
         fi

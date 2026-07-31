@@ -13,6 +13,10 @@ help:           ## Show this help.
 setup:			## Create .env, generate secrets, install dependencies
 	./scripts/setup.sh
 
+.PHONY: setup-dev
+setup-dev:		## Same, plus a developer chat: magic string + fixed Korail account
+	./scripts/setup.sh --dev
+
 .PHONY: install
 install:		## Install dependencies into .venv from uv.lock
 	uv sync --frozen

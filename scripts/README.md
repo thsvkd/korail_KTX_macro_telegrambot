@@ -5,6 +5,7 @@
 
 ```bash
 scripts/setup.sh            # 최초 1회
+scripts/setup.sh --dev      # 본인 채팅방을 개발자 방으로 쓸 때
 scripts/dev-redis.sh        # 로컬 개발용 Redis
 scripts/run.sh
 ```
@@ -19,7 +20,8 @@ scripts/set-webhook.sh https://your.domain/telebot
 
 | 스크립트 | 설명 |
 | --- | --- |
-| `setup.sh` | `.env` 생성, 시크릿 발급, 의존성 설치. `--no-deps` 로 의존성 설치 생략 |
+| `setup.sh` | `.env` 생성, 시크릿 발급, 의존성 설치. `--no-deps` 로 의존성 설치 생략, `--dev` 로 개발자 방 설정 추가 |
+| `onboarding.sh` | 대화형 최초 설정 안내 (봇 토큰부터 실제 왕복 확인까지). `--reset` 으로 처음부터 |
 | `gen-secrets.sh` | 비어 있는 시크릿 생성. `--print` 출력만, `--force` 재발급(로테이션) |
 | `run.sh` | 봇 실행. waitress 로 서비스하며, **이미 돌고 있는 봇이 있으면 정지시키고 새로 띄운다**. `--daemon` 백그라운드 실행(로그 `.run/korail-bot.log`), `--stop` 정지, `--debug` 는 로그 레벨만 DEBUG |
 | `status.sh` | 봇 상태 보고: 프로세스·기동 방식·포트·Redis·진행 중인 검색·결제 대기. `--log [N]` 로그 함께 출력. 봇이 꺼져 있으면 종료코드 1 |

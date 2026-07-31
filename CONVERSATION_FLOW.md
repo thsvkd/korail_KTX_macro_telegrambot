@@ -8,7 +8,7 @@
 |-----|--------------|-------------|-----------|-----------|---------|
 | 0 | INIT | - | - | - | - |
 | 1 | STARTED | `_handle_start_confirmation` | "Y" 또는 "예" | REQUEST_PHONE (전화번호 요청) | START_ACCEPTED |
-| 1-1 | STARTED | `_handle_preconfigured_login` | "Y" 또는 "예" (USERID/USERPW 설정 시) | LOGIN_SUCCESS_PRECONFIGURED (2·3단계 생략) | PW_INPUT_SUCCESS |
+| 1-1 | STARTED | `_handle_preconfigured_login` | "Y" 또는 "예" (**개발자 방** + USERID/USERPW 설정 시) | LOGIN_SUCCESS_PRECONFIGURED (2·3단계 생략) | PW_INPUT_SUCCESS |
 | 1-2 | STARTED | `_handle_admin_login` | ADMIN_MAGIC_STRING | LOGIN_SUCCESS (환경변수 자동로그인) | PW_INPUT_SUCCESS |
 | 2 | START_ACCEPTED | `_handle_phone_input` | 010-1234-5678 | REQUEST_PASSWORD (비밀번호 요청) | ID_INPUT_SUCCESS |
 | 3 | ID_INPUT_SUCCESS | `_handle_password_input` | 비밀번호 | LOGIN_SUCCESS (로그인 성공) | PW_INPUT_SUCCESS |
@@ -28,11 +28,11 @@
 ### 1단계: 시작 확인 (STARTED)
 **입력**:
 - "Y" 또는 "예" → 정상 진행
-- `ADMIN_MAGIC_STRING` 값 → 관리자 자동 로그인 (환경변수 USERID, USERPW 사용)
+- `ADMIN_MAGIC_STRING` 값은 이 단계가 아니라 라우터에서 먼저 처리됩니다(개발자 모드 전환).
 
 **응답**:
 - 정상: REQUEST_PHONE (전화번호 입력 요청)
-- USERID/USERPW가 모두 설정된 경우: 2·3단계를 건너뛰고 바로 로그인 →
+- 개발자 방이면서 USERID/USERPW가 모두 설정된 경우: 2·3단계를 건너뛰고 바로 로그인 →
   LOGIN_SUCCESS_PRECONFIGURED (날짜 입력 단계로). 로그인에 실패하면
   PRECONFIGURED_LOGIN_FAILED를 보내고 2단계(전화번호 입력)로 되돌아갑니다.
 - 관리자: LOGIN_SUCCESS (자동 로그인 후 날짜 입력 단계로)
@@ -40,7 +40,7 @@
 ---
 
 ### 2단계: 전화번호 입력 (START_ACCEPTED)
-> USERID/USERPW가 설정된 경우 이 단계는 실행되지 않습니다 (로그인 실패 시 예외).
+> 개발자 방이면서 USERID/USERPW가 설정된 경우 이 단계는 실행되지 않습니다 (로그인 실패 시 예외).
 
 **입력**: `010-1234-5678` 또는 `01012345678` (하이픈 선택)
 
@@ -53,7 +53,7 @@
 ---
 
 ### 3단계: 비밀번호 입력 (ID_INPUT_SUCCESS)
-> USERID/USERPW가 설정된 경우 이 단계는 실행되지 않습니다 (로그인 실패 시 예외).
+> 개발자 방이면서 USERID/USERPW가 설정된 경우 이 단계는 실행되지 않습니다 (로그인 실패 시 예외).
 
 **입력**: 코레일 비밀번호
 
@@ -221,7 +221,7 @@
   명령 라우팅보다 먼저 검사하므로 화면에 뜬 질문의 답으로 해석되지 않습니다.
 - 개발자 방은 체험 횟수 제한이 없고, 관리자 명령을 비밀번호 없이 쓰며,
   새 승인 요청 알림을 받습니다. `USERID`/`USERPW` 가 있으면 그 계정으로
-  로그인합니다.
+  로그인합니다 - 이 설정이 적용되는 곳은 개발자 방뿐입니다.
 - 이미 개발자 모드인 방에 있던 운영자들에게 전환 사실이 통보됩니다.
   틀린 시도를 셀 수 없는 구조라, 성공을 숨길 수 없게 만드는 것이 방어입니다.
 - 해제: `/devoff`

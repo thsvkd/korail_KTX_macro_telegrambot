@@ -110,13 +110,13 @@ if settings.RECEIVE_MODE == "webhook":
 else:
     logger.info("Updates: pulled with getUpdates (no public endpoint needed)")
 logger.info(f"Admin commands: {'enabled' if settings.ADMIN_PASSWORD else 'disabled'}")
-logger.info(f"Admin magic login: {'enabled' if settings.ADMIN_MAGIC_STRING else 'disabled'}")
+logger.info(f"Developer mode: {'enabled' if settings.ADMIN_MAGIC_STRING else 'disabled'}")
 logger.info(
     "Korail login: "
     + (
-        "USERID/USERPW from the environment (users are not asked)"
+        "registered per user; developer chats use USERID/USERPW"
         if settings.has_preconfigured_korail_credentials()
-        else "asked from each user"
+        else "registered per user"
     )
 )
 logger.info(f"Resume on restart: {'enabled' if settings.RESUME_ON_RESTART else 'disabled'}")

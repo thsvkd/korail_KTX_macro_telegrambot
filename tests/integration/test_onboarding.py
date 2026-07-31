@@ -184,18 +184,30 @@ class TestStartingWithARegisteredAccount:
         assert "계정 등록" in " ".join(_texts(telegram))
         assert storage.get_user_session(CHAT_ID).last_action == UserProgress.STARTED
 
-    def test_the_operators_own_account_wins(self, commands, storage, telegram):
+    def test_an_ordinary_chat_ignores_the_server_account(self, commands, storage, telegram):
         """
-        USERID/USERPW exists to make the bot use one account for everyone.
-        A registration must not quietly override that.
+        USERID/USERPW is for development, not for making everyone book with
+        the operator's Korail account. An ordinary chat uses what it
+        registered, whatever is in the environment.
         """
         _register(storage)
+
+        with _operator_account(), _login(True):
+            commands.handle_start(CHAT_ID)
+
+        session = storage.get_user_session(CHAT_ID)
+        assert session.last_action == UserProgress.PW_INPUT_SUCCESS
+        assert session.credentials.korail_id == PHONE
+        assert "서버에 설정" not in " ".join(_texts(telegram))
+
+    def test_a_developer_chat_uses_the_server_account(self, commands, storage, telegram):
+        _register(storage)
+        storage.set_developer(CHAT_ID, True)
 
         with _operator_account():
             commands.handle_start(CHAT_ID)
 
-        # The preconfigured welcome is sent instead of logging in as the
-        # registered user.
+        # The preconfigured welcome, and the registration is left unused.
         assert "서버에 설정" in " ".join(_texts(telegram))
         assert storage.get_user_session(CHAT_ID).last_action == UserProgress.STARTED
 
@@ -265,13 +277,21 @@ class TestOnboardingCommand:
 
         assert storage.get_onboarded_account(CHAT_ID) is not None
 
-    def test_it_says_registration_is_pointless_with_a_server_account(
+    def test_a_developer_chat_is_told_registration_is_pointless(self, commands, storage, telegram):
+        storage.set_developer(CHAT_ID, True)
+
+        with _operator_account():
+            commands.handle_onboarding(CHAT_ID)
+
+        assert "서버에 설정된" in " ".join(_texts(telegram))
+
+    def test_an_ordinary_chat_registers_even_with_a_server_account(
         self, commands, storage, telegram
     ):
         with _operator_account():
             commands.handle_onboarding(CHAT_ID)
 
-        assert "서버에 설정된" in " ".join(_texts(telegram))
+        assert "계정 등록" in " ".join(_texts(telegram))
 
 
 class TestLogout:

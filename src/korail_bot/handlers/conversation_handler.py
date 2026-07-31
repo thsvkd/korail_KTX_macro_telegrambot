@@ -119,23 +119,33 @@ class ConversationHandler:
                 "이상이 발생했습니다. /cancel 이나 /start 를 통해 다시 프로그램을 시작해주세요.",
             )
 
+    def uses_server_account(self, chat_id: int) -> bool:
+        """
+        Whether this chat logs in with USERID/USERPW instead of its own.
+
+        Only developer chats do. The setting exists so that whoever runs the
+        bot can point it at a fixed account for development and testing - not
+        so that everyone who finds the bot books with the operator's Korail
+        account, which is what it used to mean and which made the bot unsafe
+        to share the moment those two values were filled in.
+
+        Everyone else registers their own account, whatever is in the
+        environment.
+        """
+        return settings.has_preconfigured_korail_credentials() and self.storage.is_developer(
+            chat_id
+        )
+
     def _handle_start_confirmation(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle initial start confirmation (Y/N)."""
-        # Optional shortcut that logs in with the operator's own Korail
-        # account. Disabled unless ADMIN_MAGIC_STRING is configured - a
-        # value committed to the repository would let any reader use it.
-        if settings.ADMIN_MAGIC_STRING and text == settings.ADMIN_MAGIC_STRING:
-            self._handle_admin_login(chat_id, session)
-            return
-
         is_yes, error = InputValidator.validate_yes_no(text)
 
         if is_yes is True:
             session.last_action = UserProgress.START_ACCEPTED
             self.storage.save_user_session(session)
-            # Both prompts that follow have a known answer when the operator
-            # put their Korail account in the environment, so skip them.
-            if settings.has_preconfigured_korail_credentials():
+            # Both prompts that follow have a known answer when a developer
+            # chat has been pointed at a fixed account, so skip them.
+            if self.uses_server_account(chat_id):
                 self._handle_preconfigured_login(chat_id, session)
                 return
             # A phone number has to be typed, but leaving should not have to
@@ -215,27 +225,6 @@ class ConversationHandler:
             Messages.PRECONFIGURED_LOGIN_FAILED,
             reply_markup=keyboards.cancel_only_keyboard(),
         )
-
-    def _handle_admin_login(self, chat_id: int, session: UserSession) -> None:
-        """Handle magic admin login."""
-        if not settings.KORAIL_ADMIN_USER_ID or not settings.KORAIL_ADMIN_PASSWORD:
-            session.reset()
-            self.storage.save_user_session(session)
-            from korail_bot.telegramBot.messages import Messages
-
-            self.telegram.send_message(chat_id, Messages.ERROR_ADMIN_ENV)
-            return
-
-        if self._login_with_environment_credentials(chat_id, session):
-            self.telegram.send_message(
-                chat_id, MessageTemplates.login_success(), reply_markup=keyboards.date_keyboard()
-            )
-        else:
-            session.reset()
-            self.storage.save_user_session(session)
-            from korail_bot.telegramBot.messages import Messages
-
-            self.telegram.send_message(chat_id, Messages.ERROR_ADMIN_LOGIN)
 
     def _handle_onboarding_overwrite(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle the answer to 'you already have an account registered'."""

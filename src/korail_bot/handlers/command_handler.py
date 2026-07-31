@@ -76,10 +76,11 @@ class CommandHandler:
 
         # An account registered earlier means the two login questions have
         # already been answered, so /start goes straight to picking a date.
-        # The operator's own account (USERID/USERPW) wins over a registration,
-        # because that setting exists to make the bot use one account for
-        # everyone regardless of what anyone registered.
-        if self.conversation and not settings.has_preconfigured_korail_credentials():
+        #
+        # USERID/USERPW only applies in a developer chat. It exists so the bot
+        # can be pointed at a fixed account for development, not so that
+        # everyone who finds the bot books with the operator's Korail account.
+        if self.conversation and not self._uses_server_account(chat_id):
             if self.conversation.resume_with_registered_account(chat_id, session):
                 return
 
@@ -96,9 +97,7 @@ class CommandHandler:
         # Send welcome message
         self.telegram.send_message(
             chat_id,
-            MessageTemplates.welcome_message(
-                skip_login_prompts=settings.has_preconfigured_korail_credentials()
-            ),
+            MessageTemplates.welcome_message(skip_login_prompts=True),
             reply_markup=keyboards.start_confirm_keyboard(),
         )
 
@@ -112,9 +111,10 @@ class CommandHandler:
         """
         logger.info(f"Handling /onboarding for chat_id={chat_id}")
 
-        if settings.has_preconfigured_korail_credentials():
-            # Registering would achieve nothing: the operator's account is
-            # used for everyone and a stored one would never be consulted.
+        if self._uses_server_account(chat_id):
+            # Registering would achieve nothing in this chat: it logs in with
+            # the account from the environment, and a stored one would never
+            # be consulted.
             self.telegram.send_message(chat_id, MessageTemplates.ONBOARDING_NOT_NEEDED)
             return
 
@@ -169,6 +169,14 @@ class CommandHandler:
             self.storage.save_user_session(session)
 
         self.telegram.send_message(chat_id, MessageTemplates.LOGOUT_DONE)
+
+    def _uses_server_account(self, chat_id: int) -> bool:
+        """Whether this chat logs in with USERID/USERPW - developer chats only."""
+        if self.conversation:
+            return self.conversation.uses_server_account(chat_id)
+        return settings.has_preconfigured_korail_credentials() and self.storage.is_developer(
+            chat_id
+        )
 
     # ==================== Developer mode ====================
 

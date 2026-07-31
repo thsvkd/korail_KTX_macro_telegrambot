@@ -347,12 +347,17 @@ class Settings:
             )
 
         if cls.has_preconfigured_korail_credentials():
-            messages.append(
-                "USERID/USERPW are set - anyone who talks to the bot reserves "
-                "with that Korail account, and PREAPPROVED_USERS is not consulted "
-                "because no phone number is ever typed. Unset them to go back "
-                "to asking each user for their own credentials."
-            )
+            if cls.ADMIN_MAGIC_STRING:
+                messages.append(
+                    "USERID/USERPW are set - developer chats book with that Korail "
+                    "account instead of registering one. Everyone else is unaffected."
+                )
+            else:
+                messages.append(
+                    "USERID/USERPW are set but ADMIN_MAGIC_STRING is not, so no chat "
+                    "can become a developer chat and the account is never used. Set "
+                    "ADMIN_MAGIC_STRING to use it, or unset USERID/USERPW."
+                )
 
         if not cls.REDIS_PASSWORD:
             messages.append(

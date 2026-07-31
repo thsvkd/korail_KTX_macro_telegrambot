@@ -226,11 +226,12 @@ cd korail_KTX_macro_telegrambot
 - `make run` / `./scripts/run.sh` - 애플리케이션 실행 (포그라운드)
 - `make daemon` / `./scripts/run.sh --daemon` - 백그라운드 실행
 - `make stop` / `./scripts/run.sh --stop` - 정지
-- `make status` / `./scripts/status.sh` - 상태 확인
+- `make status` / `./scripts/status.sh` - 상태 확인 (`logs [N] [-f]` 로 로그만)
 - `make test` / `./scripts/test.sh` - 테스트 실행
 - `make secrets` / `./scripts/gen-secrets.sh` - 시크릿 발급 및 로테이션
 - `make security-check` / `./scripts/security-check.sh` - 설정 보안 점검
-- `make up` / `down` / `logs` - docker compose 스택 조작
+- `make logs` / `./scripts/status.sh logs -f` - 데몬 로그 따라가기
+- `make up` / `down` / `docker-logs` - docker compose 스택 조작
 
 ### Docker 배포
 

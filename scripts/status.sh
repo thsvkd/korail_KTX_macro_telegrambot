@@ -6,8 +6,12 @@
 # it lists are the ones happening right now.
 #
 # Usage:
-#   scripts/status.sh              # the report
-#   scripts/status.sh --log [N]    # also print the last N log lines (default 20)
+#   scripts/status.sh                # the report
+#   scripts/status.sh --log [N]      # the report, plus the last N log lines
+#
+#   scripts/status.sh logs           # just the log, last 20 lines
+#   scripts/status.sh logs 100       # just the log, last 100 lines
+#   scripts/status.sh logs -f        # follow it (Ctrl-C to stop)
 #
 # Exit status is 0 when the bot is running, 1 when it is not, so it can gate
 # something else: scripts/status.sh >/dev/null || scripts/run.sh --daemon
@@ -16,15 +20,48 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 SHOW_LOG=0
 LOG_LINES=20
+LOGS_ONLY=0
+FOLLOW=0
+
+# 'logs' as the first word means "skip the report, I want the log". Kept as a
+# subcommand rather than another flag because following a log is a different
+# thing to do, not a detail of the status report.
+if [[ "${1:-}" == "logs" ]]; then
+    LOGS_ONLY=1
+    SHOW_LOG=1
+    shift
+fi
 
 while (( $# )); do
     case "$1" in
         --log) SHOW_LOG=1; [[ "${2:-}" =~ ^[0-9]+$ ]] && { LOG_LINES="$2"; shift; } ;;
-        -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -f|--follow) FOLLOW=1 ;;
+        [0-9]*) LOG_LINES="$1" ;;
+        -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "Unknown option: $1" ;;
     esac
     shift
 done
+
+(( FOLLOW )) && (( ! LOGS_ONLY )) && die "--follow only makes sense with 'logs' (try: scripts/status.sh logs -f)"
+
+# ==================== Just the log ====================
+
+if (( LOGS_ONLY )); then
+    cd "$ROOT_DIR"
+    if [[ ! -f "$LOG_FILE" ]]; then
+        # A foreground run logs to its terminal, so there is nothing to read.
+        err "${LOG_FILE#"$ROOT_DIR"/} 이 없습니다."
+        err "포그라운드로 실행 중이면 그 터미널에 출력되고, 아직 한 번도"
+        die "데몬으로 띄운 적이 없다면 scripts/run.sh --daemon 으로 시작하세요."
+    fi
+
+    if (( FOLLOW )); then
+        # -F, not -f: keeps following if the file is ever replaced.
+        exec tail -n "$LOG_LINES" -F "$LOG_FILE"
+    fi
+    exec tail -n "$LOG_LINES" "$LOG_FILE"
+fi
 
 cd "$ROOT_DIR"
 

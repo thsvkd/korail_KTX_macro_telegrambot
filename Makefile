@@ -96,7 +96,11 @@ down:			## Stop the stack
 	./scripts/docker-down.sh
 
 .PHONY: logs
-logs:			## Follow container logs
+logs:			## Follow the daemon's log (scripts/run.sh --daemon)
+	./scripts/status.sh logs -f
+
+.PHONY: docker-logs
+docker-logs:		## Follow the compose stack's logs
 	./scripts/docker-logs.sh
 
 .PHONY: publish

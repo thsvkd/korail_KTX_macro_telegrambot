@@ -333,6 +333,22 @@ class RedisStorage(StorageInterface):
         self.redis.delete(f"user_credentials:{chat_id}")
         logger.debug(f"Deleted onboarded account for chat_id={chat_id}")
 
+    def get_all_onboarded_chat_ids(self) -> list[int]:
+        """
+        Every chat that has registered a Korail account.
+
+        Read off the keys rather than by decrypting each record: this exists
+        to address people, and a registration whose SESSION_SECRET has moved
+        on is still a person who uses the bot.
+        """
+        chat_ids = []
+        for key in self._scan_keys("user_credentials:*"):
+            try:
+                chat_ids.append(int(key.rpartition(":")[2]))
+            except ValueError:
+                logger.warning(f"Skipping a credentials key with no chat id in it: {key!r}")
+        return chat_ids
+
     # ==================== Favourite searches ====================
     #
     # Kept per chat under a key each, so listing is a scan over one prefix and
@@ -1215,6 +1231,21 @@ class RedisStorage(StorageInterface):
     def is_debug_mode(self) -> bool:
         """Check if global debug mode is enabled."""
         return self.redis.get("debug_mode:global") == "1"
+
+    # ==================== Release announcements ====================
+
+    def get_announced_version(self) -> str | None:
+        """
+        The version this deployment last told its users about.
+
+        Returns:
+            The version string, or None when nothing has been announced yet
+        """
+        return self._text(self.redis.get("announced_version")) or None
+
+    def set_announced_version(self, version: str) -> None:
+        """Record that this version's announcement has been dealt with."""
+        self.redis.set("announced_version", version)
 
     def set_debug_mode(self, enabled: bool) -> None:
         """Enable or disable global debug mode."""

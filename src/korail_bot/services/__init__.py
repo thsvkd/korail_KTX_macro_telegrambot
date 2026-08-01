@@ -4,6 +4,7 @@ from korail_bot.services.access_service import AccessDecision, AccessLevel, Acce
 from korail_bot.services.korail_service import KorailService
 from korail_bot.services.multi_reservation_reminder_service import MultiReservationReminderService
 from korail_bot.services.payment_reminder_service import PaymentReminderService
+from korail_bot.services.release_announcer import ReleaseAnnouncer
 from korail_bot.services.reservation_service import ReservationService
 from korail_bot.services.scheduled_search_service import (
     ScheduledSearchService,
@@ -21,6 +22,7 @@ __all__ = [
     "MessageTemplates",
     "MultiReservationReminderService",
     "PaymentReminderService",
+    "ReleaseAnnouncer",
     "ReservationService",
     "ScheduleError",
     "ScheduledSearchService",

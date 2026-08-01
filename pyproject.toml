@@ -1,6 +1,6 @@
 [project]
 name = "korail-ktx-bot"
-version = "3.0.0"
+dynamic = ["version"]
 description = "매진된 KTX 열차를 모니터링하다 좌석이 나오면 예약해주는 텔레그램 봇"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -63,6 +63,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/korail_bot"]
+
+# The version lives in the package, not here: the bot names its own version
+# in the message it sends after an update, and it has to be able to do that
+# from a source checkout that was never pip-installed.
+[tool.hatch.version]
+path = "src/korail_bot/__init__.py"
 
 # --------------------------------------------------------------------- ruff
 

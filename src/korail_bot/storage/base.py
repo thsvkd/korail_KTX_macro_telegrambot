@@ -110,6 +110,11 @@ class StorageInterface(ABC):
         pass
 
     @abstractmethod
+    def get_all_onboarded_chat_ids(self) -> list[int]:
+        """Every chat that has registered a Korail account."""
+        pass
+
+    @abstractmethod
     def delete_onboarded_account(self, chat_id: int) -> None:
         """Forget a registered account."""
         pass
@@ -399,4 +404,15 @@ class StorageInterface(ABC):
     @abstractmethod
     def set_debug_mode(self, enabled: bool) -> None:
         """Enable or disable global debug mode."""
+        pass
+
+    # Release announcements
+    @abstractmethod
+    def get_announced_version(self) -> str | None:
+        """The version this deployment last told its users about."""
+        pass
+
+    @abstractmethod
+    def set_announced_version(self, version: str) -> None:
+        """Record that this version's announcement has been dealt with."""
         pass

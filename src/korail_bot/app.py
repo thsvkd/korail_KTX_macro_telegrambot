@@ -14,11 +14,13 @@ from flask_cors import CORS
 from flask_restful import Api
 from werkzeug.serving import is_running_from_reloader
 
+from korail_bot import __version__
 from korail_bot.api import PaymentCheckAPI, TelegramWebhook
 from korail_bot.config.settings import settings
 from korail_bot.handlers import TelegramUpdateProcessor
 from korail_bot.services import (
     PaymentReminderService,
+    ReleaseAnnouncer,
     ReservationService,
     ScheduledSearchService,
     SearchWatchdogService,
@@ -85,7 +87,7 @@ api.add_resource(
 api.add_resource(PaymentCheckAPI, "/check_payment", resource_class_kwargs={"storage": storage})
 
 logger.info("=" * 60)
-logger.info("Korail KTX Telegram Bot - Redis Version")
+logger.info(f"Korail KTX Telegram Bot v{__version__} - Redis Version")
 logger.info("=" * 60)
 logger.info(f"Receive mode: {settings.RECEIVE_MODE}")
 logger.info(f"Flask host: {settings.FLASK_HOST}")
@@ -144,6 +146,12 @@ if not is_running_from_reloader():
         logger.info("Command menu published to Telegram")
     else:
         logger.warning("Could not publish the command menu - the previous one stays in place")
+
+    # Whoever runs the server updates it; the people using it find out by
+    # noticing that something moved. Told once, on the start after a version
+    # change, and off the startup path: a message per user is not a thing to
+    # keep the searches waiting on.
+    ReleaseAnnouncer(storage, telegram_service).announce_in_background()
 
 # Searches booked for a later time are held in Redis and started by this
 # thread. It lives in the app rather than in a process of its own because a

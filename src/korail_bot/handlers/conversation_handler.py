@@ -742,7 +742,7 @@ class ConversationHandler:
         # back, and the progress state moves to where that question would have
         # left it so the seat-option keyboard is still answering the step it
         # thinks it is.
-        if self.session_operator(session) is Operator.SRT:
+        if not self.session_operator(session).offers_train_types:
             session.train_info["trainType"] = "SRT"
             session.train_info["trainTypeShow"] = "SRT"
             session.last_action = UserProgress.TRAIN_TYPE_INPUT_SUCCESS
@@ -1231,7 +1231,7 @@ class ConversationHandler:
         # train type is asked - landing on the cutoff instead.
         if (
             target == UserProgress.MAX_DEP_TIME_INPUT_SUCCESS
-            and self.session_operator(session) is Operator.SRT
+            and not self.session_operator(session).offers_train_types
         ):
             target = UserProgress.DEP_TIME_INPUT_SUCCESS
 

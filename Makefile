@@ -1,7 +1,7 @@
 # The image the compose stack runs. Defaults to a local tag with no registry
 # in it: anyone self-hosting this builds their own rather than pulling an
 # image someone else controls. Override to publish under your own namespace:
-#   IMAGE_NAME=you/korailbot:latest make docker-build docker-push
+#   IMAGE_NAME=you/korailbot:latest make build publish
 IMAGE_NAME ?= korailbot:local
 
 # Thin wrappers around scripts/ - see scripts/README.md for the full options.
@@ -57,7 +57,7 @@ status:			## Show what the application is doing
 
 .PHONY: dev-redis
 dev-redis:		## Start the local development Redis (127.0.0.1:6379)
-	./scripts/dev-redis.sh
+	./scripts/run.sh redis
 
 .PHONY: shell
 shell:			## Open a shell with .venv activated
@@ -65,15 +65,11 @@ shell:			## Open a shell with .venv activated
 
 .PHONY: secrets
 secrets:		## Generate any missing secrets in .env
-	./scripts/gen-secrets.sh
-
-.PHONY: webhook
-webhook:		## Show the current Telegram webhook status
-	./scripts/set-webhook.sh --info
+	./scripts/setup.sh secrets
 
 .PHONY: security-check
 security-check:	## Check the local configuration for security mistakes
-	./scripts/security-check.sh
+	./scripts/setup.sh check
 
 .PHONY: test
 test:			## Run all tests with pytest
@@ -85,15 +81,15 @@ test-unit:		## Run the unit tests only
 
 .PHONY: build
 build:			## Build Docker Image
-	./scripts/docker-build.sh ${IMAGE_NAME}
+	./scripts/deploy.sh build ${IMAGE_NAME}
 
 .PHONY: up
 up:				## Start the stack with docker compose
-	./scripts/docker-up.sh
+	./scripts/deploy.sh up
 
 .PHONY: down
 down:			## Stop the stack
-	./scripts/docker-down.sh
+	./scripts/deploy.sh down
 
 .PHONY: logs
 logs:			## Follow the daemon's log (scripts/run.sh --daemon)
@@ -101,8 +97,8 @@ logs:			## Follow the daemon's log (scripts/run.sh --daemon)
 
 .PHONY: docker-logs
 docker-logs:		## Follow the compose stack's logs
-	./scripts/docker-logs.sh
+	./scripts/deploy.sh logs
 
 .PHONY: publish
 publish:		## Build and publish the Docker image
-	./scripts/docker-push.sh ${IMAGE_NAME}
+	./scripts/deploy.sh push ${IMAGE_NAME}

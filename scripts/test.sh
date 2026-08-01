@@ -10,7 +10,8 @@
 #   scripts/test.sh tests/unit          # run a subset
 #   scripts/test.sh -k crypto           # pass any pytest flags through
 
-source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+# shellcheck source=scripts/_common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
 PYTEST_ARGS=()
 for arg in "$@"; do
@@ -20,7 +21,7 @@ for arg in "$@"; do
     esac
 done
 
-cd "$ROOT_DIR"
+cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
 
 # Tests must not depend on the developer's .env; uv does not load it, so
 # there is nothing to switch off here. (A REDIS_PASSWORD from .env would
@@ -41,7 +42,6 @@ fi
 # Values the app expects at import time. conftest.py sets the same defaults,
 # these just keep a direct pytest invocation working too.
 export BOTTOKEN="${BOTTOKEN:-test-bot-token}"
-export TELEGRAM_WEBHOOK_SECRET="${TELEGRAM_WEBHOOK_SECRET:-test-webhook-secret}"
 export SESSION_SECRET="${SESSION_SECRET:-test-session-secret}"
 export ADMIN_PASSWORD="${ADMIN_PASSWORD:-test-admin-password}"
 

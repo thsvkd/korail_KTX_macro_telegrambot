@@ -9,18 +9,97 @@
 # bot token two consumers, and Telegram answers the loser of that race with a
 # 409 while updates disappear into the winner.
 #
-# RECEIVE_MODE in .env decides how updates arrive: 'polling' (default) pulls
-# them and needs no public address, 'webhook' waits for Telegram to call in.
+# Telegram updates are pulled with long polling, so no public address is needed.
 #
 # Usage:
 #   scripts/run.sh              # run in the foreground (Ctrl-C to stop)
 #   scripts/run.sh --daemon     # run in the background, logging to .run/
 #   scripts/run.sh --stop       # stop a running bot and exit
 #   scripts/run.sh --debug      # DEBUG logging (not the Flask debugger)
+#   scripts/run.sh redis [start|stop|status]
 #
 # scripts/status.sh reports on whatever is running.
 
-source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+# shellcheck source=scripts/_common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
+
+run_redis() {
+
+require_cmd docker
+
+CONTAINER="korail_dev_redis"
+ACTION="${1:-start}"
+
+cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
+
+is_running() {
+    docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"
+}
+
+case "$ACTION" in
+    -h|--help) printf '%s\n' 'Usage: scripts/run.sh redis [start|stop|status]'; exit 0 ;;
+
+    status)
+        if is_running; then
+            ok "${CONTAINER} is running on 127.0.0.1:6379"
+        else
+            info "${CONTAINER} is not running"
+        fi
+        ;;
+
+    stop)
+        if is_running || docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER"; then
+            info "Removing ${CONTAINER}"
+            docker rm -f "$CONTAINER" >/dev/null
+            ok "Stopped (data was in-memory only)"
+        else
+            info "${CONTAINER} is not running"
+        fi
+        ;;
+
+    start)
+        require_env_file
+        PASSWORD="$(env_value REDIS_PASSWORD)"
+        [[ -n "$PASSWORD" ]] || die "REDIS_PASSWORD is not set in .env. Run 'scripts/setup.sh secrets'."
+
+        if is_running; then
+            ok "${CONTAINER} is already running on 127.0.0.1:6379"
+            exit 0
+        fi
+
+        docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+
+        info "Starting ${CONTAINER} on 127.0.0.1:6379"
+        docker run -d \
+            --name "$CONTAINER" \
+            -p 127.0.0.1:6379:6379 \
+            redis:7-alpine \
+            redis-server --requirepass "$PASSWORD" >/dev/null
+
+        for _ in $(seq 1 30); do
+            if docker exec "$CONTAINER" redis-cli -a "$PASSWORD" --no-auth-warning ping 2>/dev/null | grep -q PONG; then
+                ok "Ready. Start the bot with: scripts/run.sh"
+                exit 0
+            fi
+            sleep 0.5
+        done
+
+        die "Redis did not become ready. Check 'docker logs ${CONTAINER}'."
+        ;;
+
+    *)
+        die "Unknown action: ${ACTION}. Use start, stop or status."
+        ;;
+esac
+
+}
+
+if [[ "${1:-}" == "redis" ]]; then
+    shift
+    run_redis "$@"
+    exit
+fi
+
 
 DAEMON=0
 STOP_ONLY=0
@@ -35,7 +114,7 @@ for arg in "$@"; do
     esac
 done
 
-cd "$ROOT_DIR"
+cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
 mkdir -p "$RUN_DIR"
 
 if (( STOP_ONLY )); then
@@ -67,23 +146,7 @@ fi
 
 [[ -n "${BOTTOKEN:-}" ]] || die "BOTTOKEN is not set in .env"
 
-# Mirrors the default in src/config/settings.py, which also lowercases it.
-export RECEIVE_MODE="$(printf '%s' "${RECEIVE_MODE:-polling}" | tr '[:upper:]' '[:lower:]')"
-case "$RECEIVE_MODE" in
-    polling)
-        info "Receive mode: polling (updates are pulled - no public address needed)"
-        ;;
-    webhook)
-        info "Receive mode: webhook (Telegram must reach this host over HTTPS)"
-        # Without the secret anyone who can reach /telebot could forge updates,
-        # so the app refuses to start - fail here with something actionable.
-        [[ -n "${TELEGRAM_WEBHOOK_SECRET:-}" ]] || \
-            die "TELEGRAM_WEBHOOK_SECRET is not set. Run 'scripts/gen-secrets.sh'."
-        ;;
-    *)
-        die "RECEIVE_MODE must be 'polling' or 'webhook' (got '${RECEIVE_MODE}')"
-        ;;
-esac
+info "Receive mode: long polling (no public address needed)"
 
 if [[ "${FLASK_DEBUG:-False}" =~ ^([Tt]rue|1|[Yy]es|[Oo]n)$ ]]; then
     warn "FLASK_DEBUG only reaches the Flask development server, which this"
@@ -106,7 +169,7 @@ except OSError as exc:
     sys.exit(1)
 PY
 then
-    die "Redis is not reachable. Start one with 'scripts/dev-redis.sh'."
+    die "Redis is not reachable. Start one with 'scripts/run.sh redis'."
 fi
 ok "Redis reachable"
 
@@ -114,7 +177,7 @@ ok "Redis reachable"
 # bot is only stopped once its replacement is known to be able to come up.
 bot_stop
 
-LISTEN="${FLASK_HOST:-0.0.0.0}:${FLASK_PORT:-8080}"
+LISTEN="${FLASK_HOST:-127.0.0.1}:${FLASK_PORT:-8080}"
 THREADS="${WAITRESS_THREADS:-8}"
 
 # waitress-serve straight out of .venv rather than through 'uv run', so the

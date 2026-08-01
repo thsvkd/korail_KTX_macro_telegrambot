@@ -12,11 +12,73 @@
 #   scripts/status.sh logs           # just the log, last 20 lines
 #   scripts/status.sh logs 100       # just the log, last 100 lines
 #   scripts/status.sh logs -f        # follow it (Ctrl-C to stop)
+#   scripts/status.sh redis [--keys|COMMAND ...]
 #
 # Exit status is 0 when the bot is running, 1 when it is not, so it can gate
 # something else: scripts/status.sh >/dev/null || scripts/run.sh --daemon
 
-source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+# shellcheck source=scripts/_common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
+
+status_redis() {
+
+case "${1:-}" in
+    -h|--help) printf '%s\n' 'Usage: scripts/status.sh redis [--keys|COMMAND ...]'; exit 0 ;;
+esac
+
+require_cmd docker
+
+cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
+require_env_file
+
+PASSWORD="$(env_value REDIS_PASSWORD)"
+[[ -n "$PASSWORD" ]] || die "REDIS_PASSWORD is not set in .env"
+
+# Either the compose stack or the standalone instance scripts/run.sh redis
+# starts for host-side runs; whichever is up is the one to talk to.
+CONTAINER=""
+for candidate in korail_redis korail_dev_redis; do
+    if docker ps --format '{{.Names}}' | grep -qx "$candidate"; then
+        CONTAINER="$candidate"
+        break
+    fi
+done
+
+if [[ -z "$CONTAINER" ]]; then
+    err "No Redis container is running."
+    err "  compose stack:     scripts/deploy.sh up"
+    die "  local development: scripts/run.sh redis"
+fi
+
+if [[ "${1:-}" == "--keys" ]]; then
+    info "Key space summary"
+    for prefix in user_session running_reservation payment_status \
+                  multi_reservation_status partial_reservations \
+                  admin_authenticated admin_auth_failures subscribers; do
+        count="$(docker exec "$CONTAINER" redis-cli -a "$PASSWORD" --no-auth-warning \
+            --scan --pattern "${prefix}*" 2>/dev/null | wc -l | tr -d ' ')"
+        printf '  %-28s %s\n' "$prefix" "$count"
+    done
+    exit 0
+fi
+
+# -t only when there is a terminal to allocate: with piped stdin, docker
+# refuses outright with "the input device is not a TTY", which makes this
+# script unusable from a script or a pipeline.
+DOCKER_FLAGS=(-i)
+[[ -t 0 ]] && DOCKER_FLAGS+=(-t)
+
+exec docker exec "${DOCKER_FLAGS[@]}" "$CONTAINER" \
+    redis-cli -a "$PASSWORD" --no-auth-warning "$@"
+
+}
+
+if [[ "${1:-}" == "redis" ]]; then
+    shift
+    status_redis "$@"
+    exit
+fi
+
 
 SHOW_LOG=0
 LOG_LINES=20
@@ -48,7 +110,7 @@ done
 # ==================== Just the log ====================
 
 if (( LOGS_ONLY )); then
-    cd "$ROOT_DIR"
+    cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
     if [[ ! -f "$LOG_FILE" ]]; then
         # A foreground run logs to its terminal, so there is nothing to read.
         err "${LOG_FILE#"$ROOT_DIR"/} 이 없습니다."
@@ -63,7 +125,7 @@ if (( LOGS_ONLY )); then
     exec tail -n "$LOG_LINES" "$LOG_FILE"
 fi
 
-cd "$ROOT_DIR"
+cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
 
 heading() { printf '\n%s\n' "${C_BLUE}── $* ${C_RESET}"; }
 field()   { printf '  %-22s %s\n' "$1" "$2"; }
@@ -118,7 +180,7 @@ load_env
 [[ "${REDIS_HOST:-}" == "redis" ]] && export REDIS_HOST=localhost
 
 heading "설정"
-field "RECEIVE_MODE" "${RECEIVE_MODE:-polling}"
+field "Telegram updates" "long polling"
 field "LOG_LEVEL" "${LOG_LEVEL:-INFO}"
 field "검색 간격" "${SEARCH_INTERVAL:-1}초 (지터 ${SEARCH_INTERVAL_JITTER:-0.4})"
 field "장애 알림" "연속 ${SEARCH_FAILURE_ALERT_THRESHOLD:-10}회 실패 시"
@@ -155,7 +217,7 @@ except OSError:
     ok "Redis ${REDIS_HOST:-localhost}:${REDIS_PORT:-6379} 응답"
     redis_up=1
 else
-    err "Redis ${REDIS_HOST:-localhost}:${REDIS_PORT:-6379} 무응답 - 'scripts/dev-redis.sh' 로 기동"
+    err "Redis ${REDIS_HOST:-localhost}:${REDIS_PORT:-6379} 무응답 - 'scripts/run.sh redis' 로 기동"
 fi
 
 # ==================== What it is working on ====================

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared helpers for the scripts in this directory.
+# Private shared helpers for the scripts in this directory.
 # Sourced, not executed.
 
 set -euo pipefail
@@ -8,6 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # Overridable so the scripts can be exercised against a scratch file.
 ENV_FILE="${ENV_FILE:-${ROOT_DIR}/.env}"
+# Consumed by setup.sh after this file is sourced.
+# shellcheck disable=SC2034
 ENV_EXAMPLE="${ROOT_DIR}/.env.example"
 
 if [[ -t 1 ]]; then
@@ -208,6 +210,8 @@ can_import() {
 
 RUN_DIR="${ROOT_DIR}/.run"
 PID_FILE="${RUN_DIR}/korail-bot.pid"
+# Consumed by run.sh and status.sh after this file is sourced.
+# shellcheck disable=SC2034
 LOG_FILE="${RUN_DIR}/korail-bot.log"
 
 # _pid_cmdline <pid> - the process's command line, spaces between arguments
@@ -331,7 +335,7 @@ bot_stop() {
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 #
 # Prompts go to stderr so that the answer can be captured with $(...).
-# Shared by setup.sh and onboarding.sh.
+# Shared by setup.sh's standard and onboarding flows.
 
 clean_default() {
     local value="$1"
@@ -375,4 +379,3 @@ ask_yn() {
         esac
     done
 }
-

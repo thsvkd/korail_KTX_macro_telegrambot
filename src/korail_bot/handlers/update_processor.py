@@ -299,6 +299,15 @@ class TelegramUpdateProcessor:
                 self.conversation_handler.request_access(chat_id)
             return
 
+        # Choosing how often a running search reports in. A setting, not a
+        # step of the conversation - it is reached by /notify at any time, and
+        # the answer is as good an hour later as it was at the time.
+        if step == keyboards.STEP_NOTIFY:
+            self.telegram.answer_callback_query(query_id)
+            self._settle_keyboard(chat_id, message_id, message, data)
+            self.command_handler.handle_notify_callback(chat_id, value)
+            return
+
         # The operator's own lists. Guarded by the same admin check the
         # commands that open them use, because a keyboard is only as private
         # as the chat it was sent to - and messages get forwarded.

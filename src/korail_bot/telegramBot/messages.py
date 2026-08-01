@@ -21,6 +21,7 @@ class Messages:
     BOT_COMMANDS: ClassVar[list[dict[str, str]]] = [
         {"command": "start", "description": "🎫 예약 시작"},
         {"command": "status", "description": "📊 예약 상태 확인"},
+        {"command": "notify", "description": "🔔 진행 상황 알림 설정"},
         {"command": "onboarding", "description": "🔑 코레일 계정 등록"},
         {"command": "logout", "description": "🗑️ 등록된 계정 지우기"},
         {"command": "cancel", "description": "🚫 진행 중인 예약 취소"},
@@ -268,6 +269,7 @@ class Messages:
 
 ℹ️ 정보 확인
   /status - 예약 상태 확인
+  /notify - 진행 상황 알림 설정 (기본 꺼짐)
   /help - 도움말 보기
 
 🔧 관리자 명령어 (인증 필요)
@@ -648,7 +650,68 @@ class Messages:
 ✅ 예약 성공 시 즉시 알려드립니다!
 
 💡 진행 중인 예약을 취소하려면 /cancel을 입력하세요.
+🔔 찾는 동안 주기적으로 상황을 듣고 싶다면 /notify 를 입력하세요.
 """
+
+    # ========== 진행 상황 보고 ==========
+    #
+    # 검색은 몇 시간을 아무 말 없이 돌 수 있는데, 사용자 입장에서 그 침묵은
+    # 죽은 프로세스와 구별되지 않는다. /notify 로 켜면 정해둔 간격마다
+    # 살아있다고 알린다. 기본은 꺼짐이다. 원하지 않은 알림이 5분마다 오는
+    # 것은 그 침묵보다 나쁘기 때문이다.
+    SEARCH_PROGRESS = """🔍 검색 진행 중 ({elapsed}째)
+
+📍 {srcLocate} → {dstLocate}
+📅 {depDate}  🕐 {depTime}~{maxDepTime}
+🎯 {watch}
+━━━━━━━━━━━━━━━━━━━━
+조회 {attempts}회
+{health}
+
+💡 알림을 끄려면 /notify off · 중단하려면 /cancel"""
+
+    NOTIFY_SETTINGS = """🔔 진행 상황 알림
+
+현재 설정: {current}
+
+검색이 도는 동안 정해둔 간격마다 "아직 찾는 중" 이라고 알려줍니다.
+몇 시간짜리 검색이 살아있는지 확인하려고 /status 를 반복해서 칠 필요가
+없어집니다.
+
+⌨️ 직접 정할 수도 있습니다
+   /notify 10    → 10분마다
+   /notify off   → 끄기
+
+(설정할 수 있는 범위: {min}~{max}분)"""
+
+    NOTIFY_ON = """🔔 진행 상황 알림을 켰습니다.
+
+{minutes}분마다 검색이 어떻게 되어가는지 알려드립니다.
+지금 돌고 있는 검색에도 곧 적용됩니다.
+
+끄려면 /notify off 를 입력하세요."""
+
+    NOTIFY_OFF = """🔕 진행 상황 알림을 껐습니다.
+
+검색은 그대로 진행되며, 예약에 성공하면 알려드립니다.
+다시 켜려면 /notify 를 입력하세요."""
+
+    NOTIFY_ALREADY_OFF = "이미 꺼져 있습니다.\n\n켜려면 /notify 를 입력하세요."
+
+    NOTIFY_OUT_OF_RANGE = """❌ {value}분은 설정할 수 없습니다.
+
+{min}분에서 {max}분 사이로 입력해주세요.
+너무 잦은 알림은 알림이 아니라 소음입니다."""
+
+    NOTIFY_UNPARSEABLE = """❌ '{value}' 을(를) 알아듣지 못했습니다.
+
+이렇게 입력해주세요.
+   /notify        → 설정 화면
+   /notify 10     → 10분마다
+   /notify off    → 끄기"""
+
+    NOTIFY_CURRENT_OFF = "꺼짐"
+    NOTIFY_CURRENT_ON = "{minutes}분마다"
 
     ALREADY_RUNNING = """⚠️ 이미 예약이 진행 중입니다.
 

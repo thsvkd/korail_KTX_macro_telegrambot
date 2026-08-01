@@ -49,6 +49,10 @@ STEP_ACCESS = "ac"
 # The operator answering those requests, and managing who is approved.
 STEP_APPROVE = "ap"
 STEP_USERS = "us"
+# How often a running search should report in. A setting rather than a step of
+# the conversation: it is reached by /notify, at any time, and the answer is
+# just as valid an hour after the keyboard was sent.
+STEP_NOTIFY = "nf"
 
 # Answers to STEP_CONFIRM that are neither yes nor no.
 CONFIRM_SCHEDULE = "*schedule"
@@ -506,6 +510,51 @@ def users_revoke_keyboard(phone_hash: str) -> InlineKeyboard:
     return _keyboard(
         [_button("🚫 승인 취소", STEP_USERS, f"{USERS_REVOKE}{phone_hash}")],
         [_button("◀️ 뒤로", STEP_USERS, USERS_BACK)],
+    )
+
+
+#: The intervals /notify offers, in minutes. Anything else can be typed; these
+#: are the ones worth a press. Clamped to what the settings allow, so an
+#: operator who narrows the range does not leave buttons that get refused.
+NOTIFY_QUICK_MINUTES = (1, 5, 10, 15, 30, 60)
+
+# Turning reports off, as an answer to STEP_NOTIFY. A real one is all digits.
+NOTIFY_OFF = "*off"
+
+
+def notify_keyboard(current: int = 0) -> InlineKeyboard:
+    """
+    How often a running search should report in.
+
+    The current setting is ticked rather than removed from the list: a
+    settings screen that hides what is set makes the reader work out what they
+    are looking at.
+
+    Args:
+        current: The interval in force now, in minutes. 0 means off.
+
+    Returns:
+        The keyboard, with the offered intervals and a way to turn it off
+    """
+    from korail_bot.config.settings import settings
+
+    offered = [
+        minutes
+        for minutes in NOTIFY_QUICK_MINUTES
+        if settings.PROGRESS_REPORT_MIN_MINUTES <= minutes <= settings.PROGRESS_REPORT_MAX_MINUTES
+    ]
+    buttons = [
+        _button(
+            f"{'✅ ' if minutes == current else ''}{minutes}분마다",
+            STEP_NOTIFY,
+            str(minutes),
+        )
+        for minutes in offered
+    ]
+
+    return _keyboard(
+        *_rows(buttons, 3),
+        [_button(f"{'✅ ' if current <= 0 else '🔕 '}알림 끄기", STEP_NOTIFY, NOTIFY_OFF)],
     )
 
 

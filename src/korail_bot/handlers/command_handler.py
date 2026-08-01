@@ -436,6 +436,122 @@ class CommandHandler:
             logger.warning(f"Could not close the list on message {message_id}: {e}")
             self.telegram.send_message(chat_id, text)
 
+    # ==================== Progress reports ====================
+    #
+    # A search runs for hours without a word, and the silence is
+    # indistinguishable from a process that died. This is how the user asks it
+    # to check in - and, by default, does not: an unwanted message every five
+    # minutes is worse than the silence it replaces.
+
+    def handle_notify(self, chat_id: int, args: str = "") -> None:
+        """
+        Handle /notify - set or clear the progress report interval.
+
+        Args:
+            chat_id: Telegram chat ID
+            args: What followed the command. Empty opens the settings screen;
+                  "off" clears it; a number of minutes sets it.
+        """
+        logger.info(f"Handling /notify for chat_id={chat_id}: {args!r}")
+
+        args = args.strip().lower()
+        if not args:
+            self._show_notify_settings(chat_id)
+            return
+
+        if args in ("off", "0", "끄기", "해제"):
+            self.set_progress_reports(chat_id, 0)
+            return
+
+        if args in ("on", "켜기"):
+            self.set_progress_reports(chat_id, settings.PROGRESS_REPORT_DEFAULT_MINUTES)
+            return
+
+        # "10", "10m", "10분" all mean the same thing, and a person who has
+        # been reading "10분마다" on a button will type the 분.
+        digits = args.removesuffix("m").removesuffix("min").removesuffix("분").strip()
+        if not digits.isdigit():
+            self.telegram.send_message(
+                chat_id, MessageTemplates.NOTIFY_UNPARSEABLE.format(value=args)
+            )
+            return
+
+        self.set_progress_reports(chat_id, int(digits))
+
+    def set_progress_reports(self, chat_id: int, minutes: int) -> None:
+        """
+        Record how often this chat wants to hear from a running search.
+
+        Args:
+            chat_id: Telegram chat ID
+            minutes: The interval, or 0 to turn reports off. Out-of-range
+                     values are refused rather than clamped: silently turning
+                     a request for one minute into fifteen would leave the
+                     user believing something else was set.
+        """
+        if minutes <= 0:
+            was_on = self.storage.get_progress_report_minutes(chat_id) > 0
+            self.storage.set_progress_report_minutes(chat_id, 0)
+            self.telegram.send_message(
+                chat_id,
+                MessageTemplates.NOTIFY_OFF if was_on else MessageTemplates.NOTIFY_ALREADY_OFF,
+            )
+            return
+
+        if not (
+            settings.PROGRESS_REPORT_MIN_MINUTES <= minutes <= settings.PROGRESS_REPORT_MAX_MINUTES
+        ):
+            self.telegram.send_message(
+                chat_id,
+                MessageTemplates.NOTIFY_OUT_OF_RANGE.format(
+                    value=minutes,
+                    min=settings.PROGRESS_REPORT_MIN_MINUTES,
+                    max=settings.PROGRESS_REPORT_MAX_MINUTES,
+                ),
+            )
+            return
+
+        self.storage.set_progress_report_minutes(chat_id, minutes)
+        self.telegram.send_message(chat_id, MessageTemplates.NOTIFY_ON.format(minutes=minutes))
+
+    def _show_notify_settings(self, chat_id: int) -> None:
+        """Show what is set now, and the intervals worth a press."""
+        current = self.storage.get_progress_report_minutes(chat_id)
+        self.telegram.send_message(
+            chat_id,
+            MessageTemplates.NOTIFY_SETTINGS.format(
+                current=self._describe_notify_setting(current),
+                min=settings.PROGRESS_REPORT_MIN_MINUTES,
+                max=settings.PROGRESS_REPORT_MAX_MINUTES,
+            ),
+            reply_markup=keyboards.notify_keyboard(current),
+        )
+
+    @staticmethod
+    def _describe_notify_setting(minutes: int) -> str:
+        """How the settings screen names the interval in force."""
+        if minutes <= 0:
+            return MessageTemplates.NOTIFY_CURRENT_OFF
+        return MessageTemplates.NOTIFY_CURRENT_ON.format(minutes=minutes)
+
+    def handle_notify_callback(self, chat_id: int, value: str) -> None:
+        """
+        Act on a press in the /notify settings screen.
+
+        Args:
+            chat_id: Telegram chat ID
+            value: The interval in minutes, or the "off" sentinel
+        """
+        if value == keyboards.NOTIFY_OFF:
+            self.set_progress_reports(chat_id, 0)
+            return
+
+        if not value.isdigit():
+            logger.warning(f"Unknown notify choice {value!r} from chat_id={chat_id}")
+            return
+
+        self.set_progress_reports(chat_id, int(value))
+
     def handle_cancel(self, chat_id: int) -> None:
         """
         Handle /cancel command.
@@ -716,6 +832,8 @@ class CommandHandler:
             self.handle_cancel(chat_id)
         elif command == "/status":
             self.handle_status(chat_id)
+        elif command == "/notify":
+            self.handle_notify(chat_id, args)
         elif command == "/help":
             self.handle_help(chat_id)
         # Admin commands - require authentication

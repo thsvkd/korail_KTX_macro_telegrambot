@@ -142,6 +142,29 @@ class Settings:
     # was making one every few seconds, so this is gentle by comparison.
     PAYMENT_VERIFY_INTERVAL_SECONDS: int = int(os.environ.get("PAYMENT_VERIFY_INTERVAL", "30"))
 
+    # Progress reports from a running search
+    #
+    # A search can run for hours without a word, and silence is
+    # indistinguishable from a bot that died. /notify turns on a periodic
+    # "still going" message and picks how often it comes. Off unless asked
+    # for: an unwanted message every five minutes is worse than the silence.
+    #
+    # The bounds are what a chat may ask for. A report costs nothing but
+    # attention, and one every ten seconds would cost a great deal of it.
+    PROGRESS_REPORT_MIN_MINUTES: int = int(os.environ.get("PROGRESS_REPORT_MIN_MINUTES", "1"))
+    PROGRESS_REPORT_MAX_MINUTES: int = int(os.environ.get("PROGRESS_REPORT_MAX_MINUTES", "180"))
+    # What "/notify on" means, and what the keyboard offers first.
+    PROGRESS_REPORT_DEFAULT_MINUTES: int = int(
+        os.environ.get("PROGRESS_REPORT_DEFAULT_MINUTES", "5")
+    )
+    # How long the search process may reuse the preference it last read out of
+    # Redis. Bounds how quickly a /notify takes effect on a search already
+    # running, against reading a key on every pass of a loop that runs about
+    # once a second.
+    PROGRESS_PREFERENCE_TTL_SECONDS: float = float(
+        os.environ.get("PROGRESS_PREFERENCE_TTL_SECONDS", "30")
+    )
+
     # Flask Configuration
     # In polling mode the only caller of the HTTP API is the background
     # reservation process on loopback, so binding to every interface would

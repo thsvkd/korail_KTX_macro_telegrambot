@@ -180,6 +180,17 @@ class StorageInterface(ABC):
         """Every chat in developer mode."""
         pass
 
+    # How often a running search reports in
+    @abstractmethod
+    def get_progress_report_minutes(self, chat_id: int) -> int:
+        """How often this chat wants progress reports, in minutes. 0 is off."""
+        pass
+
+    @abstractmethod
+    def set_progress_report_minutes(self, chat_id: int, minutes: int) -> None:
+        """Set the reporting interval, or 0 to stop reporting."""
+        pass
+
     # Resume Credentials Management
     @abstractmethod
     def save_resume_credentials(self, chat_id: int, username: str, password: str) -> None:

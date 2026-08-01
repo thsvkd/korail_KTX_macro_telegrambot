@@ -35,6 +35,7 @@ from korail_bot.services.korail_service import (
 )
 from korail_bot.storage.redis import RedisStorage
 from korail_bot.telegramBot.messages import Messages
+from korail_bot.utils.formatting import format_duration
 from korail_bot.utils.logger import LoggerFactory, get_logger
 from korail_bot.utils.privacy import mask_phone
 
@@ -130,7 +131,15 @@ class BackgroundReservationProcess:
         self.korail = KorailService(
             app_session_start=self.storage.get_or_create_app_session_start(self.chat_id),
             on_status=self._announce_search_status,
+            on_progress=self._report_search_progress,
         )
+
+        # Progress reporting state. The first report is due one interval from
+        # now rather than immediately: the user has just been told the search
+        # started, and repeating that back a second later says nothing.
+        self._reported_at: float = time.monotonic()
+        self._report_minutes: int = 0
+        self._report_minutes_read_at: float | None = None
 
         logger.info(f"Redis storage connected: {settings.REDIS_HOST}:{settings.REDIS_PORT}")
 
@@ -711,6 +720,82 @@ class BackgroundReservationProcess:
         """
         self.telegram.send_message(self.chat_id, message)
 
+    # ==================== Reporting in ====================
+    #
+    # A search can run for hours without saying anything, and silence is
+    # indistinguishable from a process that died. /notify turns on a periodic
+    # "still going" message; off unless asked for, because an unwanted message
+    # every five minutes is worse than the silence it replaces.
+    #
+    # Two clocks, with a reason each. The interval is what the user asked for.
+    # The preference is re-read from Redis at most every so often, so that
+    # /notify reaches a search already running without the loop reading a key
+    # on every one of its roughly-one-a-second passes.
+
+    def _report_interval_minutes(self) -> int:
+        """
+        How often this chat wants to hear from the search. 0 is off.
+
+        Cached, and deliberately fail-quiet: Redis being briefly unreachable
+        should make the reports pause, not end the search.
+        """
+        now = time.monotonic()
+        if (
+            self._report_minutes_read_at is None
+            or now - self._report_minutes_read_at >= settings.PROGRESS_PREFERENCE_TTL_SECONDS
+        ):
+            self._report_minutes_read_at = now
+            try:
+                self._report_minutes = self.storage.get_progress_report_minutes(self.chat_id)
+            except Exception as e:
+                logger.warning(f"Could not read the progress report preference: {e}")
+                self._report_minutes = 0
+
+        return self._report_minutes
+
+    def _report_search_progress(self, progress) -> None:
+        """
+        Say that the search is still going, no more often than asked.
+
+        Called on every pass of the search loop, which is why nearly every
+        call returns here without doing anything.
+        """
+        minutes = self._report_interval_minutes()
+        if minutes <= 0:
+            return
+
+        now = time.monotonic()
+        if now - self._reported_at < minutes * 60:
+            return
+
+        self._reported_at = now
+        self.telegram.send_message(self.chat_id, self._progress_message(progress))
+
+    def _progress_message(self, progress) -> str:
+        """What a progress report reads like."""
+        watch = (
+            f"지정 열차 {len(self.train_numbers)}개 ({', '.join(self.train_numbers)}번)"
+            if self.train_numbers
+            else "시간대 전체"
+        )
+        health = (
+            "코레일 응답 정상"
+            if progress.healthy
+            else f"코레일 응답 없음 (연속 {progress.failure_streak}회 실패, 간격을 늘려 재시도 중)"
+        )
+
+        return Messages.SEARCH_PROGRESS.format(
+            elapsed=format_duration(progress.elapsed_seconds),
+            srcLocate=self.src_locate,
+            dstLocate=self.dst_locate,
+            depDate=self.dep_date,
+            depTime=self.dep_time[:4] if self.dep_time else "N/A",
+            maxDepTime=self.max_dep_time,
+            watch=watch,
+            attempts=f"{progress.attempts:,}",
+            health=health,
+        )
+
     def _send_callback(
         self,
         message: str,
@@ -894,6 +979,8 @@ class BackgroundReservationProcess:
 
             if is_summary:
                 logger.debug(f"🔄 Search attempt #{attempts} for seat {seat_index + 1}")
+
+            self.korail.report_progress(attempts)
 
             # Search for trains (single passenger)
             try:

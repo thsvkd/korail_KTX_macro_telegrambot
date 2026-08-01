@@ -3,6 +3,7 @@
 import random
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import requests
 from korail2 import AdultPassenger, NoResultsError, ReserveOption, SoldOutError, TrainType
@@ -15,6 +16,29 @@ from korail_bot.utils.privacy import mask_phone
 logger = get_logger(__name__)
 
 
+@dataclass(frozen=True)
+class SearchProgress:
+    """
+    What a running search can say about itself.
+
+    Facts only. Whether any of it is worth telling the user, and how it should
+    read when it is, belongs to whoever owns the conversation - this class has
+    never known there is one.
+    """
+
+    #: How many times the loop has asked Korail for trains.
+    attempts: int
+    #: Seconds since the search loop began.
+    elapsed_seconds: float
+    #: Failed requests in a row right now. 0 means Korail is answering.
+    failure_streak: int
+
+    @property
+    def healthy(self) -> bool:
+        """Whether Korail is answering at the moment."""
+        return self.failure_streak == 0
+
+
 class KorailService:
     """Service for interacting with Korail API."""
 
@@ -22,6 +46,7 @@ class KorailService:
         self,
         app_session_start: str | None = None,
         on_status: Callable[[str], None] | None = None,
+        on_progress: Callable[["SearchProgress"], None] | None = None,
     ):
         """
         Initialize Korail service.
@@ -38,6 +63,11 @@ class KorailService:
                        that this class keeps knowing nothing about Telegram;
                        None means nobody is told, which is right for the
                        short-lived clients that only log in and stop.
+            on_progress: Called once per pass of the search loop with what the
+                       search knows about itself. Deliberately unthrottled:
+                       deciding how often the user hears anything is the
+                       caller's business, and it is the only party that knows
+                       what the user asked for.
         """
         self._korail_instance: K2MKorail | None = None
         self._logged_in = False
@@ -51,6 +81,8 @@ class KorailService:
         self._relogin_due_at: float = 0.0
         self._relogin_count: int = 0
         self._on_status = on_status
+        self._on_progress = on_progress
+        self._search_started_at: float = 0.0
         self._failure_streak: int = 0
         self._failure_since: float = 0.0
         self._failure_alerted_at: float = 0.0
@@ -227,6 +259,43 @@ class KorailService:
         except Exception as e:
             # Telling the user failed. That must not end the search.
             logger.error(f"Failed to deliver search status message: {e}", exc_info=True)
+
+    def begin_search(self) -> None:
+        """
+        Mark the moment the search loop started.
+
+        Read off a monotonic clock, so a report of "3시간째" cannot be turned
+        into nonsense by the host's wall clock moving under it.
+        """
+        self._search_started_at = time.monotonic()
+
+    def report_progress(self, attempts: int) -> None:
+        """
+        Hand the caller what the search knows about itself.
+
+        Called once per pass of the loop and never throttled here. Reporting
+        is not this class's decision: it does not know whether the user asked
+        for reports, how often they want them, or whether anyone is reading.
+
+        Args:
+            attempts: How many times the loop has asked Korail for trains
+        """
+        if not self._on_progress:
+            return
+
+        started = self._search_started_at or time.monotonic()
+        try:
+            self._on_progress(
+                SearchProgress(
+                    attempts=attempts,
+                    elapsed_seconds=time.monotonic() - started,
+                    failure_streak=self._failure_streak,
+                )
+            )
+        except Exception as e:
+            # Telling the user how it is going must never be the reason the
+            # search stops going.
+            logger.error(f"Failed to deliver search progress: {e}", exc_info=True)
 
     def note_search_failure(self, error: Exception) -> float:
         """
@@ -550,6 +619,7 @@ class KorailService:
             f"Starting reservation loop: {src_locate} -> {dst_locate} "
             f"on {dep_date} at {dep_time} for {passenger_count} passengers ({seat_strategy} seating)"
         )
+        self.begin_search()
 
         if seat_strategy == "consecutive":
             return self._search_and_reserve_consecutive(
@@ -613,6 +683,7 @@ class KorailService:
             if is_summary:
                 logger.debug(f"━━━ Search attempt #{attempts} ━━━")
 
+            self.report_progress(attempts)
             self._check_session_refresh()
 
             # Search for trains
@@ -699,6 +770,7 @@ class KorailService:
 
             is_summary = attempts % 60 == 0
 
+            self.report_progress(attempts)
             self._check_session_refresh()
 
             # Search for trains (search for single passenger each time)

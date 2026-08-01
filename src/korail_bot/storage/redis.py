@@ -449,6 +449,40 @@ class RedisStorage(StorageInterface):
         """Every chat in developer mode."""
         return [int(value) for value in self.redis.smembers("developers")]
 
+    # ==================== Progress report preference ====================
+    #
+    # A preference, not session state: it is set once and expected to hold for
+    # every search after that, so it lives in a key of its own rather than on
+    # the session the booking flow resets when it ends. No expiry for the same
+    # reason - a preference that quietly forgot itself would be worse than one
+    # that was never offered.
+
+    def get_progress_report_minutes(self, chat_id: int) -> int:
+        """
+        How often this chat wants progress reports, in minutes.
+
+        Returns:
+            The interval, or 0 when reports are off - which is the default,
+            and what an unreadable value is treated as. A malformed key must
+            not turn into a search that messages the user every second.
+        """
+        raw = self.redis.get(f"progress_report:{chat_id}")
+        if raw is None:
+            return 0
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            logger.warning(f"Unreadable progress report interval for chat_id={chat_id}: {raw!r}")
+            return 0
+
+    def set_progress_report_minutes(self, chat_id: int, minutes: int) -> None:
+        """Set the reporting interval, or 0 to stop reporting."""
+        key = f"progress_report:{chat_id}"
+        if minutes <= 0:
+            self.redis.delete(key)
+        else:
+            self.redis.set(key, str(int(minutes)))
+
     # ==================== Resume Credentials Management ====================
 
     def save_resume_credentials(self, chat_id: int, username: str, password: str) -> None:

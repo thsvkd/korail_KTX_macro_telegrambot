@@ -276,10 +276,17 @@ def time_keyboard(step: str, include_unlimited: bool = False) -> InlineKeyboard:
 
 
 def train_type_keyboard() -> InlineKeyboard:
-    """KTX only, or everything."""
+    """
+    KTX only, or everything.
+
+    The second label names what "everything" drags in. Read on its own it
+    sounds like the more generous option, and the prompt beside it says so at
+    length - but the label is what someone skims before pressing, and ending
+    up on a 무궁화호 is not the failure they were guarding against.
+    """
     return _keyboard(
-        [_button("🚅 KTX·KTX-산천만", STEP_TRAIN_TYPE, "1")],
-        [_button("🚂 모든 열차", STEP_TRAIN_TYPE, "2")],
+        [_button("🚅 KTX 계열만", STEP_TRAIN_TYPE, "1")],
+        [_button("🚂 모든 열차 (무궁화호 포함)", STEP_TRAIN_TYPE, "2")],
         _back_row(STEP_TRAIN_TYPE),
         _cancel_row(),
     )

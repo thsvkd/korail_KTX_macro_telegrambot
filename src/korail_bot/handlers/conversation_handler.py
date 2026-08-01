@@ -532,12 +532,17 @@ class ConversationHandler:
             self.telegram.send_message(chat_id, error, reply_markup=keyboards.train_type_keyboard())
             return
 
+        # trainType is what the search is driven by; trainTypeShow is only
+        # ever read back to the user, on the summary and in /status. It used
+        # to carry "ALL", which names the korail2 constant rather than the
+        # choice - and left the summary saying nothing about the 무궁화호 the
+        # search had just been allowed to book.
         if text == "1":
             session.train_info["trainType"] = "TrainType.KTX"
-            session.train_info["trainTypeShow"] = "KTX"
+            session.train_info["trainTypeShow"] = "KTX 계열만"
         else:
             session.train_info["trainType"] = "TrainType.ALL"
-            session.train_info["trainTypeShow"] = "ALL"
+            session.train_info["trainTypeShow"] = "모든 열차 (무궁화호 포함)"
 
         session.last_action = UserProgress.TRAIN_TYPE_INPUT_SUCCESS
         self.storage.save_user_session(session)

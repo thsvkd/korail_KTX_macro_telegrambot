@@ -335,7 +335,9 @@ class TestButtonLabel:
 
     def test_finds_the_label_for_the_pressed_button(self):
         keyboard = keyboards.train_type_keyboard()
-        assert keyboards.button_label(keyboard, f"{keyboards.STEP_TRAIN_TYPE}:2") == "🚂 모든 열차"
+        assert keyboards.button_label(keyboard, f"{keyboards.STEP_TRAIN_TYPE}:2") == (
+            "🚂 모든 열차 (무궁화호 포함)"
+        )
 
     def test_returns_none_when_the_data_is_not_on_the_keyboard(self):
         assert keyboards.button_label(keyboards.train_type_keyboard(), "tt:9") is None

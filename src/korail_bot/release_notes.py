@@ -70,6 +70,15 @@ NOTES: dict[str, ReleaseNote] = {
 📨 업데이트 안내
 이 메시지처럼, 요약만 펼쳐 보내고 자세한 내용은 접어서 보냅니다.""",
     ),
+    # No fold, because there is nothing behind it. 4.0.0 and 4.0.1 added
+    # features and were numbered as if they had fixed bugs; this corrects the
+    # number without pretending the correction is news. The one line about it
+    # exists only so the jump from 4.0.1 does not read as a version gone
+    # missing.
+    "4.1.0": ReleaseNote(
+        headline="""• 새로 생긴 기능은 없습니다. 지난 안내에서 소개해 드린 그대로입니다.
+• 그동안 기능이 늘어난 만큼 번호를 4.1.0 으로 바로잡았습니다.""",
+    ),
 }
 
 

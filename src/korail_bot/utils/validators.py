@@ -184,22 +184,27 @@ class InputValidator:
         return True, None
 
     @staticmethod
-    def validate_station_name(station: str) -> tuple[bool, str | None]:
+    def validate_station_name(station: str, operator=None) -> tuple[bool, str | None]:
         """
-        Validate station name against actual Korail station database.
+        Validate a station name against the railway that would stop there.
 
         Args:
             station: Station name
+            operator: Which railway the search is against. None means Korail,
+                      which is what every caller meant when there was only one.
 
         Returns:
             Tuple of (is_valid, error_message)
         """
         # Import here to avoid circular dependency
+        from korail_bot.models.operator import Operator
         from korail_bot.utils.station_codes import (
             format_station_suggestions,
             get_similar_stations,
             is_valid_station,
         )
+
+        operator = Operator.parse(operator)
 
         if not station:
             return False, "역 이름을 입력해주세요."
@@ -258,8 +263,23 @@ class InputValidator:
             ):
                 return False, "역 이름에 특수문자를 사용할 수 없습니다."
 
-        # Check against actual station database
-        if not is_valid_station(station):
+        # Check against the station list of the railway being booked.
+        #
+        # SR publishes its whole list with its client - 30-odd stations - so
+        # the answer is definite and the suggestions are drawn from it. Korail
+        # runs hundreds and its list is fetched and cached, which is what
+        # station_codes is for.
+        serves = operator.serves(station)
+        if serves is False:
+            from korail_bot.models.operator import SRT_MAJOR_STATIONS
+
+            offered = ", ".join(SRT_MAJOR_STATIONS[:6])
+            return False, (
+                f"'{station}'은(는) {operator.display_name}이(가) 서지 않는 역입니다.\n"
+                f"예: {offered} 등"
+            )
+
+        if serves is None and not is_valid_station(station):
             # Get similar stations for suggestion
             similar = get_similar_stations(station)
             suggestion_text = format_station_suggestions(similar)
@@ -301,6 +321,33 @@ class InputValidator:
             return False, None
         else:
             return None, "Y/예 또는 N/아니오를 입력해주세요."
+
+    @staticmethod
+    def validate_operator_choice(choice: str) -> tuple[bool, str | None]:
+        """
+        Validate which railway was chosen.
+
+        Deliberately strict, unlike Operator.parse: that one is reading a
+        stored record and a wrong guess there strands a search someone is
+        waiting on, so it settles for Korail. This one is reading an answer to
+        a question just asked, and answering something unrecognisable with
+        "right, Korail then" would book the wrong railway without a word.
+
+        Args:
+            choice: What the user pressed or typed
+
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        from korail_bot.models.operator import Operator
+
+        if not (choice or "").strip():
+            return False, "철도를 선택해주세요. (코레일 또는 SRT)"
+
+        if Operator.from_answer(choice) is None:
+            return False, "코레일 또는 SRT 중에서 선택해주세요."
+
+        return True, None
 
     @staticmethod
     def validate_train_type_choice(choice: str) -> tuple[bool, str | None]:

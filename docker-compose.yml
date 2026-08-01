@@ -5,14 +5,15 @@ services:
     # to pull, on purpose - running a bot that handles Korail logins from an
     # image someone else controls is not a default anyone should inherit.
     image: ${IMAGE_NAME:-korailbot:local}
-    container_name: korail_bot
+    container_name: ${APP_CONTAINER_NAME:-korail_bot}
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_DB=0
       - PYTHONUNBUFFERED=1
+      - BOT_RUNTIME_PROFILE=${BOT_RUNTIME_PROFILE:-production}
     env_file:
-      - .env
+      - ${BOT_ENV_FILE:-.env}
     depends_on:
       redis:
         condition: service_healthy
@@ -22,7 +23,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: korail_redis
+    container_name: ${REDIS_CONTAINER_NAME:-korail_redis}
     # Deliberately not published to the host: Redis holds user sessions and
     # encrypted credentials, and only the app container needs to reach it.
     expose:
@@ -30,7 +31,7 @@ services:
     volumes:
       - redis_data:/data
     env_file:
-      - .env
+      - ${BOT_ENV_FILE:-.env}
     command: >
       redis-server
       --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}

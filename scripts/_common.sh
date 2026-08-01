@@ -8,6 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # Overridable so the scripts can be exercised against a scratch file.
 ENV_FILE="${ENV_FILE:-${ROOT_DIR}/.env}"
+TEST_ENV_FILE="${TEST_ENV_FILE:-${ROOT_DIR}/.env.test}"
 # Consumed by setup.sh after this file is sourced.
 # shellcheck disable=SC2034
 ENV_EXAMPLE="${ROOT_DIR}/.env.example"
@@ -40,9 +41,12 @@ require_cmd() {
     fi
 }
 
-# require_env_file - abort when .env is missing
+# require_env_file - abort when the selected configuration file is missing
 require_env_file() {
-    [[ -f "$ENV_FILE" ]] || die ".env not found. Run 'scripts/setup.sh' first."
+    local label setup_command="scripts/setup.sh"
+    label="${ENV_FILE#"$ROOT_DIR"/}"
+    [[ "$ENV_FILE" == "$TEST_ENV_FILE" ]] && setup_command="scripts/setup.sh --test"
+    [[ -f "$ENV_FILE" ]] || die "${label} not found. Run '${setup_command}' first."
 }
 
 # load_env - export every variable defined in .env
@@ -144,16 +148,19 @@ compose_supports_reset() {
 # compose - run docker compose with the repo's files, whichever CLI is present.
 #
 # Passing -f explicitly disables Compose's implicit loading of
-# docker-compose.override.yml, so it has to be listed by hand.
+# docker-compose.override.yml, so it has to be listed by hand for production.
+# The onboarding override is deliberately production-only: it pins the local
+# production image, which would otherwise replace IMAGE_NAME from .env.test
+# and make a test deployment run the wrong build.
 compose() {
     local files=(-f "${ROOT_DIR}/docker-compose.yml")
-    [[ -f "${ROOT_DIR}/docker-compose.override.yml" ]] && \
+    [[ "$BOT_RUNTIME_PROFILE" != "test" && -f "${ROOT_DIR}/docker-compose.override.yml" ]] && \
         files+=(-f "${ROOT_DIR}/docker-compose.override.yml")
 
     if docker compose version >/dev/null 2>&1; then
-        docker compose "${files[@]}" "$@"
+        docker compose --env-file "$ENV_FILE" "${files[@]}" "$@"
     elif command -v docker-compose >/dev/null 2>&1; then
-        docker-compose "${files[@]}" "$@"
+        docker-compose --env-file "$ENV_FILE" "${files[@]}" "$@"
     else
         # docker-compose-plugin lives in Docker's own APT repo, so it is not
         # installable on a system using the distro's docker.io package.
@@ -167,6 +174,23 @@ compose() {
         err "  Or the older v1 from the distro: sudo apt install docker-compose"
         die "Install one and run this again."
     fi
+}
+
+# use_test_stack - point Compose helpers at the isolated test-bot stack.
+#
+# The project name separates the generated network and named Redis volume.
+# Container names and the published HTTP port live in .env.test itself so a
+# plain `docker compose config` also describes the same isolated stack.
+use_test_stack() {
+    ENV_FILE="$TEST_ENV_FILE"
+    export ENV_FILE
+    if [[ -f "$ENV_FILE" ]]; then
+        COMPOSE_PROJECT_NAME="$(env_value COMPOSE_PROJECT_NAME)"
+    fi
+    COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-korail-bot-test}"
+    BOT_RUNTIME_PROFILE="test"
+    export COMPOSE_PROJECT_NAME
+    export BOT_RUNTIME_PROFILE
 }
 
 # require_uv - abort unless uv is installed
@@ -204,15 +228,28 @@ can_import() {
 # ==================== The running bot ====================
 #
 # Two consumers of one bot token means Telegram hands each update to whichever
-# asked first and answers the other with a 409, so a second copy of the bot is
-# never something to start alongside the first. Everything below exists to
-# find the one that is already running.
+# asked first and answers the other with a 409. Production and test may run
+# together only because they have different tokens and runtime profiles;
+# everything below finds processes belonging to the selected profile alone.
 
 RUN_DIR="${ROOT_DIR}/.run"
 PID_FILE="${RUN_DIR}/korail-bot.pid"
 # Consumed by run.sh and status.sh after this file is sourced.
 # shellcheck disable=SC2034
 LOG_FILE="${RUN_DIR}/korail-bot.log"
+BOT_RUNTIME_PROFILE="${BOT_RUNTIME_PROFILE:-production}"
+
+# use_test_runtime - select the host-side test bot managed by run.sh.
+#
+# Compose only needs use_test_stack. A host process additionally needs its own
+# pidfile and log so starting or stopping it cannot touch the production bot.
+use_test_runtime() {
+    use_test_stack
+    BOT_RUNTIME_PROFILE="test"
+    PID_FILE="${RUN_DIR}/korail-bot-test.pid"
+    LOG_FILE="${RUN_DIR}/korail-bot-test.log"
+    export BOT_RUNTIME_PROFILE
+}
 
 # _pid_cmdline <pid> - the process's command line, spaces between arguments
 _pid_cmdline() {
@@ -221,17 +258,60 @@ _pid_cmdline() {
     tr '\0' ' ' < "/proc/${pid}/cmdline"
 }
 
+# _pid_runtime_profile <pid> - the run.sh profile inherited by one process.
+#
+# Processes started before profiles existed have no marker and are production
+# by definition. Only this one non-secret value is extracted from /proc; the
+# rest of the environment includes credentials and must never be printed.
+_pid_runtime_profile() {
+    local pid="$1" profile
+    [[ -r "/proc/${pid}/environ" ]] || return 1
+    profile="$(tr '\0' '\n' < "/proc/${pid}/environ" | sed -n 's/^BOT_RUNTIME_PROFILE=//p' | tail -n 1)"
+    printf '%s' "${profile:-production}"
+}
+
+# load_bot_runtime_env <pid> - import only status-relevant configuration
+#
+# A status command may be run from another git worktree than the process it
+# found. Its local .env then describes a different Redis and cannot be used to
+# inspect the running bot. Reading a fixed allow-list from /proc avoids both
+# sourcing another checkout's arbitrary file and importing unrelated secrets
+# such as Telegram or railway credentials.
+load_bot_runtime_env() {
+    local pid="$1" entry key value
+    [[ -r "/proc/${pid}/environ" ]] || return 1
+
+    while IFS= read -r -d '' entry; do
+        [[ "$entry" == *=* ]] || continue
+        key="${entry%%=*}"
+        value="${entry#*=}"
+        case "$key" in
+            FLASK_HOST|FLASK_PORT|LOG_LEVEL|SEARCH_INTERVAL|SEARCH_INTERVAL_JITTER|\
+            SEARCH_FAILURE_ALERT_THRESHOLD|REDIS_HOST|REDIS_PORT|REDIS_DB|\
+            REDIS_PASSWORD|REDIS_DECODE_RESPONSES|REDIS_SOCKET_TIMEOUT|\
+            REDIS_SOCKET_CONNECT_TIMEOUT|REDIS_MAX_CONNECTIONS|REDIS_CONTAINER_NAME|\
+            DEV_REDIS_CONTAINER_NAME|DEV_REDIS_PORT|SESSION_SECRET)
+                printf -v "$key" '%s' "$value"
+                export "$key"
+                ;;
+        esac
+    done < "/proc/${pid}/environ"
+    return 0
+}
+
 # _is_bot <pid> - true when the pid is really one of ours
 #
 # The number in the pidfile is only a claim. Pids get reused, so a stale file
 # can name a process that has nothing to do with us, and signalling that would
 # kill a stranger. The command line has to agree before we touch it.
 _is_bot() {
-    local pid="$1" cmd
+    local pid="$1" cmd profile
     [[ "$pid" =~ ^[0-9]+$ ]] || return 1
     kill -0 "$pid" 2>/dev/null || return 1
     cmd="$(_pid_cmdline "$pid")" || return 1
-    [[ "$cmd" == *korail_bot.app* ]]
+    [[ "$cmd" == *korail_bot.app* ]] || return 1
+    profile="$(_pid_runtime_profile "$pid")" || return 1
+    [[ "$profile" == "$BOT_RUNTIME_PROFILE" ]]
 }
 
 # bot_pids - every pid belonging to a running bot, one per line
@@ -250,6 +330,11 @@ bot_pids_all() {
         # matching the pgrep that carries it.
         pgrep -f 'korail_bot[.]app' 2>/dev/null || true
     } | sort -u)
+    # Seeing another runtime profile is an expected non-match, not an error.
+    # Without an explicit success status, the final `_is_bot` result leaks out
+    # of the while loop and `set -e -o pipefail` can abort a test-bot start
+    # merely because the production bot is already running (or vice versa).
+    return 0
 }
 
 # bot_pids - one pid per running bot, the outermost process of each

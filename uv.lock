@@ -527,6 +527,7 @@ dependencies = [
     { name = "korail2" },
     { name = "redis", extra = ["hiredis"] },
     { name = "requests" },
+    { name = "srtrain" },
     { name = "waitress" },
 ]
 
@@ -557,6 +558,7 @@ requires-dist = [
     { name = "korail2", git = "https://github.com/dhfhfk/korail2.git?rev=bypassDynapath" },
     { name = "redis", extras = ["hiredis"], specifier = ">=7.0" },
     { name = "requests", specifier = ">=2.32" },
+    { name = "srtrain", specifier = ">=2.6.7" },
     { name = "testcontainers", extras = ["redis"], marker = "extra == 'containers'", specifier = ">=4.8" },
     { name = "waitress", specifier = ">=3.0" },
 ]
@@ -1028,6 +1030,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
+]
+
+[[package]]
+name = "srtrain"
+version = "2.6.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f3/2b/44bbf0e2cb829831a987c65ba6f4f8ac5972f655711f32d100262865b337/srtrain-2.6.7.tar.gz", hash = "sha256:b5ab9ceb4a1eb8eb813bde81cdaf582b5d406c08da6b4f916c1027199ec1b405", size = 30645, upload-time = "2025-01-31T08:50:26.656Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f5/67/ad8279399a20aeb7d01fe32f38a98bd4c6af818e1f55fa40e0565396f43d/srtrain-2.6.7-py3-none-any.whl", hash = "sha256:f85e5a271e382a8df41484c001885f2257f08c9e6117cdb2b173f1e043c1ef7a", size = 19025, upload-time = "2025-01-31T08:50:24.932Z" },
 ]
 
 [[package]]

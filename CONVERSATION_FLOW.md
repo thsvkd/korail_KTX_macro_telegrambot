@@ -10,9 +10,10 @@
 
 | 현재 상태 | 기다리는 입력 | 처리 메서드 | 성공 후 상태 |
 | --- | --- | --- | --- |
-| `STARTED` | 시작할지 여부 | `_handle_start_confirmation` | `START_ACCEPTED` |
-| `START_ACCEPTED` | 코레일 휴대전화번호 | `_handle_phone_input` | `ID_INPUT_SUCCESS` |
-| `ID_INPUT_SUCCESS` | 코레일 비밀번호 | `_handle_password_input` | `PW_INPUT_SUCCESS` |
+| `STARTED` | 시작할지 여부 | `_handle_start_confirmation` | `OPERATOR_INPUT_PENDING` |
+| `OPERATOR_INPUT_PENDING` | 철도 사업자 | `_handle_operator_input` | `START_ACCEPTED` 또는 `PW_INPUT_SUCCESS` |
+| `START_ACCEPTED` | 선택한 철도 계정 | `_handle_phone_input` | `ID_INPUT_SUCCESS` |
+| `ID_INPUT_SUCCESS` | 선택한 철도 비밀번호 | `_handle_password_input` | `PW_INPUT_SUCCESS` |
 | `PW_INPUT_SUCCESS` | 출발일 | `_handle_date_input` | `DATE_INPUT_SUCCESS` |
 | `DATE_INPUT_SUCCESS` | 출발역 | `_handle_src_station_input` | `SRC_LOCATE_INPUT_SUCCESS` |
 | `SRC_LOCATE_INPUT_SUCCESS` | 도착역 | `_handle_dst_station_input` | `DST_LOCATE_INPUT_SUCCESS` |
@@ -34,16 +35,34 @@
 ### 1. 시작과 로그인
 
 - `/start`는 세션을 `STARTED`로 만들고 시작 확인 버튼을 보냅니다.
-- 처음 쓰는 일반 사용자는 안내에 동의한 뒤 휴대전화번호와 비밀번호를 입력합니다.
-  전화번호는 하이픈 유무를 모두 허용하고, 비밀번호는 코레일 로그인으로 검증합니다.
+- 안내에 동의하면 코레일 또는 SRT를 먼저 선택합니다. 계정과 운행역이 서로
+  다르므로 철도 선택은 로그인보다 앞섭니다.
+- 처음 쓰는 일반 사용자는 선택한 철도의 회원번호와 비밀번호를 입력합니다.
 - 로그인이 성공하면 계정을 암호화해 별도 온보딩 레코드로 보관합니다. 다음
   `/start`부터는 저장된 계정으로 다시 로그인한 뒤 날짜 질문으로 바로 갑니다.
-- 개발자 방에 `USERID`와 `USERPW`가 모두 설정돼 있으면 두 입력을 건너뛰고 해당
-  계정으로 로그인합니다. 실패하면 일반 전화번호 입력으로 돌아갑니다.
+- 개발자 방은 코레일의 `USERID`/`USERPW`, SRT의 `SRT_ID`/`SRT_PW` 중 선택한
+  철도에 해당하는 고정 계정만 사용합니다. 실패하면 일반 계정 입력으로 돌아갑니다.
 - 저장 계정의 로그인이 실패하면 보관 값을 삭제하고 재등록을 안내합니다.
 
 접근 승인 여부는 로그인 입력 단계가 아니라 실제 검색 프로세스를 시작하기 직전에
 확인합니다. 체험 한도가 남아 있으면 검색이 실제로 기동된 뒤 한 번 차감합니다.
+
+#### 철도별 차이
+
+코레일과 SR은 별개 회사이고 **계정도 서는 역도 다르다.** 그래서 로그인보다
+먼저 묻는다 — 어느 계정으로 로그인할지가 이 답에 달려 있기 때문이다.
+
+알아볼 수 없는 사업자 답변은 코레일로 간주하지 않고 다시 묻습니다.
+`/onboarding`도 철도를 먼저 고르며, 한 철도의 등록 여부가 다른 철도 등록을
+막지 않습니다.
+
+| | 코레일 | SRT |
+|---|---|---|
+| 역 목록 | 코레일 전체 역 (동적 조회) | SR이 서는 33개 역 |
+| 역 버튼 | 서울·용산·청량리… | 수서·동탄·평택지제… |
+| 열차 종류 질문(9단계) | 묻는다 | **건너뛴다** (SR은 SRT만 운행) |
+| 계정 | `user_credentials:{chat}` | `user_credentials:srt:{chat}` |
+| 결제 안내 | `KORAIL_PAYMENT_URL` | `SRT_PAYMENT_URL` |
 
 ### 2. 날짜·구간·시간대
 

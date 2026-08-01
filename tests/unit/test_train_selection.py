@@ -137,21 +137,21 @@ class TestDescribeTrain:
     """Turning a korail2 train into something a button and Redis can hold."""
 
     def test_times_are_shown_as_clock_faces(self):
-        described = ConversationHandler._describe_train(fake_train("101", "185800", "195000"))
+        described = KorailService.describe_train(fake_train("101", "185800", "195000"))
 
         assert described["label"] == "18:58→19:50 KTX"
         assert described["no"] == "101"
 
     def test_a_train_with_no_seats_is_marked_sold_out(self):
-        assert ConversationHandler._describe_train(fake_train("101", has_seat=False))["soldout"]
-        assert not ConversationHandler._describe_train(fake_train("101", has_seat=True))["soldout"]
+        assert KorailService.describe_train(fake_train("101", has_seat=False))["soldout"]
+        assert not KorailService.describe_train(fake_train("101", has_seat=True))["soldout"]
 
     def test_a_train_missing_the_fields_we_read_does_not_break_the_list(self):
         """
         korail2 fills these from a response we do not control. One odd train
         must not cost the user the whole list.
         """
-        described = ConversationHandler._describe_train(object())
+        described = KorailService.describe_train(object())
 
         assert described["no"] == ""
         assert "??:??" in described["label"]
@@ -161,7 +161,7 @@ class TestDescribeTrain:
         """It is stored on the session, which goes to Redis as JSON."""
         import json
 
-        described = ConversationHandler._describe_train(fake_train("101"))
+        described = KorailService.describe_train(fake_train("101"))
 
         assert json.loads(json.dumps(described)) == described
 
@@ -450,7 +450,7 @@ class TestCrossingTheProcessBoundary:
             popen.return_value.pid = 4242
             service.start_reservation_process(CHAT_ID, "010-1234-5678", "pw", params)
 
-        assert popen.call_args.args[0][-1] == "101,105"
+        assert popen.call_args.args[0][-2] == "101,105"
 
     def test_no_selection_crosses_as_an_empty_argument(self):
         """
@@ -472,4 +472,4 @@ class TestCrossingTheProcessBoundary:
             popen.return_value.pid = 4242
             service.start_reservation_process(CHAT_ID, "010-1234-5678", "pw", params)
 
-        assert popen.call_args.args[0][-1] == ""
+        assert popen.call_args.args[0][-2] == ""

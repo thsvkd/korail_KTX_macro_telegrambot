@@ -118,6 +118,14 @@ logger.info(
         else "registered per user"
     )
 )
+logger.info(
+    "SRT login: "
+    + (
+        "registered per user; developer chats use SRT_ID/SRT_PW"
+        if settings.has_preconfigured_srt_credentials()
+        else "registered per user"
+    )
+)
 logger.info(f"Resume on restart: {'enabled' if settings.RESUME_ON_RESTART else 'disabled'}")
 logger.info("=" * 60)
 

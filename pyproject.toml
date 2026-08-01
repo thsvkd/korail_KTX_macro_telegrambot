@@ -17,6 +17,10 @@ dependencies = [
     # transitive dependency of pyopenssl, which nothing imports.
     "cryptography>=46.0",
     "korail2",
+    # SR's mobile API, for the SRT half of the bot. Published as SRTrain,
+    # imported as SRT. Depends on nothing but requests, and unlike korail2 it
+    # is on PyPI, so no git source is needed.
+    "SRTrain>=2.6.7",
     # Production WSGI server. Deliberately single-process: app.py starts the
     # Telegram poller and the search-process registry at import time, so a
     # forking server with several workers would give the bot token competing
@@ -160,8 +164,9 @@ no_implicit_optional = true
 check_untyped_defs = true
 
 [[tool.mypy.overrides]]
-# Neither ships type information.
-module = ["korail2.*", "flask_restful.*"]
+# None of these ship type information. SRT is the SRTrain package, which is
+# imported under a different name than it is published under.
+module = ["korail2.*", "flask_restful.*", "SRT.*"]
 ignore_missing_imports = true
 
 # ----------------------------------------------------------------- coverage

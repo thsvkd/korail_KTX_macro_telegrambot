@@ -35,10 +35,16 @@ class TestConversationHandler:
         self.storage.save_user_session(session)
 
         self.handler.handle_message(chat_id, "Y")
+        # Which railway now comes between "yes" and the phone number.
+        self.handler.handle_message(chat_id, "korail")
 
         updated_session = self.storage.get_user_session(chat_id)
         assert updated_session.last_action == UserProgress.START_ACCEPTED
-        self.telegram.send_message.assert_called_once()
+        # Two messages now: the railway question, then the phone prompt that
+        # follows the answer.
+        assert self.telegram.send_message.call_count == 2
+        asked_first = self.telegram.send_message.call_args_list[0][0][1]
+        assert "철도" in asked_first
         call_args = self.telegram.send_message.call_args
         assert "전화번호" in call_args[0][1] or "휴대폰" in call_args[0][1]
 
@@ -338,6 +344,8 @@ class TestConversationHandler:
         self.reservation.start_reservation_process.return_value = True
 
         self.handler.handle_message(chat_id, "Y")
+        # Which railway now comes between "yes" and the phone number.
+        self.handler.handle_message(chat_id, "korail")
 
         updated_session = self.storage.get_user_session(chat_id)
         assert updated_session.last_action == UserProgress.FINDING_TICKET

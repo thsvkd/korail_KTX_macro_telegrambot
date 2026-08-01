@@ -77,7 +77,7 @@ def test_wait_is_never_negative():
 def test_wait_between_requests_sleeps_for_what_it_returns():
     service = make_service(interval=3.0, jitter=0.4)
 
-    with patch("korail_bot.services.korail_service.time.sleep") as sleep:
+    with patch("korail_bot.services.rail_service.time.sleep") as sleep:
         delay = service.wait_between_requests()
 
     sleep.assert_called_once_with(delay)
@@ -88,7 +88,7 @@ def test_wait_seconds_randomises_a_fixed_wait():
     """The duplicate-reservation retry waits around 10s, not exactly 10s."""
     service = make_service(interval=3.0, jitter=0.4)
 
-    with patch("korail_bot.services.korail_service.time.sleep") as sleep:
+    with patch("korail_bot.services.rail_service.time.sleep") as sleep:
         delay = service.wait_seconds(10)
 
     sleep.assert_called_once_with(delay)

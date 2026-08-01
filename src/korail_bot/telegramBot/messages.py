@@ -150,7 +150,7 @@ class Messages:
 
     # 서버에 계정이 박혀 있으면 개인 등록은 쓰이지 않는다. 등록을 받아두고
     # 무시하는 것보다 왜 필요 없는지 말해주는 편이 낫다.
-    ONBOARDING_NOT_NEEDED = """ℹ️ 이 봇은 서버에 설정된 코레일 계정으로 동작합니다.
+    ONBOARDING_NOT_NEEDED = """ℹ️ 이 봇은 서버에 설정된 {operator} 계정으로 동작합니다.
 
 따로 계정을 등록하실 필요가 없습니다.
 /start 로 바로 예약을 시작하세요.
@@ -237,10 +237,10 @@ class Messages:
 
     # ========== 승인 관리 (운영자) ==========
 
-    SERVER_BUSY = """⏳ 지금은 검색을 시작할 수 없습니다.
+    SERVER_BUSY = """⏳ 지금은 {operator} 검색을 시작할 수 없습니다.
 
-이 서버에서 동시에 돌 수 있는 검색이 {limit}개인데 모두 사용 중입니다.
-코레일에 한꺼번에 너무 많은 요청을 보내면 서버 전체가 차단될 수 있어
+이 서버에서 동시에 돌 수 있는 {operator} 검색이 {limit}개인데 모두 사용 중입니다.
+한 철도에 한꺼번에 너무 많은 요청을 보내면 서버 전체가 차단될 수 있어
 걸어둔 제한입니다.
 
 잠시 후 /start 로 다시 시도해주세요.
@@ -344,13 +344,13 @@ class Messages:
 예시: 20250425 (2025년 4월 25일)
 """
 
-    LOGIN_SUCCESS_PRECONFIGURED = """✅ 서버에 설정된 코레일 계정으로 로그인했습니다. ({username})
+    LOGIN_SUCCESS_PRECONFIGURED = """✅ 서버에 설정된 {operator} 계정으로 로그인했습니다. ({username})
 
 📅 출발 희망일을 8자리로 입력해주세요.
 예시: 20250425 (2025년 4월 25일)
 """
 
-    PRECONFIGURED_LOGIN_FAILED = """⚠️ 서버에 설정된 코레일 계정으로 로그인하지 못했습니다.
+    PRECONFIGURED_LOGIN_FAILED = """⚠️ 서버에 설정된 {operator} 계정으로 로그인하지 못했습니다.
 
 비밀번호가 변경되었을 수 있습니다. 직접 입력하는 방식으로 진행합니다.
 
@@ -417,6 +417,28 @@ class Messages:
 💡 시간 제한 없이 검색하려면 2400 입력 (권장)
 """
 
+    # 어느 철도인지부터 묻는다. 코레일과 SR 은 별개 회사라 계정도 서는 역도
+    # 다르고, 그 답에 따라 다음 질문들이 달라진다. 수서에서 부산까지 가는
+    # 방법이 두 가지라는 사실을 아는 사람에게도, 모르는 사람에게도 첫 질문이
+    # 이것이어야 하는 이유다.
+    REQUEST_OPERATOR = """🚆 어느 철도를 이용하시겠습니까?
+
+━━━━━━━━━━━━━━━━━━━━
+🚄 코레일 (KTX)
+   • 서울·용산·청량리 등에서 출발
+   • KTX, 무궁화호 등 전 노선
+
+🚅 SRT (수서고속철도)
+   • 수서·동탄·평택지제에서 출발
+   • 경부선·호남선 SRT
+━━━━━━━━━━━━━━━━━━━━
+
+💡 계정은 철도별로 따로 등록됩니다."""
+
+    # 고른 철도를 다음 질문 앞에 한 번 되짚어 준다. 계정을 입력하는 화면에서
+    # 어느 회사 계정인지 헷갈리면 로그인 실패로 돌아오기 때문이다.
+    OPERATOR_CHOSEN = "✅ {operator} 선택 완료\n\n"
+
     # "모든 열차" 가 무엇을 포함하는지 밝혀둔다. 이름만 보면 "더 많이 찾아
     # 주는 쪽" 으로 읽히지만, 실제로는 무궁화호까지 후보에 들어간다는 뜻이다.
     # 검색은 먼저 잡히는 자리를 잡으므로 KTX 를 기대하고 골랐다가 두 시간
@@ -447,9 +469,10 @@ class Messages:
 숫자를 입력하세요: 1 또는 2
 """
 
-    REQUEST_SEAT_TYPE = """✅ 열차 종류 선택 완료
-
-💺 좌석 종류를 선택해주세요.
+    # 좌석 질문의 본문. 앞의 "✅ ... 완료" 한 줄만 단계마다 다르다 - SRT 는
+    # 열차 종류를 고른 적이 없으므로 고르지도 않은 것을 완료했다고 말할 수
+    # 없고, 방금 답한 시간대를 짚어주는 편이 맞다.
+    _SEAT_TYPE_BODY = """💺 좌석 종류를 선택해주세요.
 
 1️⃣ 일반실 우선
 2️⃣ 일반실만
@@ -458,6 +481,10 @@ class Messages:
 
 숫자를 입력하세요: 1, 2, 3, 4
 """
+
+    REQUEST_SEAT_TYPE = "✅ 열차 종류 선택 완료\n\n" + _SEAT_TYPE_BODY
+
+    REQUEST_SEAT_TYPE_AFTER_TIME = "✅ 시간 입력 완료\n\n" + _SEAT_TYPE_BODY
 
     REQUEST_PASSENGER_COUNT = """✅ 좌석 종류 선택 완료
 
@@ -529,6 +556,7 @@ class Messages:
 
 📋 예약 정보 확인
 ━━━━━━━━━━━━━━━━━━━━
+🚆 철도: {operator}
 📅 출발일: {depDate}
 🚉 출발역: {srcLocate}
 🏁 도착역: {dstLocate}
@@ -565,6 +593,8 @@ class Messages:
 
 💡 하이픈(-)은 있어도 없어도 됩니다."""
     )
+
+    BACK_TO_OPERATOR = BACK_PREFIX + "🚆 어느 철도를 이용하실지 다시 선택해주세요."
 
     BACK_TO_DATE = (
         BACK_PREFIX
@@ -808,6 +838,7 @@ class Messages:
     FAV_DETAIL = """⭐ {name}
 
 ━━━━━━━━━━━━━━━━━━━━
+🚆 {operator}
 📍 {route}
 🕐 {window}
 🚄 {trainType}
@@ -1084,7 +1115,7 @@ class Messages:
         return Messages.LOGIN_SUCCESS
 
     @staticmethod
-    def preconfigured_login_success(username: str):
+    def preconfigured_login_success(username: str, operator: str = "코레일"):
         """Login success with the account from the environment.
 
         The account is masked: the operator knows which one it is, and the
@@ -1092,7 +1123,9 @@ class Messages:
         """
         from korail_bot.utils.privacy import mask_phone
 
-        return Messages.LOGIN_SUCCESS_PRECONFIGURED.format(username=mask_phone(username))
+        return Messages.LOGIN_SUCCESS_PRECONFIGURED.format(
+            operator=operator, username=mask_phone(username)
+        )
 
     @staticmethod
     def login_failure(username: str):

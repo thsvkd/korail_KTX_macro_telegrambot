@@ -4,6 +4,7 @@ certs_real/*
 *.pem
 botToken.py
 .env
+.env.test
 .envrc
 .mise.local.toml
 __pycache__/

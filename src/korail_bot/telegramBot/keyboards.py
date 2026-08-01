@@ -13,7 +13,7 @@ every station in the country.
 
 from datetime import datetime, timedelta
 
-from korail_bot.models import UserProgress
+from korail_bot.models import KORAIL_MAJOR_STATIONS, Operator, UserProgress
 
 # Telegram rejects callback_data over 64 bytes, measured after UTF-8 encoding
 # - so a Korean station name costs three bytes a character. Nothing built here
@@ -23,6 +23,10 @@ CALLBACK_DATA_MAX_BYTES = 64
 # Callback data is "<step>:<value>". The step says which question is being
 # answered; the value is the answer, in the form the typed flow expects.
 STEP_START_CONFIRM = "st"
+# Which railway. Asked before the login, because Korail and SR are separate
+# companies with separate accounts and the answer decides which one the chat
+# is about to sign in to.
+STEP_OPERATOR = "op"
 # The password prompt has no answer that could go on a button, and exists as a
 # step only so the "go back" offered there can be told from a stale press. Its
 # keyboard carries the BACK sentinel and nothing else.
@@ -106,6 +110,7 @@ USERS_BACK = "*back"
 # step would happily accept: tapping an old "특실만" would be read as "4명".
 STEP_PROGRESS = {
     STEP_START_CONFIRM: UserProgress.STARTED,
+    STEP_OPERATOR: UserProgress.OPERATOR_INPUT_PENDING,
     STEP_PASSWORD: UserProgress.ID_INPUT_SUCCESS,
     STEP_DATE: UserProgress.PW_INPUT_SUCCESS,
     STEP_SRC_STATION: UserProgress.DATE_INPUT_SUCCESS,
@@ -140,29 +145,13 @@ KEEPS_QUESTION_OPEN = frozenset({f"{STEP_CONFIRM}:{CONFIRM_SAVE_FAVOURITE}"})
 # any step could produce, so it can never collide with a real answer.
 MANUAL = "manual"
 
-# Offered when a station is asked for. Every name here has to be one Korail
-# knows, so they are taken from the station table and a test checks them
-# against it - a button that fails validation would be worse than no button.
-MAJOR_STATIONS = (
-    "서울",
-    "용산",
-    "청량리",
-    "수서",
-    "광명",
-    "천안아산",
-    "오송",
-    "대전",
-    "동대구",
-    "부산",
-    "울산(통도사)",
-    "포항",
-    "익산",
-    "전주",
-    "광주송정",
-    "목포",
-    "여수EXPO",
-    "강릉",
-)
+# Offered when a station is asked for. Every name here has to be one the
+# railway knows, so they are taken from the station tables and a test checks
+# them against those - a button that fails validation would be worse than no
+# button. Both lists live in models.operator, beside the railway they belong
+# to; MAJOR_STATIONS is Korail's, kept under its old name because that is
+# what callers and tests have always said.
+MAJOR_STATIONS = KORAIL_MAJOR_STATIONS
 
 # How many days ahead the date buttons reach. A week and a bit: far enough to
 # cover the trip people are actually booking, short enough to stay one screen.
@@ -240,6 +229,22 @@ def start_confirm_keyboard() -> InlineKeyboard:
     )
 
 
+def operator_keyboard() -> InlineKeyboard:
+    """
+    Which railway to book with.
+
+    Two companies, two accounts, two sets of stations - so this is asked
+    before anything else and everything after it follows from the answer. No
+    back button: the question behind it is "shall we begin?", which was
+    answered by getting here.
+    """
+    return _keyboard(
+        [_button("🚄 코레일 (KTX)", STEP_OPERATOR, Operator.KORAIL)],
+        [_button("🚅 SRT (수서고속철도)", STEP_OPERATOR, Operator.SRT)],
+        _cancel_row(),
+    )
+
+
 def date_keyboard(today: datetime | None = None) -> InlineKeyboard:
     """
     The next few days as buttons.
@@ -263,14 +268,21 @@ def date_keyboard(today: datetime | None = None) -> InlineKeyboard:
     return _keyboard(*_rows(buttons, 3), [_manual_button(STEP_DATE)], _cancel_row())
 
 
-def station_keyboard(step: str, exclude: str | None = None) -> InlineKeyboard:
+def station_keyboard(
+    step: str, exclude: str | None = None, operator: Operator = Operator.KORAIL
+) -> InlineKeyboard:
     """
     The busy stations as buttons, with typing still available.
 
     exclude drops a station from the list - used so the arrival keyboard does
     not offer the station the user just picked as the departure.
+
+    operator decides whose stations these are. SR stops at 30-odd stations and
+    not at 서울, so offering Korail's list to an SRT search would put the most
+    obvious wrong answer first.
     """
-    buttons = [_button(station, step, station) for station in MAJOR_STATIONS if station != exclude]
+    stations = operator.major_stations
+    buttons = [_button(station, step, station) for station in stations if station != exclude]
     return _keyboard(*_rows(buttons, 3), [_manual_button(step)], _back_row(step), _cancel_row())
 
 
@@ -608,7 +620,13 @@ def favourites_keyboard(favourites: list) -> InlineKeyboard:
         The keyboard the user picks from
     """
     rows = [
-        [_button(f"⭐ {favourite.name}", STEP_FAV, f"{FAV_PICK}{favourite.fav_id}")]
+        [
+            _button(
+                f"⭐ [{favourite.rail_operator.display_name}] {favourite.name}",
+                STEP_FAV,
+                f"{FAV_PICK}{favourite.fav_id}",
+            )
+        ]
         for favourite in favourites
     ]
     rows.append([_button("❌ 닫기", STEP_FAV, FAV_CLOSE)])

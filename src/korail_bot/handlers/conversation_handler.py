@@ -7,6 +7,7 @@ from korail2 import ReserveOption
 from korail_bot.config.settings import settings
 from korail_bot.models import (
     OnboardedAccount,
+    Operator,
     TrainSearchParams,
     UserCredentials,
     UserProgress,
@@ -17,6 +18,7 @@ from korail_bot.services import (
     KorailService,
     MessageTemplates,
     ReservationService,
+    SrtService,
     TelegramService,
 )
 from korail_bot.storage.base import StorageInterface
@@ -88,6 +90,8 @@ class ConversationHandler:
 
         if progress == UserProgress.STARTED:
             self._handle_start_confirmation(chat_id, text, session)
+        elif progress == UserProgress.OPERATOR_INPUT_PENDING:
+            self._handle_operator_input(chat_id, text, session)
         elif progress == UserProgress.START_ACCEPTED:
             self._handle_phone_input(chat_id, text, session)
         elif progress == UserProgress.ID_INPUT_SUCCESS:
@@ -125,9 +129,9 @@ class ConversationHandler:
                 "이상이 발생했습니다. /cancel 이나 /start 를 통해 다시 프로그램을 시작해주세요.",
             )
 
-    def uses_server_account(self, chat_id: int) -> bool:
+    def uses_server_account(self, chat_id: int, operator: Operator = Operator.KORAIL) -> bool:
         """
-        Whether this chat logs in with USERID/USERPW instead of its own.
+        Whether this chat uses the fixed environment login for one railway.
 
         Only developer chats do. The setting exists so that whoever runs the
         bot can point it at a fixed account for development and testing - not
@@ -136,9 +140,9 @@ class ConversationHandler:
         to share the moment those two values were filled in.
 
         Everyone else registers their own account, whatever is in the
-        environment.
+        environment. Korail and SR are checked independently.
         """
-        return settings.has_preconfigured_korail_credentials() and self.storage.is_developer(
+        return settings.has_preconfigured_credentials(operator) and self.storage.is_developer(
             chat_id
         )
 
@@ -147,19 +151,16 @@ class ConversationHandler:
         is_yes, error = InputValidator.validate_yes_no(text)
 
         if is_yes is True:
-            session.last_action = UserProgress.START_ACCEPTED
+            # Which railway comes before the login, because the login depends
+            # on it: Korail and SR are separate companies with separate
+            # accounts, and this chat may be registered with one, both, or
+            # neither.
+            session.last_action = UserProgress.OPERATOR_INPUT_PENDING
             self.storage.save_user_session(session)
-            # Both prompts that follow have a known answer when a developer
-            # chat has been pointed at a fixed account, so skip them.
-            if self.uses_server_account(chat_id):
-                self._handle_preconfigured_login(chat_id, session)
-                return
-            # A phone number has to be typed, but leaving should not have to
-            # be, so the cancel button follows the flow all the way through.
+            from korail_bot.telegramBot.messages import Messages
+
             self.telegram.send_message(
-                chat_id,
-                MessageTemplates.request_phone_number(),
-                reply_markup=keyboards.cancel_only_keyboard(),
+                chat_id, Messages.REQUEST_OPERATOR, reply_markup=keyboards.operator_keyboard()
             )
         elif is_yes is False:
             session.reset()
@@ -172,30 +173,130 @@ class ConversationHandler:
                 chat_id, error, reply_markup=keyboards.start_confirm_keyboard()
             )
 
+    def _handle_operator_input(self, chat_id: int, text: str, session: UserSession) -> None:
+        """
+        Handle which railway the search is against.
+
+        Everything after this follows from the answer - which account logs in,
+        which stations are on the buttons, whether a train type is worth
+        asking about - so it is recorded on the session before anything else
+        happens.
+        """
+        from korail_bot.telegramBot.messages import Messages
+
+        is_valid, error = InputValidator.validate_operator_choice(text)
+        if not is_valid:
+            self.telegram.send_message(chat_id, error, reply_markup=keyboards.operator_keyboard())
+            return
+
+        operator = Operator.from_answer(text) or Operator.KORAIL
+        session.train_info["operator"] = str(operator)
+        session.last_action = UserProgress.START_ACCEPTED
+        self.storage.save_user_session(session)
+
+        existing = self.storage.get_onboarded_account(chat_id, operator)
+
+        # /onboarding asked for this, not /start. An account already on file
+        # for this railway is then something to offer to replace rather than
+        # something to log straight in with - and replacing it throws away a
+        # working login, so it is confirmed rather than done on the way past.
+        if session.train_info.get("onboarding"):
+            # The command cannot decide this before asking which railway: a
+            # developer may have a fixed Korail account but still need to
+            # register an SR one, or vice versa.
+            if self.uses_server_account(chat_id, operator):
+                session.reset()
+                self.storage.save_user_session(session)
+                self.telegram.send_message(
+                    chat_id,
+                    MessageTemplates.ONBOARDING_NOT_NEEDED.format(operator=operator.display_name),
+                )
+                return
+            if existing:
+                session.last_action = UserProgress.ONBOARDING_OVERWRITE_PENDING
+                self.storage.save_user_session(session)
+                self.telegram.send_message(
+                    chat_id,
+                    MessageTemplates.ONBOARDING_ALREADY.format(
+                        korailId=mask_phone(existing.korail_id),
+                        onboardedAt=f"{existing.onboarded_at:%m월 %d일 %H:%M}",
+                    ),
+                    reply_markup=keyboards.onboarding_overwrite_keyboard(),
+                )
+                return
+        else:
+            # A developer chat pointed at a fixed account knows both answers
+            # that would come next, so it skips them for the railway whose
+            # credentials were configured.
+            if self.uses_server_account(chat_id, operator):
+                self._handle_preconfigured_login(chat_id, session)
+                return
+
+            # Registered with this railway already? Nothing to type.
+            if existing and self.resume_with_registered_account(chat_id, session):
+                return
+
+        # A phone number has to be typed, but leaving should not have to be,
+        # so the cancel button follows the flow all the way through.
+        self.telegram.send_message(
+            chat_id,
+            Messages.OPERATOR_CHOSEN.format(operator=operator.display_name)
+            + MessageTemplates.request_phone_number(),
+            reply_markup=keyboards.cancel_only_keyboard(),
+        )
+
+    @staticmethod
+    def session_operator(session: UserSession) -> Operator:
+        """
+        Which railway this session is booking with.
+
+        A session that never said is a Korail one - that is every session
+        started before this question existed, including any that a deploy
+        catches mid-flow.
+        """
+        return Operator.parse(session.train_info.get("operator"))
+
+    def _rail_service(self, chat_id: int, operator: Operator):
+        """
+        A client for one railway, for the short-lived jobs this handler does.
+
+        Verifying a password and listing the trains in a window, both of which
+        log in, do their one thing and are dropped. The search itself runs in
+        a process of its own and builds its own.
+
+        Korail's carries the app-session stamp so that checking a password
+        does not look like a separate device from the search that follows;
+        SR's client has nothing to carry it in.
+        """
+        if operator is Operator.SRT:
+            return SrtService()
+        return KorailService(
+            app_session_start=self.storage.get_or_create_app_session_start(chat_id)
+        )
+
     def _login_with_environment_credentials(self, chat_id: int, session: UserSession) -> str | None:
         """
-        Log in with USERID/USERPW and record the result on the session.
+        Log in with this railway's environment credentials and record it.
 
         Returns:
-            The Korail ID that was logged in with, or None when the login
+            The account ID that was logged in with, or None when the login
             failed. The session is left untouched on failure so the caller
             decides what to do next.
         """
-        # Korail wants the hyphenated form of a mobile number, the same way
-        # the typed-in number is normalised. A member number or an e-mail is
-        # left as it is.
-        username = (
-            InputValidator.normalize_phone_number(settings.KORAIL_ADMIN_USER_ID)
-            or settings.KORAIL_ADMIN_USER_ID
-        )
-        password = settings.KORAIL_ADMIN_PASSWORD
+        operator = self.session_operator(session)
+        configured_username, password = settings.preconfigured_credentials(operator)
+        if not configured_username or not password:
+            return None
 
-        # Try login. The same app session the user's search will run under,
-        # so validating a password does not look like a separate device.
-        korail = KorailService(
-            app_session_start=self.storage.get_or_create_app_session_start(chat_id)
-        )
-        if not korail.login(username, password):
+        # Korail wants the hyphenated form of a mobile number, the same way
+        # the typed-in number is normalised. SR also accepts phone logins, and
+        # a member number or e-mail for either service is left as it is.
+        username = InputValidator.normalize_phone_number(configured_username) or configured_username
+
+        # Korail gets the same app session the user's search will run under;
+        # SR has no equivalent stamp. _rail_service owns that distinction.
+        rail = self._rail_service(chat_id, operator)
+        if not rail.login(username, password):
             return None
 
         session.credentials = UserCredentials(korail_id=username, korail_pw=password)
@@ -208,10 +309,13 @@ class ConversationHandler:
         username = self._login_with_environment_credentials(chat_id, session)
 
         if username:
-            logger.info(f"Logged in with preconfigured credentials for chat_id={chat_id}")
+            operator = self.session_operator(session)
+            logger.info(
+                f"Logged in to {operator} with preconfigured credentials for chat_id={chat_id}"
+            )
             self.telegram.send_message(
                 chat_id,
-                MessageTemplates.preconfigured_login_success(username),
+                MessageTemplates.preconfigured_login_success(username, operator.display_name),
                 reply_markup=keyboards.date_keyboard(),
             )
             return
@@ -221,14 +325,16 @@ class ConversationHandler:
         # already at START_ACCEPTED, which is where the phone number is
         # expected.
         logger.warning(
-            f"Preconfigured Korail login failed for chat_id={chat_id}; "
+            f"Preconfigured {self.session_operator(session)} login failed for chat_id={chat_id}; "
             f"falling back to manual credential entry"
         )
         from korail_bot.telegramBot.messages import Messages
 
         self.telegram.send_message(
             chat_id,
-            Messages.PRECONFIGURED_LOGIN_FAILED,
+            Messages.PRECONFIGURED_LOGIN_FAILED.format(
+                operator=self.session_operator(session).display_name
+            ),
             reply_markup=keyboards.cancel_only_keyboard(),
         )
 
@@ -239,8 +345,9 @@ class ConversationHandler:
         if is_yes is True:
             # Dropped before asking for the new one. Half-finished registration
             # would otherwise leave the old account in place while the user
-            # believes they replaced it.
-            self.storage.delete_onboarded_account(chat_id)
+            # believes they replaced it. Only this railway's: the other one is
+            # not what the user came here to replace.
+            self.storage.delete_onboarded_account(chat_id, self.session_operator(session))
             session.credentials = None
             session.last_action = UserProgress.START_ACCEPTED
             self.storage.save_user_session(session)
@@ -260,9 +367,18 @@ class ConversationHandler:
                 chat_id, error, reply_markup=keyboards.onboarding_overwrite_keyboard()
             )
 
-    def _remember_account(self, chat_id: int, username: str, password: str) -> None:
+    def _remember_account(
+        self,
+        chat_id: int,
+        username: str,
+        password: str,
+        operator: Operator = Operator.KORAIL,
+    ) -> None:
         """
-        Store a verified Korail login so the user does not type it again.
+        Store a verified login so the user does not type it again.
+
+        Kept per railway: registering with SR must not throw away a Korail
+        registration that is still in use.
 
         Best effort: the booking the user is in the middle of matters more
         than the convenience of the next one, so a storage failure is logged
@@ -270,9 +386,14 @@ class ConversationHandler:
         """
         try:
             self.storage.save_onboarded_account(
-                OnboardedAccount(chat_id=chat_id, korail_id=username, korail_pw=password)
+                OnboardedAccount(
+                    chat_id=chat_id,
+                    korail_id=username,
+                    korail_pw=password,
+                    operator=operator,
+                )
             )
-            logger.info(f"Registered Korail account for chat_id={chat_id}")
+            logger.info(f"Registered {operator} account for chat_id={chat_id}")
         except Exception as e:
             logger.error(f"Could not register the account for chat_id={chat_id}: {e}")
 
@@ -281,25 +402,27 @@ class ConversationHandler:
         Log in with the account this chat registered earlier.
 
         Called instead of asking for a phone number and a password. The stored
-        password is verified against Korail rather than trusted: people change
-        their Korail password without telling the bot, and finding that out
+        password is verified against the railway rather than trusted: people
+        change their password without telling the bot, and finding that out
         here is far better than finding it out from a search that never runs.
+
+        Which railway comes off the session, which was asked before this.
 
         Returns:
             True when the session is logged in and ready for the date step
         """
-        account = self.storage.get_onboarded_account(chat_id)
+        operator = self.session_operator(session)
+        account = self.storage.get_onboarded_account(chat_id, operator)
         if not account:
             return False
 
-        korail = KorailService(
-            app_session_start=self.storage.get_or_create_app_session_start(chat_id)
-        )
-        if not korail.login(account.korail_id, account.korail_pw):
+        rail = self._rail_service(chat_id, operator)
+        if not rail.login(account.korail_id, account.korail_pw):
             # The registration is no longer usable, so it goes. Leaving it
-            # would fail this same way on every /start from now on.
-            logger.info(f"Registered account for chat_id={chat_id} no longer logs in")
-            self.storage.delete_onboarded_account(chat_id)
+            # would fail this same way on every /start from now on. Only this
+            # railway's is dropped: the other one may be perfectly good.
+            logger.info(f"Registered {operator} account for chat_id={chat_id} no longer logs in")
+            self.storage.delete_onboarded_account(chat_id, operator)
             session.reset()
             session.in_progress = True
             session.last_action = UserProgress.STARTED
@@ -341,13 +464,21 @@ class ConversationHandler:
         session.reset()
         session.in_progress = True
         session.last_action = UserProgress.STARTED
+        # A favourite knows which railway it is for, so that question is
+        # already answered - and has to be, before the login, which is the
+        # first thing that depends on it.
+        operator = favourite.rail_operator
+        session.train_info["operator"] = str(operator)
         self.storage.save_user_session(session)
 
-        if self.uses_server_account(chat_id):
+        if self.uses_server_account(chat_id, operator):
             if not self._login_with_environment_credentials(chat_id, session):
-                self.telegram.send_message(chat_id, Messages.PRECONFIGURED_LOGIN_FAILED)
+                self.telegram.send_message(
+                    chat_id,
+                    Messages.PRECONFIGURED_LOGIN_FAILED.format(operator=operator.display_name),
+                )
                 return
-        elif not self.storage.get_onboarded_account(chat_id):
+        elif not self.storage.get_onboarded_account(chat_id, operator):
             # Nothing to log in with. Said plainly rather than dropped into
             # the registration flow: the user asked to run a saved search,
             # and being answered with a phone number prompt reads as the
@@ -438,12 +569,12 @@ class ConversationHandler:
         session.credentials.korail_pw = password
         self.storage.save_user_session(session)
 
-        # Try login. The same app session the user's search will run under,
-        # so validating a password does not look like a separate device.
-        korail = KorailService(
-            app_session_start=self.storage.get_or_create_app_session_start(chat_id)
-        )
-        if korail.login(username, password):
+        # Try login against the railway this session chose. The same app
+        # session the user's search will run under, so validating a password
+        # does not look like a separate device.
+        operator = self.session_operator(session)
+        rail = self._rail_service(chat_id, operator)
+        if rail.login(username, password):
             session.last_action = UserProgress.PW_INPUT_SUCCESS
             self.storage.save_user_session(session)
 
@@ -451,7 +582,7 @@ class ConversationHandler:
             # is the booking flow, which resets the session when it ends - so
             # the registration is written to a key of its own here, at the one
             # moment the password is known to be correct.
-            self._remember_account(chat_id, username, password)
+            self._remember_account(chat_id, username, password, operator)
 
             self.telegram.send_message(
                 chat_id, MessageTemplates.login_success(), reply_markup=keyboards.date_keyboard()
@@ -493,19 +624,25 @@ class ConversationHandler:
             self._show_train_selection(chat_id, session)
             return
 
+        operator = self.session_operator(session)
         self.telegram.send_message(
             chat_id,
             MessageTemplates.request_departure_station(),
-            reply_markup=keyboards.station_keyboard(keyboards.STEP_SRC_STATION),
+            reply_markup=keyboards.station_keyboard(keyboards.STEP_SRC_STATION, operator=operator),
         )
 
     def _handle_src_station_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle source station input."""
-        is_valid, error = InputValidator.validate_station_name(text)
+        operator = self.session_operator(session)
+        is_valid, error = InputValidator.validate_station_name(text, operator)
 
         if not is_valid:
             self.telegram.send_message(
-                chat_id, error, reply_markup=keyboards.station_keyboard(keyboards.STEP_SRC_STATION)
+                chat_id,
+                error,
+                reply_markup=keyboards.station_keyboard(
+                    keyboards.STEP_SRC_STATION, operator=operator
+                ),
             )
             return
 
@@ -517,19 +654,24 @@ class ConversationHandler:
         self.telegram.send_message(
             chat_id,
             MessageTemplates.request_arrival_station(),
-            reply_markup=keyboards.station_keyboard(keyboards.STEP_DST_STATION, exclude=text),
+            reply_markup=keyboards.station_keyboard(
+                keyboards.STEP_DST_STATION, exclude=text, operator=operator
+            ),
         )
 
     def _handle_dst_station_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle destination station input."""
-        is_valid, error = InputValidator.validate_station_name(text)
+        operator = self.session_operator(session)
+        is_valid, error = InputValidator.validate_station_name(text, operator)
 
         if not is_valid:
             self.telegram.send_message(
                 chat_id,
                 error,
                 reply_markup=keyboards.station_keyboard(
-                    keyboards.STEP_DST_STATION, exclude=session.train_info.get("srcLocate")
+                    keyboards.STEP_DST_STATION,
+                    exclude=session.train_info.get("srcLocate"),
+                    operator=operator,
                 ),
             )
             return
@@ -592,6 +734,26 @@ class ConversationHandler:
         self.storage.save_user_session(session)
 
         from korail_bot.telegramBot.messages import Messages
+
+        # SR runs SRT and nothing else, so there is nothing to choose between
+        # and the question is skipped - the same way a single passenger is
+        # never asked how the seats should be arranged. The answer is filled
+        # in rather than left empty, because the summary and /status read it
+        # back, and the progress state moves to where that question would have
+        # left it so the seat-option keyboard is still answering the step it
+        # thinks it is.
+        if self.session_operator(session) is Operator.SRT:
+            session.train_info["trainType"] = "SRT"
+            session.train_info["trainTypeShow"] = "SRT"
+            session.last_action = UserProgress.TRAIN_TYPE_INPUT_SUCCESS
+            self.storage.save_user_session(session)
+            self.telegram.send_message(
+                chat_id,
+                # Not the usual "열차 종류 선택 완료": nobody chose one here.
+                Messages.REQUEST_SEAT_TYPE_AFTER_TIME,
+                reply_markup=keyboards.seat_option_keyboard(),
+            )
+            return
 
         self.telegram.send_message(
             chat_id, Messages.REQUEST_TRAIN_TYPE, reply_markup=keyboards.train_type_keyboard()
@@ -744,21 +906,20 @@ class ConversationHandler:
             logger.warning(f"No credentials to list trains with for chat_id={chat_id}")
             return None
 
-        korail = KorailService(
-            app_session_start=self.storage.get_or_create_app_session_start(chat_id)
-        )
-        if not korail.login(credentials.korail_id, credentials.korail_pw):
+        operator = self.session_operator(session)
+        rail = self._rail_service(chat_id, operator)
+        if not rail.login(credentials.korail_id, credentials.korail_pw):
             logger.warning(f"Could not log in to list trains for chat_id={chat_id}")
             return None
 
         try:
-            trains = korail.search_trains(
+            trains = rail.search_trains(
                 dep_date=info["depDate"],
                 src_locate=info["srcLocate"],
                 dst_locate=info["dstLocate"],
                 dep_time=info["depTime"],
                 max_dep_time=info["maxDepTime"],
-                train_type=self._parse_train_type(info.get("trainType", "")),
+                train_type=self._parse_train_type(info.get("trainType", ""), operator),
                 passenger_count=info.get("passengerCount", 1),
                 verbose=False,
                 include_no_seats=True,
@@ -769,38 +930,23 @@ class ConversationHandler:
             logger.error(f"Could not list trains for chat_id={chat_id}: {e}")
             return None
 
-        return [self._describe_train(train) for train in trains]
+        return [rail.describe_train(train) for train in trains]
 
     @staticmethod
-    def _parse_train_type(train_type_str: str):
-        """Turn the stored 'TrainType.KTX' back into the enum korail2 wants."""
+    def _parse_train_type(train_type_str: str, operator: Operator = Operator.KORAIL):
+        """
+        Turn the stored train type back into what the client wants.
+
+        SR runs one kind of train, so there is nothing to turn back into -
+        whatever is stored, including a value carried over from a Korail
+        favourite, is not a filter there.
+        """
+        if operator is Operator.SRT:
+            return "SRT"
+
         from korail2 import TrainType
 
         return TrainType.KTX if "KTX" in train_type_str.upper() else TrainType.ALL
-
-    @staticmethod
-    def _describe_train(train) -> dict:
-        """
-        Reduce a korail2 train to what the keyboard and the summary need.
-
-        Only strings and booleans: this goes into the session, which is
-        serialised to Redis, and a korail2 object would not survive the trip.
-        """
-
-        def clock(value: str | None) -> str:
-            # Korail sends HHMMSS; the seconds are always zero and never
-            # interesting.
-            return f"{value[:2]}:{value[2:4]}" if value and len(value) >= 4 else "??:??"
-
-        return {
-            "no": str(getattr(train, "train_no", "") or ""),
-            "label": (
-                f"{clock(getattr(train, 'dep_time', None))}→"
-                f"{clock(getattr(train, 'arr_time', None))} "
-                f"{getattr(train, 'train_type_name', None) or '열차'}"
-            ),
-            "soldout": not (hasattr(train, "has_seat") and train.has_seat()),
-        }
 
     def _show_train_selection(self, chat_id: int, session: UserSession) -> None:
         """Fetch the trains for the window and offer them for ticking."""
@@ -996,6 +1142,7 @@ class ConversationHandler:
         from korail_bot.telegramBot.messages import Messages
 
         summary = Messages.CONFIRM_RESERVATION.format(
+            operator=self.session_operator(session).display_name,
             depDate=info.get("depDate", "N/A"),
             srcLocate=info.get("srcLocate", "N/A"),
             dstLocate=info.get("dstLocate", "N/A"),
@@ -1025,6 +1172,9 @@ class ConversationHandler:
     #: Where "뒤로" leads, keyed by the progress the session sits at while the
     #: question is on screen. Absent means the question has nothing behind it.
     BACK_TARGETS = {  # noqa: RUF012 - a constant table, not per-instance state
+        # The phone number prompt: back to the railway, which is the question
+        # that decides which company's account is being asked for.
+        UserProgress.START_ACCEPTED: UserProgress.OPERATOR_INPUT_PENDING,
         # The password prompt: back to the phone number, which is where a
         # mistyped one has to be fixed.
         UserProgress.ID_INPUT_SUCCESS: UserProgress.START_ACCEPTED,
@@ -1074,6 +1224,17 @@ class ConversationHandler:
         ):
             target = UserProgress.SPECIAL_INPUT_SUCCESS
 
+        # The same, for the train type: an SRT search is never asked which
+        # kind of train, because SR runs one. These states are named for the
+        # answer behind them and stand for the question in front, so the one
+        # to skip past is MAX_DEP_TIME_INPUT_SUCCESS - which is where the
+        # train type is asked - landing on the cutoff instead.
+        if (
+            target == UserProgress.MAX_DEP_TIME_INPUT_SUCCESS
+            and self.session_operator(session) is Operator.SRT
+        ):
+            target = UserProgress.DEP_TIME_INPUT_SUCCESS
+
         if target is None:
             # The first question of the flow, or a state with no question
             # behind it at all. Saying so beats a button that does nothing.
@@ -1109,7 +1270,12 @@ class ConversationHandler:
             return
 
         info = session.train_info
+        operator = self.session_operator(session)
         prompts = {
+            UserProgress.OPERATOR_INPUT_PENDING: (
+                Messages.BACK_TO_OPERATOR,
+                keyboards.operator_keyboard(),
+            ),
             UserProgress.START_ACCEPTED: (
                 Messages.BACK_TO_PHONE,
                 keyboards.cancel_only_keyboard(),
@@ -1120,12 +1286,12 @@ class ConversationHandler:
             ),
             UserProgress.DATE_INPUT_SUCCESS: (
                 Messages.BACK_TO_SRC_STATION,
-                keyboards.station_keyboard(keyboards.STEP_SRC_STATION),
+                keyboards.station_keyboard(keyboards.STEP_SRC_STATION, operator=operator),
             ),
             UserProgress.SRC_LOCATE_INPUT_SUCCESS: (
                 Messages.BACK_TO_DST_STATION,
                 keyboards.station_keyboard(
-                    keyboards.STEP_DST_STATION, exclude=info.get("srcLocate")
+                    keyboards.STEP_DST_STATION, exclude=info.get("srcLocate"), operator=operator
                 ),
             ),
             UserProgress.DST_LOCATE_INPUT_SUCCESS: (
@@ -1383,6 +1549,7 @@ class ConversationHandler:
             passenger_count=info.get("passengerCount", 1),
             seat_strategy=info.get("seatStrategy", "consecutive"),
             train_numbers=list(info.get("selectedTrains") or []),
+            operator=self.session_operator(session),
         )
 
     def _handle_final_confirmation(self, chat_id: int, text: str, session: UserSession) -> None:

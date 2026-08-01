@@ -5,11 +5,12 @@
 # Serves with waitress, the same server the container uses, rather than the
 # Flask development server: this machine runs the bot for real.
 #
-# Starting replaces whatever was already running. Two copies would give the
-# bot token two consumers, and Telegram answers the loser of that race with a
-# 409 while updates disappear into the winner.
+# Starting replaces whatever was already running in the same runtime profile.
+# `--test` has a separate token, pidfile, log, port and Redis, so it may stay up
+# beside production without either lifecycle stopping the other.
 #
 # Telegram updates are pulled with long polling, so no public address is needed.
+# A missing loopback Redis is started automatically in its isolated container.
 #
 # Usage:
 #   scripts/run.sh              # run in the foreground (Ctrl-C to stop)
@@ -17,18 +18,57 @@
 #   scripts/run.sh --stop       # stop a running bot and exit
 #   scripts/run.sh --debug      # DEBUG logging (not the Flask debugger)
 #   scripts/run.sh redis [start|stop|status]
+#   scripts/run.sh --test       # use .env.test alongside the production bot
+#   scripts/run.sh --test redis # manually manage the isolated test Redis
 #
 # scripts/status.sh reports on whatever is running.
 
 # shellcheck source=scripts/_common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
+TEST_RUNTIME=0
+PRODUCTION_ENV_FILE="$ENV_FILE"
+FILTERED_ARGS=()
+for arg in "$@"; do
+    if [[ "$arg" == "--test" ]]; then
+        TEST_RUNTIME=1
+    else
+        FILTERED_ARGS+=("$arg")
+    fi
+done
+set -- "${FILTERED_ARGS[@]}"
+
+if (( TEST_RUNTIME )); then
+    use_test_runtime
+    STATUS_COMMAND="scripts/status.sh --test"
+    STOP_COMMAND="scripts/run.sh --test --stop"
+    REDIS_COMMAND="scripts/run.sh --test redis"
+else
+    BOT_RUNTIME_PROFILE="production"
+    export BOT_RUNTIME_PROFILE
+    STATUS_COMMAND="scripts/status.sh"
+    STOP_COMMAND="scripts/run.sh --stop"
+    REDIS_COMMAND="scripts/run.sh redis"
+fi
+
 run_redis() {
 
 require_cmd docker
 
-CONTAINER="korail_dev_redis"
 ACTION="${1:-start}"
+
+if (( TEST_RUNTIME )); then
+    CONTAINER="$(env_value DEV_REDIS_CONTAINER_NAME)"
+    CONTAINER="${CONTAINER:-korail_test_dev_redis}"
+    HOST_PORT="$(env_value DEV_REDIS_PORT)"
+    HOST_PORT="${HOST_PORT:-6380}"
+    SETUP_COMMAND="scripts/setup.sh --test"
+else
+    CONTAINER="korail_dev_redis"
+    HOST_PORT="$(env_value REDIS_PORT)"
+    HOST_PORT="${HOST_PORT:-6379}"
+    SETUP_COMMAND="scripts/setup.sh secrets"
+fi
 
 cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
 
@@ -37,11 +77,11 @@ is_running() {
 }
 
 case "$ACTION" in
-    -h|--help) printf '%s\n' 'Usage: scripts/run.sh redis [start|stop|status]'; exit 0 ;;
+    -h|--help) printf '%s\n' 'Usage: scripts/run.sh [--test] redis [start|stop|status]'; exit 0 ;;
 
     status)
         if is_running; then
-            ok "${CONTAINER} is running on 127.0.0.1:6379"
+            ok "${CONTAINER} is running on 127.0.0.1:${HOST_PORT}"
         else
             info "${CONTAINER} is not running"
         fi
@@ -60,26 +100,26 @@ case "$ACTION" in
     start)
         require_env_file
         PASSWORD="$(env_value REDIS_PASSWORD)"
-        [[ -n "$PASSWORD" ]] || die "REDIS_PASSWORD is not set in .env. Run 'scripts/setup.sh secrets'."
+        [[ -n "$PASSWORD" ]] || die "REDIS_PASSWORD is not set in ${ENV_FILE#"$ROOT_DIR"/}. Run '${SETUP_COMMAND}'."
 
         if is_running; then
-            ok "${CONTAINER} is already running on 127.0.0.1:6379"
-            exit 0
+            ok "${CONTAINER} is already running on 127.0.0.1:${HOST_PORT}"
+            return 0
         fi
 
         docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 
-        info "Starting ${CONTAINER} on 127.0.0.1:6379"
+        info "Starting ${CONTAINER} on 127.0.0.1:${HOST_PORT}"
         docker run -d \
             --name "$CONTAINER" \
-            -p 127.0.0.1:6379:6379 \
+            -p "127.0.0.1:${HOST_PORT}:6379" \
             redis:7-alpine \
             redis-server --requirepass "$PASSWORD" >/dev/null
 
         for _ in $(seq 1 30); do
             if docker exec "$CONTAINER" redis-cli -a "$PASSWORD" --no-auth-warning ping 2>/dev/null | grep -q PONG; then
-                ok "Ready. Start the bot with: scripts/run.sh"
-                exit 0
+                ok "Ready. Start the bot with: ${STOP_COMMAND% --stop}"
+                return 0
             fi
             sleep 0.5
         done
@@ -109,7 +149,7 @@ for arg in "$@"; do
         --debug) export LOG_LEVEL=DEBUG ;;
         -d|--daemon) DAEMON=1 ;;
         --stop) STOP_ONLY=1 ;;
-        -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "Unknown option: $arg" ;;
     esac
 done
@@ -130,6 +170,31 @@ fi
 # uv does not read .env on its own, so nothing undoes those adjustments.
 load_env
 
+# Configuration files do not get to relabel a process into the other
+# lifecycle. The command-line profile decides which pidfile may stop it.
+if (( TEST_RUNTIME )); then
+    export BOT_RUNTIME_PROFILE="test"
+else
+    export BOT_RUNTIME_PROFILE="production"
+fi
+
+if (( TEST_RUNTIME )); then
+    # Host-side test and production processes can coexist only when every
+    # endpoint is distinct. The test config uses its own waitress and Redis
+    # ports even though long polling exposes neither app publicly.
+    export FLASK_PORT="${FLASK_PORT:-8081}"
+    export REDIS_HOST="127.0.0.1"
+    export REDIS_PORT="${DEV_REDIS_PORT:-6380}"
+
+    production_token=""
+    if [[ -f "$PRODUCTION_ENV_FILE" ]]; then
+        production_token="$(sed -n 's/^BOTTOKEN=//p' "$PRODUCTION_ENV_FILE" | tail -n 1)"
+    fi
+    if [[ -n "$production_token" && "${BOTTOKEN:-}" == "$production_token" ]]; then
+        die ".env.test must use a different BOTTOKEN from .env. Create a separate bot with BotFather."
+    fi
+fi
+
 # Build .venv up front rather than in the middle of the startup banner, and
 # fail with something actionable instead of a traceback from app.py.
 require_uv
@@ -144,7 +209,17 @@ if [[ "${REDIS_HOST:-}" == "redis" ]]; then
     export REDIS_HOST=localhost
 fi
 
-[[ -n "${BOTTOKEN:-}" ]] || die "BOTTOKEN is not set in .env"
+if [[ -z "$(clean_default "${BOTTOKEN:-}")" ]]; then
+    if (( ! TEST_RUNTIME )) && [[ -f "$TEST_ENV_FILE" ]]; then
+        configured_test_token="$(sed -n 's/^BOTTOKEN=//p' "$TEST_ENV_FILE" | tail -n 1)"
+        if [[ -n "$(clean_default "$configured_test_token")" ]]; then
+            die "BOTTOKEN is not set in .env. To start the configured test bot, rerun with '--test --daemon'."
+        fi
+    fi
+    die "BOTTOKEN is not set in ${ENV_FILE#"$ROOT_DIR"/}"
+fi
+
+info "Runtime profile: ${BOT_RUNTIME_PROFILE} (${ENV_FILE#"$ROOT_DIR"/})"
 
 info "Receive mode: long polling (no public address needed)"
 
@@ -153,8 +228,8 @@ if [[ "${FLASK_DEBUG:-False}" =~ ^([Tt]rue|1|[Yy]es|[Oo]n)$ ]]; then
     warn "does not use. It is ignored here."
 fi
 
-info "Checking Redis at ${REDIS_HOST}:${REDIS_PORT:-6379}"
-if ! python3 - <<'PY'
+redis_reachable() {
+REDIS_HOST="${REDIS_HOST:-localhost}" REDIS_PORT="${REDIS_PORT:-6379}" python3 - <<'PY'
 import os
 import socket
 import sys
@@ -168,8 +243,24 @@ except OSError as exc:
     print(f"{host}:{port} unreachable ({exc})", file=sys.stderr)
     sys.exit(1)
 PY
-then
-    die "Redis is not reachable. Start one with 'scripts/run.sh redis'."
+}
+
+info "Checking Redis at ${REDIS_HOST}:${REDIS_PORT:-6379}"
+if ! redis_reachable; then
+    case "${REDIS_HOST}" in
+        localhost|127.0.0.1|::1)
+            if (( TEST_RUNTIME )); then
+                info "Starting the isolated local Redis automatically"
+            else
+                info "Starting the local Redis automatically"
+            fi
+            run_redis start
+            redis_reachable || die "Redis was started but is still unreachable. Check '${REDIS_COMMAND} status'."
+            ;;
+        *)
+            die "Redis is not reachable. Check ${REDIS_HOST}:${REDIS_PORT:-6379}."
+            ;;
+    esac
 fi
 ok "Redis reachable"
 
@@ -223,8 +314,8 @@ if (( DAEMON )); then
 
     ok "Running in the background as pid ${pid}"
     info "Log:    ${LOG_FILE#"$ROOT_DIR"/}"
-    info "Status: scripts/status.sh"
-    info "Stop:   scripts/run.sh --stop"
+    info "Status: ${STATUS_COMMAND}"
+    info "Stop:   ${STOP_COMMAND}"
     exit 0
 fi
 

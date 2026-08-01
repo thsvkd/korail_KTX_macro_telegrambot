@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from korail_bot.models import FavouriteSearch
+from korail_bot.models import FavouriteSearch, Operator
 from korail_bot.models.favourite import MAX_NAME_LENGTH, new_favourite_id
 from korail_bot.telegramBot import keyboards
 
@@ -130,6 +130,21 @@ class TestIdentity:
             for button in row:
                 encoded = button["callback_data"].encode("utf-8")
                 assert len(encoded) <= keyboards.CALLBACK_DATA_MAX_BYTES
+
+    def test_the_list_names_the_railway(self):
+        korail = FavouriteSearch.from_train_info(CHAT_ID, TRAIN_INFO)
+        srt = FavouriteSearch.from_train_info(
+            CHAT_ID,
+            {**TRAIN_INFO, "operator": Operator.SRT},
+        )
+
+        labels = [
+            row[0]["text"]
+            for row in keyboards.favourites_keyboard([korail, srt])["inline_keyboard"][:-1]
+        ]
+
+        assert "[코레일]" in labels[0]
+        assert "[SRT]" in labels[1]
 
     def test_every_action_in_the_detail_screen_fits_too(self):
         fav_id = new_favourite_id()

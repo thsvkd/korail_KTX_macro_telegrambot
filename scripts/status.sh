@@ -13,6 +13,8 @@
 #   scripts/status.sh logs 100       # just the log, last 100 lines
 #   scripts/status.sh logs -f        # follow it (Ctrl-C to stop)
 #   scripts/status.sh redis [--keys|COMMAND ...]
+#   scripts/status.sh --test          # report the run.sh --test instance
+#   scripts/status.sh --test redis    # inspect the isolated test Redis
 #
 # Exit status is 0 when the bot is running, 1 when it is not, so it can gate
 # something else: scripts/status.sh >/dev/null || scripts/run.sh --daemon
@@ -20,24 +22,55 @@
 # shellcheck source=scripts/_common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
+TEST_RUNTIME=0
+FILTERED_ARGS=()
+for arg in "$@"; do
+    if [[ "$arg" == "--test" ]]; then
+        TEST_RUNTIME=1
+    else
+        FILTERED_ARGS+=("$arg")
+    fi
+done
+set -- "${FILTERED_ARGS[@]}"
+
+if (( TEST_RUNTIME )); then
+    use_test_runtime
+else
+    BOT_RUNTIME_PROFILE="production"
+    export BOT_RUNTIME_PROFILE
+fi
+
 status_redis() {
 
 case "${1:-}" in
-    -h|--help) printf '%s\n' 'Usage: scripts/status.sh redis [--keys|COMMAND ...]'; exit 0 ;;
+    -h|--help) printf '%s\n' 'Usage: scripts/status.sh [--test] redis [--keys|COMMAND ...]'; exit 0 ;;
 esac
 
 require_cmd docker
 
 cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
-require_env_file
+load_env
 
-PASSWORD="$(env_value REDIS_PASSWORD)"
-[[ -n "$PASSWORD" ]] || die "REDIS_PASSWORD is not set in .env"
+runtime_pid="$(bot_pid)"
+if [[ -n "$runtime_pid" ]]; then
+    load_bot_runtime_env "$runtime_pid" || true
+fi
+
+PASSWORD="${REDIS_PASSWORD:-}"
+[[ -n "$PASSWORD" ]] || die "REDIS_PASSWORD is not set in ${ENV_FILE#"$ROOT_DIR"/}"
 
 # Either the compose stack or the standalone instance scripts/run.sh redis
 # starts for host-side runs; whichever is up is the one to talk to.
 CONTAINER=""
-for candidate in korail_redis korail_dev_redis; do
+if (( TEST_RUNTIME )); then
+    CANDIDATES=(
+        "${REDIS_CONTAINER_NAME:-korail_redis_test}"
+        "${DEV_REDIS_CONTAINER_NAME:-korail_test_dev_redis}"
+    )
+else
+    CANDIDATES=(korail_redis korail_dev_redis)
+fi
+for candidate in "${CANDIDATES[@]}"; do
     if docker ps --format '{{.Names}}' | grep -qx "$candidate"; then
         CONTAINER="$candidate"
         break
@@ -46,6 +79,10 @@ done
 
 if [[ -z "$CONTAINER" ]]; then
     err "No Redis container is running."
+    if (( TEST_RUNTIME )); then
+        err "  compose stack:     scripts/deploy.sh --test up"
+        die "  local development: scripts/run.sh --test redis"
+    fi
     err "  compose stack:     scripts/deploy.sh up"
     die "  local development: scripts/run.sh redis"
 fi
@@ -85,9 +122,8 @@ LOG_LINES=20
 LOGS_ONLY=0
 FOLLOW=0
 
-# 'logs' as the first word means "skip the report, I want the log". Kept as a
-# subcommand rather than another flag because following a log is a different
-# thing to do, not a detail of the status report.
+# 'logs' means "skip the report, I want the log". It remains a subcommand
+# because following a log is a different thing to do, not a report detail.
 if [[ "${1:-}" == "logs" ]]; then
     LOGS_ONLY=1
     SHOW_LOG=1
@@ -98,6 +134,7 @@ while (( $# )); do
     case "$1" in
         --log) SHOW_LOG=1; [[ "${2:-}" =~ ^[0-9]+$ ]] && { LOG_LINES="$2"; shift; } ;;
         -f|--follow) FOLLOW=1 ;;
+        logs) LOGS_ONLY=1; SHOW_LOG=1 ;;
         [0-9]*) LOG_LINES="$1" ;;
         -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "Unknown option: $1" ;;
@@ -115,6 +152,9 @@ if (( LOGS_ONLY )); then
         # A foreground run logs to its terminal, so there is nothing to read.
         err "${LOG_FILE#"$ROOT_DIR"/} 이 없습니다."
         err "포그라운드로 실행 중이면 그 터미널에 출력되고, 아직 한 번도"
+        if (( TEST_RUNTIME )); then
+            die "데몬으로 띄운 적이 없다면 scripts/run.sh --test --daemon 으로 시작하세요."
+        fi
         die "데몬으로 띄운 적이 없다면 scripts/run.sh --daemon 으로 시작하세요."
     fi
 
@@ -138,7 +178,11 @@ PID="$(bot_pid)"
 if [[ -z "$PID" ]]; then
     err "실행 중이 아님"
     [[ -f "$PID_FILE" ]] && field "남은 pidfile" "${PID_FILE#"$ROOT_DIR"/} (죽은 프로세스를 가리킴)"
-    field "기동" "scripts/run.sh --daemon"
+    if (( TEST_RUNTIME )); then
+        field "기동" "scripts/run.sh --test --daemon"
+    else
+        field "기동" "scripts/run.sh --daemon"
+    fi
     RUNNING=0
 else
     RUNNING=1
@@ -177,9 +221,23 @@ fi
 # ==================== Configuration and reachability ====================
 
 load_env
+CONFIG_SOURCE="${ENV_FILE#"$ROOT_DIR"/}"
+if (( TEST_RUNTIME )); then
+    export BOT_RUNTIME_PROFILE="test"
+    export FLASK_PORT="${FLASK_PORT:-8081}"
+    export REDIS_HOST="127.0.0.1"
+    export REDIS_PORT="${DEV_REDIS_PORT:-6380}"
+else
+    export BOT_RUNTIME_PROFILE="production"
+fi
+if (( RUNNING )) && load_bot_runtime_env "$PID"; then
+    CONFIG_SOURCE="실행 중인 pid ${PID}의 환경"
+fi
 [[ "${REDIS_HOST:-}" == "redis" ]] && export REDIS_HOST=localhost
 
 heading "설정"
+field "런타임" "$BOT_RUNTIME_PROFILE"
+field "설정 원본" "$CONFIG_SOURCE"
 field "Telegram updates" "long polling"
 field "LOG_LEVEL" "${LOG_LEVEL:-INFO}"
 field "검색 간격" "${SEARCH_INTERVAL:-1}초 (지터 ${SEARCH_INTERVAL_JITTER:-0.4})"
@@ -217,7 +275,11 @@ except OSError:
     ok "Redis ${REDIS_HOST:-localhost}:${REDIS_PORT:-6379} 응답"
     redis_up=1
 else
-    err "Redis ${REDIS_HOST:-localhost}:${REDIS_PORT:-6379} 무응답 - 'scripts/run.sh redis' 로 기동"
+    if (( TEST_RUNTIME )); then
+        err "Redis ${REDIS_HOST:-localhost}:${REDIS_PORT:-6379} 무응답 - 'scripts/run.sh --test redis' 로 기동"
+    else
+        err "Redis ${REDIS_HOST:-localhost}:${REDIS_PORT:-6379} 무응답 - 'scripts/run.sh redis' 로 기동"
+    fi
 fi
 
 # ==================== What it is working on ====================
@@ -256,7 +318,10 @@ else:
         p = r.search_params
         running = alive(r.process_id)
         mark = "\033[32m●\033[0m 검색 중" if running else "\033[31m●\033[0m 프로세스 없음"
-        print(f"  {mark}  chat_id={r.chat_id}  코레일={mask_phone(r.korail_id)}")
+        print(
+            f"  {mark}  chat_id={r.chat_id}  "
+            f"{p.rail_operator.display_name}={mask_phone(r.korail_id)}"
+        )
         print(f"      {p.src_locate} → {p.dst_locate}  {p.dep_date}  "
               f"{p.dep_time[:4]}~{p.max_dep_time}  {p.train_type_display}  "
               f"{p.passenger_count}명  {p.seat_strategy}")
@@ -269,7 +334,10 @@ if scheduled:
     print()
     for s in sorted(scheduled, key=lambda s: s.start_at):
         p = s.search_params
-        print(f"  ⏰ 예약 대기  chat_id={s.chat_id}  코레일={mask_phone(s.korail_id)}")
+        print(
+            f"  ⏰ 예약 대기  chat_id={s.chat_id}  "
+            f"{p.rail_operator.display_name}={mask_phone(s.korail_id)}"
+        )
         print(f"      시작 {s.start_at:%m/%d %H:%M}  ({s.seconds_until_due() / 60:.0f}분 뒤)")
         print(f"      {p.src_locate} → {p.dst_locate}  {p.dep_date}  "
               f"{p.dep_time[:4]}~{p.max_dep_time}  {p.passenger_count}명")

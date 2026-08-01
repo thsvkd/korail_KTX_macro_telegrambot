@@ -3,14 +3,30 @@
 # Build, run, inspect and publish the Docker deployment.
 #
 # Usage:
-#   scripts/deploy.sh build [tag]
-#   scripts/deploy.sh up [service] [--pull] [--foreground]
-#   scripts/deploy.sh down [--volumes]
-#   scripts/deploy.sh logs [service] [--tail N] [--no-follow]
-#   scripts/deploy.sh push <registry/image:tag>
+#   scripts/deploy.sh [--test] build [tag]
+#   scripts/deploy.sh [--test] up [service] [--pull] [--foreground]
+#   scripts/deploy.sh [--test] down [--volumes]
+#   scripts/deploy.sh [--test] logs [service] [--tail N] [--no-follow]
+#   scripts/deploy.sh [--test] push <registry/image:tag>
 
 # shellcheck source=scripts/_common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
+
+TEST_STACK=0
+PRODUCTION_ENV_FILE="$ENV_FILE"
+FILTERED_ARGS=()
+for arg in "$@"; do
+    if [[ "$arg" == "--test" ]]; then
+        TEST_STACK=1
+    else
+        FILTERED_ARGS+=("$arg")
+    fi
+done
+set -- "${FILTERED_ARGS[@]}"
+
+if (( TEST_STACK )); then
+    use_test_stack
+fi
 
 deploy_build() {
 
@@ -20,7 +36,13 @@ esac
 
 require_cmd docker
 
-IMAGE="${1:-${IMAGE_NAME:-korailbot:local}}"
+if (( TEST_STACK )) && [[ -z "${1:-}" ]]; then
+    require_env_file
+    IMAGE="$(env_value IMAGE_NAME)"
+    IMAGE="${IMAGE:-korailbot:test}"
+else
+    IMAGE="${1:-${IMAGE_NAME:-korailbot:local}}"
+fi
 
 cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
 
@@ -52,9 +74,35 @@ done
 cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
 require_env_file
 
+if (( TEST_STACK )); then
+    SETUP_COMMAND="scripts/setup.sh --test"
+else
+    SETUP_COMMAND="scripts/setup.sh secrets"
+fi
+
+STARTS_APP=1
+if (( ${#SERVICES[@]} )); then
+    STARTS_APP=0
+    for service in "${SERVICES[@]}"; do
+        [[ "$service" == "app" ]] && STARTS_APP=1
+    done
+fi
+
+if (( STARTS_APP )); then
+    TOKEN="$(clean_default "$(env_value BOTTOKEN)")"
+    [[ -n "$TOKEN" ]] || die "BOTTOKEN is empty in ${ENV_FILE#"$ROOT_DIR"/}. Run '${SETUP_COMMAND}'."
+
+    if (( TEST_STACK )) && [[ -f "$PRODUCTION_ENV_FILE" ]]; then
+        PRODUCTION_TOKEN="$(sed -n 's/^BOTTOKEN=//p' "$PRODUCTION_ENV_FILE" | tail -n 1)"
+        if [[ -n "$PRODUCTION_TOKEN" && "$TOKEN" == "$PRODUCTION_TOKEN" ]]; then
+            die ".env.test must use a different BOTTOKEN from .env. Create a separate bot with BotFather."
+        fi
+    fi
+fi
+
 # docker-compose.yml refuses to start Redis without a password.
 if [[ -z "$(env_value REDIS_PASSWORD)" ]]; then
-    die "REDIS_PASSWORD is empty in .env. Run 'scripts/setup.sh secrets'."
+    die "REDIS_PASSWORD is empty in ${ENV_FILE#"$ROOT_DIR"/}. Run '${SETUP_COMMAND}'."
 fi
 
 if [[ "$PULL" -eq 1 ]]; then
@@ -68,7 +116,11 @@ if [[ "$DETACH" -eq 1 ]]; then
     echo
     compose ps
     echo
-    info "Follow the logs with: scripts/deploy.sh logs"
+    if (( TEST_STACK )); then
+        info "Follow the logs with: scripts/deploy.sh --test logs"
+    else
+        info "Follow the logs with: scripts/deploy.sh logs"
+    fi
 else
     info "Starting services in the foreground (Ctrl-C to stop)"
     compose up ${SERVICES[@]+"${SERVICES[@]}"}
@@ -90,9 +142,10 @@ for arg in "$@"; do
 done
 
 cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
+require_env_file
 
 if [[ "$REMOVE_VOLUMES" -eq 1 ]]; then
-    warn "This deletes the Redis volume: all sessions and reservation state go away."
+    warn "This deletes this stack's Redis volume: all sessions and reservation state go away."
     read -r -p "Type 'yes' to continue: " confirmation
     [[ "$confirmation" == "yes" ]] || die "Aborted."
     info "Stopping services and removing volumes"
@@ -124,6 +177,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
+require_env_file
 
 ARGS=(logs --tail "$TAIL")
 [[ "$FOLLOW" -eq 1 ]] && ARGS+=(--follow)
@@ -140,7 +194,12 @@ esac
 
 require_cmd docker
 
-IMAGE="${1:-${IMAGE_NAME:-}}"
+if (( TEST_STACK )) && [[ -z "${1:-}" ]]; then
+    require_env_file
+    IMAGE="$(env_value IMAGE_NAME)"
+else
+    IMAGE="${1:-${IMAGE_NAME:-}}"
+fi
 [[ -n "$IMAGE" ]] || die "No image tag. Pass one, or set IMAGE_NAME (e.g. you/korailbot:latest)."
 
 # A bare name with no registry namespace only exists on this machine; pushing

@@ -3,7 +3,7 @@
 import hmac
 
 from korail_bot.config.settings import settings
-from korail_bot.models import UserProgress, UserSession
+from korail_bot.models import Operator, UserProgress, UserSession
 from korail_bot.models.favourite import MAX_NAME_LENGTH
 from korail_bot.services import (
     AccessService,
@@ -78,10 +78,10 @@ class CommandHandler:
         # An account registered earlier means the two login questions have
         # already been answered, so /start goes straight to picking a date.
         #
-        # USERID/USERPW only applies in a developer chat. It exists so the bot
-        # can be pointed at a fixed account for development, not so that
-        # everyone who finds the bot books with the operator's Korail account.
-        if self.conversation and not self._uses_server_account(chat_id):
+        # Fixed credentials only apply in a developer chat. They exist so the
+        # bot can be pointed at test accounts, not so that everyone who finds
+        # it books with the operator's railway accounts.
+        if self.conversation and not self._uses_any_server_account(chat_id):
             if self.conversation.resume_with_registered_account(chat_id, session):
                 return
 
@@ -104,42 +104,29 @@ class CommandHandler:
 
     def handle_onboarding(self, chat_id: int) -> None:
         """
-        Handle /onboarding (/init): register a Korail account.
+        Handle /onboarding (/init): register a railway account.
 
         Separate from /start because re-registering is a thing people need to
-        do on purpose - a changed Korail password, a different account - and
-        /start deliberately skips straight past the login once one is stored.
+        do on purpose - a changed password, a different account - and /start
+        deliberately skips straight past the login once one is stored.
+
+        Which railway is asked by the flow itself, a step in. Whether there is
+        already a registration to replace cannot be answered before that
+        answer - a chat may be registered with one railway and not the other -
+        so that question is put once the railway is known.
         """
         logger.info(f"Handling /onboarding for chat_id={chat_id}")
-
-        if self._uses_server_account(chat_id):
-            # Registering would achieve nothing in this chat: it logs in with
-            # the account from the environment, and a stored one would never
-            # be consulted.
-            self.telegram.send_message(chat_id, MessageTemplates.ONBOARDING_NOT_NEEDED)
-            return
 
         session = self.storage.get_user_session(chat_id)
         if not session:
             session = UserSession(chat_id=chat_id, in_progress=False, last_action=UserProgress.INIT)
 
-        existing = self.storage.get_onboarded_account(chat_id)
-        if existing:
-            session.in_progress = True
-            session.last_action = UserProgress.ONBOARDING_OVERWRITE_PENDING
-            self.storage.save_user_session(session)
-            self.telegram.send_message(
-                chat_id,
-                MessageTemplates.ONBOARDING_ALREADY.format(
-                    korailId=mask_phone(existing.korail_id),
-                    onboardedAt=f"{existing.onboarded_at:%m월 %d일 %H:%M}",
-                ),
-                reply_markup=keyboards.onboarding_overwrite_keyboard(),
-            )
-            return
-
         session.in_progress = True
         session.last_action = UserProgress.STARTED
+        # Tells the railway step that this is a registration rather than a
+        # booking: the difference is that an account already on file is
+        # something to offer to replace, not something to log straight in with.
+        session.train_info = {"onboarding": True}
         self.storage.save_user_session(session)
         self.telegram.send_message(
             chat_id,
@@ -149,7 +136,11 @@ class CommandHandler:
 
     def handle_logout(self, chat_id: int) -> None:
         """
-        Handle /logout: forget the registered Korail account.
+        Handle /logout: forget every registered railway account.
+
+        Both of them, when there are two: someone asking the bot to let go of
+        their credentials means all of them, and leaving one behind would be
+        keeping a login for a person who just said not to.
 
         Only the registration is dropped. A search that is already running
         keeps its own copy of the login and is left alone - stopping someone's
@@ -157,7 +148,7 @@ class CommandHandler:
         """
         logger.info(f"Handling /logout for chat_id={chat_id}")
 
-        if not self.storage.get_onboarded_account(chat_id):
+        if not self.storage.get_onboarded_operators(chat_id):
             self.telegram.send_message(chat_id, MessageTemplates.LOGOUT_NOTHING)
             return
 
@@ -171,13 +162,17 @@ class CommandHandler:
 
         self.telegram.send_message(chat_id, MessageTemplates.LOGOUT_DONE)
 
-    def _uses_server_account(self, chat_id: int) -> bool:
-        """Whether this chat logs in with USERID/USERPW - developer chats only."""
+    def _uses_server_account(self, chat_id: int, operator: Operator = Operator.KORAIL) -> bool:
+        """Whether this chat uses the fixed login for one railway."""
         if self.conversation:
-            return self.conversation.uses_server_account(chat_id)
-        return settings.has_preconfigured_korail_credentials() and self.storage.is_developer(
+            return self.conversation.uses_server_account(chat_id, operator)
+        return settings.has_preconfigured_credentials(operator) and self.storage.is_developer(
             chat_id
         )
+
+    def _uses_any_server_account(self, chat_id: int) -> bool:
+        """Whether this developer chat has a fixed login for either railway."""
+        return self.storage.is_developer(chat_id) and settings.has_any_preconfigured_credentials()
 
     # ==================== Developer mode ====================
 
@@ -596,6 +591,7 @@ class CommandHandler:
             message_id,
             MessageTemplates.FAV_DETAIL.format(
                 name=favourite.name,
+                operator=favourite.rail_operator.display_name,
                 route=favourite.route,
                 window=favourite.window,
                 trainType=favourite.train_type_display or "N/A",

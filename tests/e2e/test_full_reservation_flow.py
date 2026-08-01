@@ -53,6 +53,8 @@ class TestFullReservationFlow:
 
         # Step 2: Confirm start (Y)
         self.conversation_handler.handle_message(chat_id, "Y")
+        # Which railway now comes between "yes" and the phone number.
+        self.conversation_handler.handle_message(chat_id, "korail")
         session = self.storage.get_user_session(chat_id)
         assert session.last_action == UserProgress.START_ACCEPTED
 
@@ -124,6 +126,8 @@ class TestFullReservationFlow:
 
         # Step 13: Final confirmation (Y)
         self.conversation_handler.handle_message(chat_id, "Y")
+        # Which railway now comes between "yes" and the phone number.
+        self.conversation_handler.handle_message(chat_id, "korail")
         session = self.storage.get_user_session(chat_id)
         assert session.last_action == UserProgress.FINDING_TICKET
 
@@ -148,6 +152,8 @@ class TestFullReservationFlow:
         # Go through flow quickly
         self.command_handler.route_command(chat_id, "/start")
         self.conversation_handler.handle_message(chat_id, "Y")
+        # Which railway now comes between "yes" and the phone number.
+        self.conversation_handler.handle_message(chat_id, "korail")
 
         with patch("korail_bot.config.settings.settings.is_preapproved", return_value=True):
             self.conversation_handler.handle_message(chat_id, "010-1234-5678")
@@ -175,6 +181,8 @@ class TestFullReservationFlow:
 
         # Final confirmation
         self.conversation_handler.handle_message(chat_id, "Y")
+        # Which railway now comes between "yes" and the phone number.
+        self.conversation_handler.handle_message(chat_id, "korail")
         session = self.storage.get_user_session(chat_id)
         assert session.last_action == UserProgress.FINDING_TICKET
 
@@ -195,6 +203,8 @@ class TestFullReservationFlow:
         # Quick flow setup
         self.command_handler.route_command(chat_id, "/start")
         self.conversation_handler.handle_message(chat_id, "Y")
+        # Which railway now comes between "yes" and the phone number.
+        self.conversation_handler.handle_message(chat_id, "korail")
 
         with patch("korail_bot.config.settings.settings.is_preapproved", return_value=True):
             self.conversation_handler.handle_message(chat_id, "010-1234-5678")
@@ -218,6 +228,8 @@ class TestFullReservationFlow:
 
         # Final confirmation
         self.conversation_handler.handle_message(chat_id, "Y")
+        # Which railway now comes between "yes" and the phone number.
+        self.conversation_handler.handle_message(chat_id, "korail")
 
         # Verify reservation parameters
         call_args = self.reservation.start_reservation_process.call_args
@@ -235,6 +247,8 @@ class TestFullReservationFlow:
         # Start flow
         self.command_handler.route_command(chat_id, "/start")
         self.conversation_handler.handle_message(chat_id, "Y")
+        # Which railway now comes between "yes" and the phone number.
+        self.conversation_handler.handle_message(chat_id, "korail")
 
         with patch("korail_bot.config.settings.settings.is_preapproved", return_value=True):
             self.conversation_handler.handle_message(chat_id, "010-1234-5678")
@@ -261,6 +275,8 @@ class TestFullReservationFlow:
         # Start flow
         self.command_handler.route_command(chat_id, "/start")
         self.conversation_handler.handle_message(chat_id, "Y")
+        # Which railway now comes between "yes" and the phone number.
+        self.conversation_handler.handle_message(chat_id, "korail")
 
         with patch("korail_bot.config.settings.settings.is_preapproved", return_value=True):
             self.conversation_handler.handle_message(chat_id, "010-1234-5678")

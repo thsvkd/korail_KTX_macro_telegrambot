@@ -11,6 +11,7 @@ from korail_bot.services.scheduled_search_service import (
     ScheduleError,
 )
 from korail_bot.services.search_watchdog_service import SearchWatchdogService
+from korail_bot.services.srt_service import SrtBlockedError, SrtService
 from korail_bot.services.telegram_poller import TelegramPoller
 from korail_bot.services.telegram_service import MessageTemplates, TelegramService
 
@@ -27,6 +28,8 @@ __all__ = [
     "ScheduleError",
     "ScheduledSearchService",
     "SearchWatchdogService",
+    "SrtBlockedError",
+    "SrtService",
     "TelegramPoller",
     "TelegramService",
 ]

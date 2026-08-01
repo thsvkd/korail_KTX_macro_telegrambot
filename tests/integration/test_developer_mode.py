@@ -105,6 +105,39 @@ class TestClaimingAChat:
 
         assert storage.is_developer(CHAT_ID) is False
 
+    def test_a_message_in_korean_still_reaches_the_conversation(self, processor, storage):
+        """
+        The claim check is the first thing every message meets, so getting it
+        wrong costs more than a missed claim.
+
+        compare_digest refuses str inputs holding non-ASCII characters, and
+        this compared the message to the secret as str. The TypeError was
+        caught where updates are processed and logged, so the first Korean
+        word anyone typed - a station name entered by hand, say - was
+        swallowed whole: no answer, no error, nothing on screen.
+
+        The test above cannot see that, and did not: a message that raised
+        before it was routed leaves the chat a non-developer exactly as an
+        ordinary message does. What tells them apart is whether it arrived.
+        """
+        from korail_bot.models import UserProgress, UserSession
+
+        # Mid-flow at the station question, which is where this was found:
+        # "직접 입력" opens the reply box and the station is typed by hand.
+        storage.save_user_session(
+            UserSession(
+                chat_id=CHAT_ID,
+                in_progress=True,
+                last_action=UserProgress.DATE_INPUT_SUCCESS,
+            )
+        )
+        processor.conversation_handler = Mock()
+
+        with _magic():
+            processor.process(_message("서울"))
+
+        processor.conversation_handler.handle_message.assert_called_once_with(CHAT_ID, "서울")
+
     def test_it_is_disabled_when_no_magic_string_is_configured(self, processor, storage):
         with patch.object(Settings, "ADMIN_MAGIC_STRING", None):
             processor.process(_message(MAGIC))

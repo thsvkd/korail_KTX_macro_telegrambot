@@ -171,4 +171,8 @@ source = ["src/korail_bot"]
 branch = true
 
 [tool.coverage.report]
-exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
+# An abstract method's body is unreachable by construction - the same
+# category as the `raise NotImplementedError` beside it here, and the reason
+# StorageInterface's several dozen `pass` statements were dragging the total
+# down while representing no logic anyone could get wrong.
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "@abstractmethod"]

@@ -10,7 +10,6 @@ name: CI/CD
 #   DOCKERHUB_USERNAME, DOCKERHUB_TOKEN
 #   SSH_USERNAME, SSH_PASSWORD
 #   TELEGRAM_BOTTOKEN          - bot token
-#   TELEGRAM_WEBHOOK_SECRET    - secret registered with setWebhook
 #   SESSION_SECRET             - credential encryption key material
 #   ADMIN_COMMAND_PASSWORD     - admin command password (NOT the Korail one)
 #   REDIS_PASSWORD             - Redis AUTH password
@@ -189,7 +188,6 @@ jobs:
                 # while compose failed to find one that was never built here.
                 IMAGE_NAME=${{ vars.IMAGE_NAME }}
                 BOTTOKEN=${{ secrets.TELEGRAM_BOTTOKEN }}
-                TELEGRAM_WEBHOOK_SECRET=${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
                 SESSION_SECRET=${{ secrets.SESSION_SECRET }}
                 ADMIN_PASSWORD=${{ secrets.ADMIN_COMMAND_PASSWORD }}
                 ADMIN_MAGIC_STRING=${{ secrets.ADMIN_MAGIC_STRING }}

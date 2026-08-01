@@ -36,12 +36,11 @@ assignees: ''
 
 ## 실행 환경
 
-- 수신 방식(`RECEIVE_MODE`): <!-- polling / webhook -->
 - 실행 방식: <!-- Docker(docker-compose) / 로컬(scripts/run.sh) / 기타 -->
 - 커밋 또는 이미지 태그: <!-- git rev-parse --short HEAD 결과 또는 이미지 태그 -->
 - OS / 아키텍처: <!-- 예: Raspberry Pi OS aarch64, Ubuntu 24.04 x86_64 -->
 - Python: <!-- uv run python -V (직접 실행한 경우만) -->
-- Redis: <!-- docker-compose 기본 / 외부 Redis / dev-redis.sh -->
+- Redis: <!-- docker-compose 기본 / 외부 Redis / scripts/run.sh redis -->
 
 ## 관련 설정
 

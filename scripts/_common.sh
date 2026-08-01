@@ -264,9 +264,22 @@ _pid_cmdline() {
 # by definition. Only this one non-secret value is extracted from /proc; the
 # rest of the environment includes credentials and must never be printed.
 _pid_runtime_profile() {
-    local pid="$1" profile
+    local pid="$1" environ profile
     [[ -r "/proc/${pid}/environ" ]] || return 1
-    profile="$(tr '\0' '\n' < "/proc/${pid}/environ" | sed -n 's/^BOT_RUNTIME_PROFILE=//p' | tail -n 1)"
+    environ="$(tr '\0' '\n' < "/proc/${pid}/environ")" || return 1
+    # A readable file that reads empty is not a process without a marker. It
+    # is a process whose memory image is not there to be read, which is what
+    # /proc shows for the moment execve takes to swap one program for another
+    # - measurably, on a loaded machine, a couple of percent of the time a
+    # process is looked at right after it is started.
+    #
+    # Falling through to the default below would call that process production,
+    # and the one time it matters is exactly when it happens: a test bot in
+    # the middle of starting, seen by whoever is stopping the production one.
+    # Unknown is the honest answer, and it keeps _is_bot from matching either
+    # profile rather than guessing which.
+    [[ -n "$environ" ]] || return 1
+    profile="$(printf '%s\n' "$environ" | sed -n 's/^BOT_RUNTIME_PROFILE=//p' | tail -n 1)"
     printf '%s' "${profile:-production}"
 }
 

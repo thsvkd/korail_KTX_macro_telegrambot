@@ -437,12 +437,19 @@ def test_runtime_process_discovery_keeps_production_and_test_apart():
     production = process("production")
     test = process("test")
     try:
-        # Give bash time to replace itself with the tagged process.
-        for _ in range(50):
-            cmdline = Path(f"/proc/{production.pid}/cmdline").read_bytes()
-            if b"korail_bot.app" in cmdline:
-                break
-            time.sleep(0.01)
+        # Give bash time to replace itself with the tagged process - both of
+        # them, and waiting on the environment rather than the command line.
+        #
+        # The command line is no signal at all here: "korail_bot.app" is one
+        # of the words bash was started with, so it matches before the exec
+        # it is meant to be waiting for. The environment is what the profile
+        # is actually read from, and it is the thing that is briefly not
+        # there while execve swaps the program.
+        for child in (production, test):
+            for _ in range(200):
+                if b"BOT_RUNTIME_PROFILE=" in Path(f"/proc/{child.pid}/environ").read_bytes():
+                    break
+                time.sleep(0.01)
 
         result = subprocess.run(
             [

@@ -20,6 +20,7 @@ class Messages:
     # 여기에 넣는 순간 /flushredis 가 있다는 사실을 전원에게 광고하게 된다.
     BOT_COMMANDS: ClassVar[list[dict[str, str]]] = [
         {"command": "start", "description": "🎫 예약 시작"},
+        {"command": "fav", "description": "⭐ 즐겨찾기"},
         {"command": "status", "description": "📊 예약 상태 확인"},
         {"command": "notify", "description": "🔔 진행 상황 알림 설정"},
         {"command": "onboarding", "description": "🔑 코레일 계정 등록"},
@@ -261,6 +262,7 @@ class Messages:
 
 🎫 예약 관련
   /start - 예약 시작
+  /fav - 즐겨찾기 (자주 타는 구간 저장·불러오기)
   /cancel - 진행 중인 예약 취소
 
 🔑 계정
@@ -749,6 +751,86 @@ class Messages:
 
 💡 예약을 취소하려면 /cancel을 입력하세요.
 """
+
+    # ========== 즐겨찾기 ==========
+    #
+    # 같은 구간을 자주 타는 사람은 매번 아홉 개의 질문에 같은 답을 한다.
+    # 저장해두는 것은 날짜를 뺀 전부다. 날짜는 탈 때마다 다른 유일한 답이고,
+    # 지난달 날짜를 기억하는 즐겨찾기는 지름길이 아니라 함정이다.
+    FAV_EMPTY = """⭐ 저장된 즐겨찾기가 없습니다.
+
+자주 타는 구간을 저장해두면 다음부터는 날짜만 고르면 됩니다.
+
+📌 저장하는 방법
+   /start 로 예약 정보를 끝까지 입력하면 나오는 확인 화면에서
+   **⭐ 즐겨찾기에 저장** 을 누르세요."""
+
+    FAV_LIST = """⭐ 즐겨찾기 ({count}개)
+
+불러올 항목을 선택하세요."""
+
+    FAV_DETAIL = """⭐ {name}
+
+━━━━━━━━━━━━━━━━━━━━
+📍 {route}
+🕐 {window}
+🚄 {trainType}
+💺 {seatOption}
+👥 {passengerCount}명{seatStrategy}
+━━━━━━━━━━━━━━━━━━━━
+저장: {createdAt}
+
+💡 날짜는 저장하지 않습니다. 검색을 시작하면 날짜만 고르면 됩니다."""
+
+    FAV_SAVED = """⭐ 즐겨찾기에 저장했습니다: {name}
+
+다음부터는 /fav 에서 불러와 날짜만 고르면 됩니다.
+이름은 /fav 에서 바꿀 수 있습니다."""
+
+    FAV_FULL = """⚠️ 즐겨찾기는 {limit}개까지 저장할 수 있습니다.
+
+/fav 에서 쓰지 않는 항목을 지우고 다시 시도해주세요."""
+
+    FAV_INCOMPLETE = """⚠️ 아직 저장할 수 없습니다.
+
+출발역·도착역까지 입력한 뒤에 저장할 수 있습니다."""
+
+    FAV_GONE = "이미 지워진 즐겨찾기입니다.\n\n/fav 로 목록을 다시 열어주세요."
+
+    FAV_DELETE_CONFIRM = """🗑️ '{name}' 을(를) 지울까요?
+
+다시 만들려면 예약 정보를 처음부터 다시 입력해야 합니다."""
+
+    FAV_DELETED = "🗑️ '{name}' 을(를) 지웠습니다."
+
+    FAV_RENAME_PROMPT = """✏️ '{name}' 의 새 이름을 입력해주세요.
+
+{max}자까지 쓸 수 있습니다.
+그만두려면 /cancel 을 입력하세요."""
+
+    FAV_RENAMED = "✏️ 이름을 '{name}' 으로 바꿨습니다."
+
+    FAV_NAME_EMPTY = "❌ 이름을 입력해주세요."
+
+    FAV_STARTED = """⭐ {name} 을(를) 불러왔습니다.
+
+━━━━━━━━━━━━━━━━━━━━
+📍 {route}
+🕐 {window}
+🚄 {trainType}
+💺 {seatOption}
+👥 {passengerCount}명
+━━━━━━━━━━━━━━━━━━━━
+
+📅 출발 희망일만 고르면 됩니다."""
+
+    FAV_NEEDS_ACCOUNT = """⚠️ 코레일 계정이 등록되어 있지 않습니다.
+
+/onboarding 으로 계정을 등록한 뒤에 이용해주세요."""
+
+    FAV_BUSY = """⚠️ 이미 예약이 진행 중입니다.
+
+/status 로 확인하시고, 새로 시작하려면 /cancel 후 다시 시도해주세요."""
 
     # ========== 에러 메시지 ==========
     ERROR_GENERIC = "⚠️ 오류가 발생했습니다.\n/cancel 또는 /start로 다시 시작해주세요."

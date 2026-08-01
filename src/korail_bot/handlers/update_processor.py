@@ -185,6 +185,16 @@ class TelegramUpdateProcessor:
                 self.command_handler.handle_admin_password(chat_id, text)
                 return
 
+            # Renaming a saved search. Held outside the session deliberately:
+            # tidying up favourites is not a step of the booking flow, and
+            # someone halfway through booking must not have that flow
+            # disturbed by it. Checked here, after the commands, so /cancel
+            # is still the way out.
+            renaming = self.storage.get_pending_favourite_rename(chat_id)
+            if renaming:
+                self.command_handler.handle_favourite_rename(chat_id, renaming, text)
+                return
+
             # Handle conversation flow (non-command messages)
             if in_progress:
                 # Handle conversation flow
@@ -224,11 +234,19 @@ class TelegramUpdateProcessor:
             logger.info(f"Chat membership for chat_id={chat_id} changed to {status}")
             return
 
-        logger.info(f"chat_id={chat_id} {status} the bot - dropping the registered account")
+        logger.info(f"chat_id={chat_id} {status} the bot - dropping what it left behind")
         try:
             self.storage.delete_onboarded_account(chat_id)
         except Exception as e:
             logger.error(f"Could not drop the account for chat_id={chat_id}: {e}")
+
+        # Saved searches go too. They hold nothing secret - two stations, a
+        # time window - but they are personal, and someone who left has not
+        # asked for a record of the journeys they take to be kept.
+        try:
+            self.storage.delete_all_favourites(chat_id)
+        except Exception as e:
+            logger.error(f"Could not drop the favourites for chat_id={chat_id}: {e}")
 
     def process_callback_query(self, query: dict) -> None:
         """
@@ -308,6 +326,14 @@ class TelegramUpdateProcessor:
             self.command_handler.handle_notify_callback(chat_id, value)
             return
 
+        # Saved searches. Its screens are walked in place - list, detail, back
+        # to the list - so the keyboard is left for the handler to replace
+        # rather than settled away here.
+        if step == keyboards.STEP_FAV:
+            self.telegram.answer_callback_query(query_id)
+            self.command_handler.handle_favourite_callback(chat_id, message_id, value)
+            return
+
         # The operator's own lists. Guarded by the same admin check the
         # commands that open them use, because a keyboard is only as private
         # as the chat it was sent to - and messages get forwarded.
@@ -358,7 +384,7 @@ class TelegramUpdateProcessor:
         # handler redraws it. Everything else is settled here, before
         # dispatching rather than after: the handler sends the next question,
         # and the answer to this one belongs above it.
-        if step not in keyboards.REPEATABLE_STEPS:
+        if step not in keyboards.REPEATABLE_STEPS and data not in keyboards.KEEPS_QUESTION_OPEN:
             self._settle_keyboard(chat_id, message_id, message, data)
 
         self.conversation_handler.handle_message(chat_id, value)

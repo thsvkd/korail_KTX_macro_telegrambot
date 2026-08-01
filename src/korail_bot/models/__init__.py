@@ -1,5 +1,6 @@
 """Data models for the application."""
 
+from korail_bot.models.favourite import FavouriteSearch
 from korail_bot.models.reservation import (
     DeadSearch,
     DeathCause,
@@ -25,6 +26,7 @@ __all__ = [
     "ApprovedUser",
     "DeadSearch",
     "DeathCause",
+    "FavouriteSearch",
     "MultiReservationStatus",
     "OnboardedAccount",
     "PaymentStatus",

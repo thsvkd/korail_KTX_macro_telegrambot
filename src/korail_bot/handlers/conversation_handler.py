@@ -323,6 +323,69 @@ class ConversationHandler:
         )
         return True
 
+    def start_from_favourite(self, chat_id: int, favourite) -> None:
+        """
+        Begin a booking with everything but the date already answered.
+
+        Goes through the login the ordinary flow uses rather than around it:
+        a favourite is a shortcut past the questions, not past the account
+        that answers them or the summary that confirms them.
+
+        Args:
+            chat_id: Telegram chat ID
+            favourite: The saved search to load
+        """
+        from korail_bot.telegramBot.messages import Messages
+
+        session = self.storage.get_user_session(chat_id) or UserSession(chat_id=chat_id)
+        session.reset()
+        session.in_progress = True
+        session.last_action = UserProgress.STARTED
+        self.storage.save_user_session(session)
+
+        if self.uses_server_account(chat_id):
+            if not self._login_with_environment_credentials(chat_id, session):
+                self.telegram.send_message(chat_id, Messages.PRECONFIGURED_LOGIN_FAILED)
+                return
+        elif not self.storage.get_onboarded_account(chat_id):
+            # Nothing to log in with. Said plainly rather than dropped into
+            # the registration flow: the user asked to run a saved search,
+            # and being answered with a phone number prompt reads as the
+            # favourite having failed.
+            session.reset()
+            self.storage.save_user_session(session)
+            self.telegram.send_message(chat_id, Messages.FAV_NEEDS_ACCOUNT)
+            return
+        elif not self.resume_with_registered_account(chat_id, session):
+            # The account disappeared between the check above and here, which
+            # resume_with_registered_account reports for itself when it can.
+            self.telegram.send_message(chat_id, Messages.FAV_NEEDS_ACCOUNT)
+            return
+
+        if session.last_action != UserProgress.PW_INPUT_SUCCESS:
+            # The stored login no longer works; resume_with_registered_account
+            # has already put the chat in front of the registration flow and
+            # said so. Nothing useful to add.
+            return
+
+        session.train_info = favourite.as_train_info()
+        # Read by the date step, which is the only question left to ask.
+        session.train_info["fromFavourite"] = True
+        self.storage.save_user_session(session)
+
+        self.telegram.send_message(
+            chat_id,
+            Messages.FAV_STARTED.format(
+                name=favourite.name,
+                route=favourite.route,
+                window=favourite.window,
+                trainType=favourite.train_type_display or "N/A",
+                seatOption=favourite.special_option_display or "N/A",
+                passengerCount=favourite.passenger_count,
+            ),
+            reply_markup=keyboards.date_keyboard(),
+        )
+
     def _handle_phone_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle phone number input."""
         is_valid, error = InputValidator.validate_phone_number(text)
@@ -420,6 +483,16 @@ class ConversationHandler:
         session.train_info["depDate"] = text
         session.last_action = UserProgress.DATE_INPUT_SUCCESS
         self.storage.save_user_session(session)
+
+        # A search loaded from a favourite has every other answer already, so
+        # the date is the last question rather than the first. Asking the
+        # remaining eight anyway would make the shortcut no shortcut at all.
+        if session.train_info.get("fromFavourite"):
+            session.last_action = UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+            self.storage.save_user_session(session)
+            self._show_train_selection(chat_id, session)
+            return
+
         self.telegram.send_message(
             chat_id,
             MessageTemplates.request_departure_station(),
@@ -1102,6 +1175,36 @@ class ConversationHandler:
         except Exception as e:
             logger.warning(f"Could not close the train list for chat_id={chat_id}: {e}")
 
+    def _save_favourite(self, chat_id: int) -> None:
+        """
+        Save the answers on the summary screen as a favourite.
+
+        Here rather than with the rest of the /fav handling because this is
+        the one operation that reads the session: everything else in that
+        feature works on records that outlive the booking.
+        """
+        from korail_bot.models import FavouriteSearch
+        from korail_bot.telegramBot.messages import Messages
+
+        session = self.storage.get_user_session(chat_id)
+        info = session.train_info if session else {}
+        if not info.get("srcLocate") or not info.get("dstLocate"):
+            self.telegram.send_message(chat_id, Messages.FAV_INCOMPLETE)
+            return
+
+        if len(self.storage.get_favourites(chat_id)) >= settings.MAX_FAVOURITES:
+            # Refused rather than made room for. Which of their saved
+            # journeys to drop is not a decision to take on someone's behalf.
+            self.telegram.send_message(
+                chat_id, Messages.FAV_FULL.format(limit=settings.MAX_FAVOURITES)
+            )
+            return
+
+        favourite = FavouriteSearch.from_train_info(chat_id, info)
+        self.storage.save_favourite(favourite)
+        logger.info(f"Saved favourite {favourite.fav_id} for chat_id={chat_id}")
+        self.telegram.send_message(chat_id, Messages.FAV_SAVED.format(name=favourite.name))
+
     # ==================== Booking a start time ====================
     #
     # Tickets are not released evenly - holiday booking opens at an announced
@@ -1286,6 +1389,13 @@ class ConversationHandler:
         """Handle final confirmation before starting reservation."""
         if text.strip() == keyboards.CONFIRM_SCHEDULE:
             self._show_schedule_prompt(chat_id, session)
+            return
+
+        if text.strip() == keyboards.CONFIRM_SAVE_FAVOURITE:
+            # Saving does not answer the question on screen - "start this, or
+            # not?" is still open - so the session is left exactly where it
+            # is and the summary keeps its buttons.
+            self._save_favourite(chat_id)
             return
 
         is_yes, _error = InputValidator.validate_yes_no(text)

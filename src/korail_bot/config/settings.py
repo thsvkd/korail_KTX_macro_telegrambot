@@ -165,6 +165,16 @@ class Settings:
         os.environ.get("PROGRESS_PREFERENCE_TTL_SECONDS", "30")
     )
 
+    # Favourite searches
+    #
+    # A cap rather than a quota: the list is a keyboard, and a keyboard with
+    # forty rows on it is not a list anyone reads. Ten is more journeys than
+    # anyone takes regularly, and hitting it is a prompt to tidy up.
+    MAX_FAVOURITES: int = int(os.environ.get("MAX_FAVOURITES", "10"))
+    # How long "the next thing you type is the new name" stays true. A rename
+    # abandoned mid-thought must not swallow whatever is typed an hour later.
+    FAVOURITE_RENAME_TTL_SECONDS: int = int(os.environ.get("FAVOURITE_RENAME_TTL_SECONDS", "300"))
+
     # Flask Configuration
     # In polling mode the only caller of the HTTP API is the background
     # reservation process on loopback, so binding to every interface would

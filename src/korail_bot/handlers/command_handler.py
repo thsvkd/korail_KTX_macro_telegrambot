@@ -4,6 +4,7 @@ import hmac
 
 from korail_bot.config.settings import settings
 from korail_bot.models import UserProgress, UserSession
+from korail_bot.models.favourite import MAX_NAME_LENGTH
 from korail_bot.services import (
     AccessService,
     MessageTemplates,
@@ -436,6 +437,171 @@ class CommandHandler:
             logger.warning(f"Could not close the list on message {message_id}: {e}")
             self.telegram.send_message(chat_id, text)
 
+    # ==================== Favourite searches ====================
+    #
+    # Someone who takes the same journey often answers the same nine questions
+    # every time. A favourite is all of those answers except the date - the
+    # one that is different every trip, and the one a saved search must never
+    # pretend to know.
+    #
+    # Saved from the summary screen, where every answer is already on screen
+    # and it costs one press. Managed from /fav.
+
+    def handle_favourites(self, chat_id: int) -> None:
+        """
+        Handle /fav - open the list of saved searches.
+
+        Args:
+            chat_id: Telegram chat ID
+        """
+        logger.info(f"Handling /fav for chat_id={chat_id}")
+        self._show_favourites(chat_id, message_id=None)
+
+    def handle_favourite_callback(self, chat_id: int, message_id: int | None, value: str) -> None:
+        """
+        Act on a press in the saved-search screens.
+
+        Args:
+            chat_id: Telegram chat ID
+            message_id: The message the keyboard is on, so the list can be
+                        walked in place rather than pushing a message per press
+            value: The prefixed action, carrying a favourite id where needed
+        """
+        if value == keyboards.FAV_CLOSE:
+            self._close_list(chat_id, message_id, "즐겨찾기를 닫았습니다.")
+            return
+
+        if value == keyboards.FAV_BACK:
+            self._show_favourites(chat_id, message_id)
+            return
+
+        # Every remaining action is "<prefix>:<favourite id>", and all of them
+        # need the favourite, so it is fetched once before the branching.
+        fav_id = value.partition(":")[2]
+        favourite = self.storage.get_favourite(chat_id, fav_id)
+        if not favourite:
+            # Deleted from another device, or a press on a list left open
+            # from before it was deleted here.
+            self._close_list(chat_id, message_id, MessageTemplates.FAV_GONE)
+            return
+
+        if value.startswith(keyboards.FAV_PICK):
+            self._show_favourite(chat_id, message_id, favourite)
+        elif value.startswith(keyboards.FAV_START):
+            self._start_from_favourite(chat_id, message_id, favourite)
+        elif value.startswith(keyboards.FAV_RENAME):
+            self._ask_for_new_name(chat_id, message_id, favourite)
+        elif value.startswith(keyboards.FAV_DELETE):
+            self._edit_list(
+                chat_id,
+                message_id,
+                MessageTemplates.FAV_DELETE_CONFIRM.format(name=favourite.name),
+                keyboards.favourite_delete_keyboard(fav_id),
+            )
+        elif value.startswith(keyboards.FAV_CONFIRM_DELETE):
+            self.storage.delete_favourite(chat_id, fav_id)
+            logger.info(f"Deleted favourite {fav_id} for chat_id={chat_id}")
+            self._close_list(
+                chat_id, message_id, MessageTemplates.FAV_DELETED.format(name=favourite.name)
+            )
+        else:
+            logger.warning(f"Unknown favourite action {value!r} from chat_id={chat_id}")
+
+    def handle_favourite_rename(self, chat_id: int, fav_id: str, name: str) -> None:
+        """
+        Take the new name someone typed for a saved search.
+
+        Args:
+            chat_id: Telegram chat ID
+            fav_id: Which favourite is being renamed
+            name: What they typed
+        """
+        name = name.strip()
+        if not name:
+            self.telegram.send_message(chat_id, MessageTemplates.FAV_NAME_EMPTY)
+            return
+
+        # Whatever happens next, this chat is no longer renaming anything -
+        # including when the favourite turned out to be gone.
+        self.storage.set_pending_favourite_rename(chat_id, None)
+
+        favourite = self.storage.get_favourite(chat_id, fav_id)
+        if not favourite:
+            self.telegram.send_message(chat_id, MessageTemplates.FAV_GONE)
+            return
+
+        favourite.name = name[:MAX_NAME_LENGTH]
+        self.storage.save_favourite(favourite)
+        self.telegram.send_message(
+            chat_id, MessageTemplates.FAV_RENAMED.format(name=favourite.name)
+        )
+
+    def _show_favourites(self, chat_id: int, message_id: int | None) -> None:
+        """The list, or an explanation of how to fill it."""
+        favourites = self.storage.get_favourites(chat_id)
+        if not favourites:
+            self._close_list(chat_id, message_id, MessageTemplates.FAV_EMPTY)
+            return
+
+        self._edit_list(
+            chat_id,
+            message_id,
+            MessageTemplates.FAV_LIST.format(count=len(favourites)),
+            keyboards.favourites_keyboard(favourites),
+        )
+
+    def _show_favourite(self, chat_id: int, message_id: int | None, favourite) -> None:
+        """One saved search, and what can be done with it."""
+        strategy = (
+            f" · {favourite.seat_strategy_display}"
+            if favourite.passenger_count > 1 and favourite.seat_strategy_display
+            else ""
+        )
+        self._edit_list(
+            chat_id,
+            message_id,
+            MessageTemplates.FAV_DETAIL.format(
+                name=favourite.name,
+                route=favourite.route,
+                window=favourite.window,
+                trainType=favourite.train_type_display or "N/A",
+                seatOption=favourite.special_option_display or "N/A",
+                passengerCount=favourite.passenger_count,
+                seatStrategy=strategy,
+                createdAt=f"{favourite.created_at:%Y-%m-%d}",
+            ),
+            keyboards.favourite_detail_keyboard(favourite.fav_id),
+        )
+
+    def _ask_for_new_name(self, chat_id: int, message_id: int | None, favourite) -> None:
+        """Wait for the next message to be a name."""
+        self.storage.set_pending_favourite_rename(chat_id, favourite.fav_id)
+        self._close_list(
+            chat_id,
+            message_id,
+            MessageTemplates.FAV_RENAME_PROMPT.format(name=favourite.name, max=MAX_NAME_LENGTH),
+        )
+
+    def _start_from_favourite(self, chat_id: int, message_id: int | None, favourite) -> None:
+        """
+        Begin a booking with everything but the date already answered.
+
+        Deliberately routed through the conversation rather than starting a
+        search here. A favourite is a shortcut past the questions, not past
+        the login, the trial gate, or the summary the user confirms.
+        """
+        if not self.conversation:
+            logger.error("Cannot start from a favourite without the conversation handler")
+            return
+
+        session = self.storage.get_user_session(chat_id)
+        if session and session.last_action == UserProgress.FINDING_TICKET:
+            self._close_list(chat_id, message_id, MessageTemplates.FAV_BUSY)
+            return
+
+        self._close_list(chat_id, message_id, f"⭐ {favourite.name}")
+        self.conversation.start_from_favourite(chat_id, favourite)
+
     # ==================== Progress reports ====================
     #
     # A search runs for hours without a word, and the silence is
@@ -586,6 +752,11 @@ class CommandHandler:
         if session:
             session.reset()
             self.storage.save_user_session(session)
+
+        # Waiting on a new name for a saved search is one of the states
+        # /cancel exists to get out of - and the only way out of it, since
+        # anything else typed would be taken as the name.
+        self.storage.set_pending_favourite_rename(chat_id, None)
 
         # Clear multi-reservation status (for random seating)
         self.storage.delete_multi_reservation_status(chat_id)
@@ -834,6 +1005,8 @@ class CommandHandler:
             self.handle_status(chat_id)
         elif command == "/notify":
             self.handle_notify(chat_id, args)
+        elif command in ("/fav", "/favorites", "/favourites"):
+            self.handle_favourites(chat_id)
         elif command == "/help":
             self.handle_help(chat_id)
         # Admin commands - require authentication

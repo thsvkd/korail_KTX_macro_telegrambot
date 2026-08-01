@@ -6,6 +6,7 @@ from korail_bot.models import (
     AccessRequest,
     ApprovedUser,
     DeadSearch,
+    FavouriteSearch,
     MultiReservationStatus,
     OnboardedAccount,
     PaymentStatus,
@@ -162,6 +163,42 @@ class StorageInterface(ABC):
     @abstractmethod
     def get_all_approved_users(self) -> "list[ApprovedUser]":
         """Everyone approved from the chat."""
+        pass
+
+    # Favourite searches
+    @abstractmethod
+    def save_favourite(self, favourite: "FavouriteSearch") -> None:
+        """Store a favourite, replacing one with the same id."""
+        pass
+
+    @abstractmethod
+    def get_favourite(self, chat_id: int, fav_id: str) -> "FavouriteSearch | None":
+        """One favourite, or None when it is not there any more."""
+        pass
+
+    @abstractmethod
+    def get_favourites(self, chat_id: int) -> "list[FavouriteSearch]":
+        """Every favourite this chat has saved, oldest first."""
+        pass
+
+    @abstractmethod
+    def delete_favourite(self, chat_id: int, fav_id: str) -> bool:
+        """Forget a favourite. True when there was one to forget."""
+        pass
+
+    @abstractmethod
+    def delete_all_favourites(self, chat_id: int) -> int:
+        """Forget all of a chat's favourites. Returns how many there were."""
+        pass
+
+    @abstractmethod
+    def set_pending_favourite_rename(self, chat_id: int, fav_id: str | None) -> None:
+        """Note that the next message typed here is a new name for a favourite."""
+        pass
+
+    @abstractmethod
+    def get_pending_favourite_rename(self, chat_id: int) -> str | None:
+        """Which favourite this chat is in the middle of renaming, if any."""
         pass
 
     # Developer chats

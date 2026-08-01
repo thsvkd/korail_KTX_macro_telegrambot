@@ -12,6 +12,7 @@ from korail_bot.models import (
     ApprovedUser,
     DeadSearch,
     DeathCause,
+    FavouriteSearch,
     MultiReservationStatus,
     OnboardedAccount,
     PaymentStatus,
@@ -58,6 +59,19 @@ class RedisStorage(StorageInterface):
         except redis.RedisError as e:
             logger.error(f"Redis connection failed: {e}")
             raise
+
+    @staticmethod
+    def _text(value) -> str | None:
+        """
+        A stored value as text, or None when there was none.
+
+        REDIS_DECODE_RESPONSES is pinned True, so every read is already a
+        string - but redis-py is typed for both, and the type checker has no
+        way to know which one this client was built with.
+        """
+        if value is None:
+            return None
+        return value if isinstance(value, str) else value.decode()
 
     def _scan_keys(self, pattern: str) -> list[str]:
         """
@@ -318,6 +332,126 @@ class RedisStorage(StorageInterface):
         """Forget a registered account."""
         self.redis.delete(f"user_credentials:{chat_id}")
         logger.debug(f"Deleted onboarded account for chat_id={chat_id}")
+
+    # ==================== Favourite searches ====================
+    #
+    # Kept per chat under a key each, so listing is a scan over one prefix and
+    # deleting one costs nothing. No expiry: a shortcut that quietly forgot
+    # itself would be worse than never having been offered, and unlike the
+    # registered account there is nothing secret in here to age out - a
+    # favourite is two station names, a time window and a seat preference.
+
+    def save_favourite(self, favourite: FavouriteSearch) -> None:
+        """Store a favourite, replacing one with the same id."""
+        key = f"favourite:{favourite.chat_id}:{favourite.fav_id}"
+        self.redis.set(
+            key,
+            json.dumps(
+                {
+                    "name": favourite.name,
+                    "src_locate": favourite.src_locate,
+                    "dst_locate": favourite.dst_locate,
+                    "dep_time": favourite.dep_time,
+                    "max_dep_time": favourite.max_dep_time,
+                    "train_type": favourite.train_type,
+                    "train_type_display": favourite.train_type_display,
+                    "special_option": favourite.special_option,
+                    "special_option_display": favourite.special_option_display,
+                    "passenger_count": favourite.passenger_count,
+                    "seat_strategy": favourite.seat_strategy,
+                    "seat_strategy_display": favourite.seat_strategy_display,
+                    "created_at": favourite.created_at.isoformat(),
+                }
+            ),
+        )
+        logger.debug(f"Saved favourite {favourite.fav_id} for chat_id={favourite.chat_id}")
+
+    def get_favourite(self, chat_id: int, fav_id: str) -> FavouriteSearch | None:
+        """One favourite, or None when it is not there any more."""
+        data = self.redis.get(f"favourite:{chat_id}:{fav_id}")
+        if not data:
+            return None
+        return self._deserialize_favourite(chat_id, fav_id, data)
+
+    def get_favourites(self, chat_id: int) -> list[FavouriteSearch]:
+        """
+        Every favourite this chat has saved, oldest first.
+
+        The order is the order they were saved in, which is the only order the
+        user has any memory of. A scan hands keys back in no order at all, so
+        it is imposed here.
+        """
+        favourites = []
+        for key in self._scan_keys(f"favourite:{chat_id}:*"):
+            data = self.redis.get(key)
+            if not data:
+                continue
+            favourite = self._deserialize_favourite(chat_id, key.rpartition(":")[2], data)
+            if favourite:
+                favourites.append(favourite)
+
+        return sorted(favourites, key=lambda favourite: favourite.created_at)
+
+    def delete_favourite(self, chat_id: int, fav_id: str) -> bool:
+        """
+        Forget a favourite.
+
+        Returns:
+            True when there was one to forget, so the caller can tell a
+            deletion from a second press on a button that already worked
+        """
+        return bool(self.redis.delete(f"favourite:{chat_id}:{fav_id}"))
+
+    def delete_all_favourites(self, chat_id: int) -> int:
+        """Forget all of a chat's favourites. Returns how many there were."""
+        keys = self._scan_keys(f"favourite:{chat_id}:*")
+        return int(self.redis.delete(*keys)) if keys else 0
+
+    def set_pending_favourite_rename(self, chat_id: int, fav_id: str | None) -> None:
+        """
+        Note that the next message typed here is a new name for a favourite.
+
+        Kept apart from the session rather than on it: renaming is not a step
+        of the booking flow, and someone who is halfway through booking a
+        ticket must not have that flow disturbed by tidying up their saved
+        searches. Given a short life of its own, so a rename abandoned
+        mid-thought does not swallow the next thing typed an hour later.
+        """
+        key = f"favourite_rename:{chat_id}"
+        if fav_id is None:
+            self.redis.delete(key)
+        else:
+            self.redis.set(key, fav_id, ex=settings.FAVOURITE_RENAME_TTL_SECONDS)
+
+    def get_pending_favourite_rename(self, chat_id: int) -> str | None:
+        """Which favourite this chat is in the middle of renaming, if any."""
+        return self._text(self.redis.get(f"favourite_rename:{chat_id}")) or None
+
+    @staticmethod
+    def _deserialize_favourite(chat_id: int, fav_id: str, data) -> FavouriteSearch | None:
+        """Read one back, or None when the record cannot be understood."""
+        try:
+            stored = json.loads(data)
+            return FavouriteSearch(
+                chat_id=chat_id,
+                fav_id=fav_id,
+                name=stored["name"],
+                src_locate=stored["src_locate"],
+                dst_locate=stored["dst_locate"],
+                dep_time=stored.get("dep_time", ""),
+                max_dep_time=stored.get("max_dep_time", ""),
+                train_type=stored.get("train_type", ""),
+                train_type_display=stored.get("train_type_display", ""),
+                special_option=stored.get("special_option", ""),
+                special_option_display=stored.get("special_option_display", ""),
+                passenger_count=int(stored.get("passenger_count", 1)),
+                seat_strategy=stored.get("seat_strategy", "consecutive"),
+                seat_strategy_display=stored.get("seat_strategy_display", ""),
+                created_at=datetime.fromisoformat(stored["created_at"]),
+            )
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+            logger.error(f"Could not read favourite {fav_id} for chat_id={chat_id}: {e}")
+            return None
 
     # ==================== Trials, requests and approvals ====================
 

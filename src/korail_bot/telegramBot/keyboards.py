@@ -53,9 +53,16 @@ STEP_USERS = "us"
 # the conversation: it is reached by /notify, at any time, and the answer is
 # just as valid an hour after the keyboard was sent.
 STEP_NOTIFY = "nf"
+# Saved searches. Like the settings above, reached by a command at any time
+# rather than by walking the conversation to it.
+STEP_FAV = "fv"
 
 # Answers to STEP_CONFIRM that are neither yes nor no.
 CONFIRM_SCHEDULE = "*schedule"
+# Saving the summary as a favourite. Not an answer at all - the question is
+# still "start, or not?" - so it is listed below as one that leaves the
+# keyboard in place.
+CONFIRM_SAVE_FAVOURITE = "*fav"
 
 # Not an answer at all: the user wants the previous question back.
 #
@@ -121,6 +128,13 @@ STEP_PROGRESS = {
 # expected to tick several. The keyboard stays, and the handler redraws it
 # with the new ticks rather than the router clearing it away.
 REPEATABLE_STEPS = frozenset({STEP_TRAIN_SELECT})
+
+# Presses that do not answer the question they are on.
+#
+# Saving the summary as a favourite is the only one: the question there is
+# still "start this search, or not?", and settling the keyboard would take the
+# start button away from someone who had only asked for a bookmark.
+KEEPS_QUESTION_OPEN = frozenset({f"{STEP_CONFIRM}:{CONFIRM_SAVE_FAVOURITE}"})
 
 # Chosen instead of an answer: the user wants to type this one. Not a value
 # any step could produce, so it can never collide with a real answer.
@@ -367,6 +381,9 @@ def confirm_keyboard() -> InlineKeyboard:
     return _keyboard(
         [_button("🎯 지금 검색 시작", STEP_CONFIRM, "Y")],
         [_button("⏰ 시작 시각 예약", STEP_CONFIRM, CONFIRM_SCHEDULE)],
+        # Every answer to this screen is on it, which makes it the one place
+        # where saving the lot as a favourite costs a single press.
+        [_button("⭐ 즐겨찾기에 저장", STEP_CONFIRM, CONFIRM_SAVE_FAVOURITE)],
         _back_row(STEP_CONFIRM),
         [_button("❌ 취소", STEP_CONFIRM, "N")],
     )
@@ -562,6 +579,61 @@ def notify_keyboard(current: int = 0) -> InlineKeyboard:
     return _keyboard(
         *_rows(buttons, 3),
         [_button(f"{'✅ ' if current <= 0 else '🔕 '}알림 끄기", STEP_NOTIFY, NOTIFY_OFF)],
+    )
+
+
+# Prefixes for the saved-search screens. The rest of the value is a favourite
+# id, which is eight hex characters - well inside the callback_data limit.
+FAV_PICK = "p:"
+FAV_START = "s:"
+FAV_RENAME = "r:"
+FAV_DELETE = "d:"
+FAV_CONFIRM_DELETE = "x:"
+FAV_CLOSE = "*close"
+FAV_BACK = "*back"
+
+
+def favourites_keyboard(favourites: list) -> InlineKeyboard:
+    """
+    The saved searches, one per row.
+
+    Args:
+        favourites: FavouriteSearch objects, oldest first
+
+    Returns:
+        The keyboard the user picks from
+    """
+    rows = [
+        [_button(f"⭐ {favourite.name}", STEP_FAV, f"{FAV_PICK}{favourite.fav_id}")]
+        for favourite in favourites
+    ]
+    rows.append([_button("❌ 닫기", STEP_FAV, FAV_CLOSE)])
+    return _keyboard(*rows)
+
+
+def favourite_detail_keyboard(fav_id: str) -> InlineKeyboard:
+    """What can be done with one saved search."""
+    return _keyboard(
+        [_button("🎫 이 조건으로 검색 시작", STEP_FAV, f"{FAV_START}{fav_id}")],
+        [
+            _button("✏️ 이름 변경", STEP_FAV, f"{FAV_RENAME}{fav_id}"),
+            _button("🗑️ 삭제", STEP_FAV, f"{FAV_DELETE}{fav_id}"),
+        ],
+        [_button("◀️ 목록으로", STEP_FAV, FAV_BACK)],
+    )
+
+
+def favourite_delete_keyboard(fav_id: str) -> InlineKeyboard:
+    """
+    Confirm forgetting one.
+
+    Confirmed rather than done on the way past: rebuilding a favourite means
+    answering nine questions again, and the delete button sits next to the
+    rename one.
+    """
+    return _keyboard(
+        [_button("🗑️ 삭제합니다", STEP_FAV, f"{FAV_CONFIRM_DELETE}{fav_id}")],
+        [_button("◀️ 그대로 두기", STEP_FAV, f"{FAV_PICK}{fav_id}")],
     )
 
 

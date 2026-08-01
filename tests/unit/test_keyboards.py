@@ -52,6 +52,24 @@ ALL_KEYBOARDS = {
     "seat_strategy": keyboards.seat_strategy_keyboard(),
     "confirm": keyboards.confirm_keyboard(),
     "cancel_only": keyboards.cancel_only_keyboard(),
+    "password": keyboards.password_keyboard(),
+}
+
+# The keyboards that must offer a way back, and the step each one's back
+# button has to be filed under. A back button carrying the wrong step would be
+# refused by the router as stale, which is the one failure mode that looks
+# like the feature working right up until it does not.
+BACK_STEPS = {
+    "password": keyboards.STEP_PASSWORD,
+    "src_station": keyboards.STEP_SRC_STATION,
+    "dst_station": keyboards.STEP_DST_STATION,
+    "dep_time": keyboards.STEP_DEP_TIME,
+    "max_dep_time": keyboards.STEP_MAX_DEP_TIME,
+    "train_type": keyboards.STEP_TRAIN_TYPE,
+    "seat_option": keyboards.STEP_SEAT_OPTION,
+    "passenger_count": keyboards.STEP_PASSENGER_COUNT,
+    "seat_strategy": keyboards.STEP_SEAT_STRATEGY,
+    "confirm": keyboards.STEP_CONFIRM,
 }
 
 
@@ -108,6 +126,38 @@ class TestKeyboardShape:
                 continue
             steps = {b["callback_data"].partition(":")[0] for b in buttons_of(keyboard)}
             assert keyboards.STEP_CANCEL in steps, f"{name}: no way to cancel"
+
+
+class TestGoingBackIsOffered:
+    """
+    Every question with one behind it can be walked back to.
+
+    The flow asks eleven things in a row. Without this, one wrong answer costs
+    all eleven - the only remedy was /cancel and doing the whole thing again.
+    """
+
+    @pytest.mark.parametrize("name", sorted(BACK_STEPS))
+    def test_the_keyboard_carries_a_back_button_for_its_own_step(self, name):
+        data = {b["callback_data"] for b in buttons_of(ALL_KEYBOARDS[name])}
+        assert f"{BACK_STEPS[name]}:{keyboards.BACK}" in data
+
+    @pytest.mark.parametrize("name", ["start_confirm", "date", "cancel_only"])
+    def test_the_steps_with_nothing_behind_them_offer_no_way_back(self, name):
+        """
+        The welcome message, the first booking question, and the phone number
+        that follows a "yes, go ahead". A button that could only apologise is
+        worse than no button.
+        """
+        values = {b["callback_data"].partition(":")[2] for b in buttons_of(ALL_KEYBOARDS[name])}
+        assert keyboards.BACK not in values
+
+    def test_the_sentinel_cannot_be_mistaken_for_an_answer(self):
+        """
+        Buttons and typing share one state machine, so this value passes
+        through the same validators every real answer does.
+        """
+        assert keyboards.BACK.startswith("*")
+        assert not keyboards.BACK[1:].isdigit()
 
 
 class TestStepProgressMapping:

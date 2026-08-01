@@ -388,4 +388,4 @@ class TestScheduleKeyboard:
         from korail_bot.telegramBot import keyboards
 
         data = [b["callback_data"] for row in self.make()["inline_keyboard"] for b in row]
-        assert f"{keyboards.STEP_SCHEDULE}:{keyboards.SCHEDULE_BACK}" in data
+        assert f"{keyboards.STEP_SCHEDULE}:{keyboards.BACK}" in data

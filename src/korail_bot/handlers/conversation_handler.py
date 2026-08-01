@@ -77,6 +77,12 @@ class ConversationHandler:
             self._handle_already_processing(chat_id, session)
             return
 
+        # "뒤로" answers no question, so it is taken before the routing below
+        # rather than in a dozen handlers that would each have to remember it.
+        if self._wants_to_go_back(text, session):
+            self._handle_back(chat_id, session)
+            return
+
         # Route to appropriate handler based on progress
         progress = session.last_action
 
@@ -342,7 +348,13 @@ class ConversationHandler:
 
         session.last_action = UserProgress.ID_INPUT_SUCCESS
         self.storage.save_user_session(session)
-        self.telegram.send_message(chat_id, MessageTemplates.request_password())
+        # A way back to the number as well as out: a typo in it is only
+        # discovered from here, when the login fails.
+        self.telegram.send_message(
+            chat_id,
+            MessageTemplates.request_password(),
+            reply_markup=keyboards.password_keyboard(),
+        )
 
     def _handle_password_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle password input and login."""
@@ -352,7 +364,7 @@ class ConversationHandler:
             self.telegram.send_message(
                 chat_id,
                 error + " 다시 입력 바랍니다.",
-                reply_markup=keyboards.cancel_only_keyboard(),
+                reply_markup=keyboards.password_keyboard(),
             )
             return
 
@@ -382,13 +394,14 @@ class ConversationHandler:
                 chat_id, MessageTemplates.login_success(), reply_markup=keyboards.date_keyboard()
             )
         else:
-            # Login failed - ask for retry. No buttons for the retry itself:
-            # the answer is a password, a Y or an N, and only the first two
-            # of those can be offered without putting a password on a button.
+            # Login failed - ask for retry. No button for the retry itself:
+            # the answer is a password, and that cannot go on one. What can is
+            # the way back to the phone number, which is the other thing that
+            # is commonly wrong when a login fails.
             self.telegram.send_message(
                 chat_id,
                 MessageTemplates.login_failure(username),
-                reply_markup=keyboards.cancel_only_keyboard(),
+                reply_markup=keyboards.password_keyboard(),
             )
             # Don't change state - wait for retry input
 
@@ -739,14 +752,22 @@ class ConversationHandler:
             options = options[: self.MAX_TRAIN_OPTIONS]
 
         info = session.train_info
+
+        # Ticks survive the list being fetched again - by the refresh button,
+        # or by coming back to it from the summary. Losing them would mean a
+        # refresh silently undoing the work it was pressed to preserve. A
+        # train that has stopped running drops out with its row.
+        available = {option["no"] for option in options}
+        selected = [number for number in (info.get("selectedTrains") or []) if number in available]
+
         info["trainOptions"] = options
-        info["selectedTrains"] = []
+        info["selectedTrains"] = selected
         self.storage.save_user_session(session)
 
         message_id = self.telegram.send_and_get_id(
             chat_id,
             self._train_selection_text(session, len(options), truncated),
-            reply_markup=keyboards.train_select_keyboard(options, []),
+            reply_markup=keyboards.train_select_keyboard(options, selected),
         )
 
         # Kept so a tick can rewrite this message instead of sending the whole
@@ -861,6 +882,7 @@ class ConversationHandler:
         """Record which trains to watch and move on to the summary."""
         info = session.train_info
         info["selectedTrains"] = selected
+        self._close_train_list(chat_id, session)
         # The list has served its purpose, and it is the bulky part of a
         # session that is written to Redis on every step from here on.
         info.pop("trainOptions", None)
@@ -908,6 +930,172 @@ class ConversationHandler:
             trainWatch=self._describe_watch(session),
         )
         self.telegram.send_message(chat_id, summary, reply_markup=keyboards.confirm_keyboard())
+
+    # ==================== Going back a step ====================
+    #
+    # The flow asks eleven questions in a row, and answering one of them wrongly
+    # used to cost all eleven: there was no way back, so the only remedy was
+    # /cancel and typing the lot again. Every question that has one behind it
+    # now offers a way to it.
+    #
+    # Nothing is unwound on the way back. Each step writes its own field before
+    # it advances, so the answer being re-asked is overwritten before anything
+    # reads it, and the ones further along are re-asked in turn on the way
+    # forward. Clearing them here would only make a half-walked flow harder to
+    # reason about.
+
+    #: Where "뒤로" leads, keyed by the progress the session sits at while the
+    #: question is on screen. Absent means the question has nothing behind it.
+    BACK_TARGETS = {  # noqa: RUF012 - a constant table, not per-instance state
+        # The password prompt: back to the phone number, which is where a
+        # mistyped one has to be fixed.
+        UserProgress.ID_INPUT_SUCCESS: UserProgress.START_ACCEPTED,
+        UserProgress.DATE_INPUT_SUCCESS: UserProgress.PW_INPUT_SUCCESS,
+        UserProgress.SRC_LOCATE_INPUT_SUCCESS: UserProgress.DATE_INPUT_SUCCESS,
+        UserProgress.DST_LOCATE_INPUT_SUCCESS: UserProgress.SRC_LOCATE_INPUT_SUCCESS,
+        UserProgress.DEP_TIME_INPUT_SUCCESS: UserProgress.DST_LOCATE_INPUT_SUCCESS,
+        UserProgress.MAX_DEP_TIME_INPUT_SUCCESS: UserProgress.DEP_TIME_INPUT_SUCCESS,
+        UserProgress.TRAIN_TYPE_INPUT_SUCCESS: UserProgress.MAX_DEP_TIME_INPUT_SUCCESS,
+        UserProgress.SPECIAL_INPUT_SUCCESS: UserProgress.TRAIN_TYPE_INPUT_SUCCESS,
+        UserProgress.PASSENGER_COUNT_INPUT_SUCCESS: UserProgress.SPECIAL_INPUT_SUCCESS,
+        UserProgress.SEAT_STRATEGY_INPUT_SUCCESS: UserProgress.PASSENGER_COUNT_INPUT_SUCCESS,
+        UserProgress.TRAIN_SELECT_INPUT_SUCCESS: UserProgress.SEAT_STRATEGY_INPUT_SUCCESS,
+        UserProgress.SCHEDULE_INPUT_PENDING: UserProgress.TRAIN_SELECT_INPUT_SUCCESS,
+    }
+
+    @staticmethod
+    def _wants_to_go_back(text: str, session: UserSession) -> bool:
+        """
+        Whether this is a request for the previous question.
+
+        The sentinel is what the button carries. The typed word is taken too,
+        because someone who has been pressing "◀️ 뒤로" will eventually type
+        it - with one exception. At the password prompt anything typed is a
+        password, and reading one as a command would walk the user back a step
+        instead of logging them in.
+        """
+        text = text.strip()
+        if session.last_action == UserProgress.ID_INPUT_SUCCESS:
+            return text == keyboards.BACK
+        return text in (keyboards.BACK, "뒤로")
+
+    def _handle_back(self, chat_id: int, session: UserSession) -> None:
+        """Put the question before the one on screen back up."""
+        from korail_bot.telegramBot.messages import Messages
+
+        here = session.last_action
+        target = self.BACK_TARGETS.get(here)
+
+        # A single passenger is never asked how the seats should be arranged,
+        # so going back past the train list has to skip the question that was
+        # skipped on the way in. Landing on one the user has never seen would
+        # make "뒤로" look like it had gone somewhere at random.
+        if (
+            target == UserProgress.PASSENGER_COUNT_INPUT_SUCCESS
+            and (session.train_info.get("passengerCount") or 1) <= 1
+        ):
+            target = UserProgress.SPECIAL_INPUT_SUCCESS
+
+        if target is None:
+            # The first question of the flow, or a state with no question
+            # behind it at all. Saying so beats a button that does nothing.
+            self.telegram.send_message(chat_id, Messages.BACK_AT_THE_START)
+            return
+
+        if here == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS:
+            # Leaving the train list, whose keyboard the router deliberately
+            # leaves alone while it is being ticked.
+            self._close_train_list(chat_id, session)
+
+        session.last_action = target
+        self.storage.save_user_session(session)
+        self._reask(chat_id, session, target)
+
+    def _reask(self, chat_id: int, session: UserSession, progress: int) -> None:
+        """
+        Ask the question belonging to a progress state.
+
+        Only ever called on the way back, so it says so. The prompts the flow
+        uses going forward all open with "✅ … 입력 완료", which is the wrong
+        thing to tell someone who just threw that answer away.
+        """
+        from korail_bot.telegramBot.messages import Messages
+
+        # These two build their message out of every answer so far and know
+        # how to send it, so going back to them is just drawing them again.
+        if progress == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS:
+            self._show_train_selection(chat_id, session)
+            return
+        if progress == UserProgress.TRAIN_SELECT_INPUT_SUCCESS:
+            self._show_final_confirmation(chat_id, session)
+            return
+
+        info = session.train_info
+        prompts = {
+            UserProgress.START_ACCEPTED: (
+                Messages.BACK_TO_PHONE,
+                keyboards.cancel_only_keyboard(),
+            ),
+            UserProgress.PW_INPUT_SUCCESS: (
+                Messages.BACK_TO_DATE,
+                keyboards.date_keyboard(),
+            ),
+            UserProgress.DATE_INPUT_SUCCESS: (
+                Messages.BACK_TO_SRC_STATION,
+                keyboards.station_keyboard(keyboards.STEP_SRC_STATION),
+            ),
+            UserProgress.SRC_LOCATE_INPUT_SUCCESS: (
+                Messages.BACK_TO_DST_STATION,
+                keyboards.station_keyboard(
+                    keyboards.STEP_DST_STATION, exclude=info.get("srcLocate")
+                ),
+            ),
+            UserProgress.DST_LOCATE_INPUT_SUCCESS: (
+                Messages.BACK_TO_DEP_TIME,
+                keyboards.time_keyboard(keyboards.STEP_DEP_TIME),
+            ),
+            UserProgress.DEP_TIME_INPUT_SUCCESS: (
+                Messages.BACK_TO_MAX_DEP_TIME,
+                keyboards.time_keyboard(keyboards.STEP_MAX_DEP_TIME, include_unlimited=True),
+            ),
+            UserProgress.MAX_DEP_TIME_INPUT_SUCCESS: (
+                Messages.BACK_TO_TRAIN_TYPE,
+                keyboards.train_type_keyboard(),
+            ),
+            UserProgress.TRAIN_TYPE_INPUT_SUCCESS: (
+                Messages.BACK_TO_SEAT_OPTION,
+                keyboards.seat_option_keyboard(),
+            ),
+            UserProgress.SPECIAL_INPUT_SUCCESS: (
+                Messages.BACK_TO_PASSENGER_COUNT,
+                keyboards.passenger_count_keyboard(),
+            ),
+            UserProgress.PASSENGER_COUNT_INPUT_SUCCESS: (
+                Messages.BACK_TO_SEAT_STRATEGY.format(count=info.get("passengerCount", 1)),
+                keyboards.seat_strategy_keyboard(),
+            ),
+        }
+
+        text, keyboard = prompts[progress]
+        self.telegram.send_message(chat_id, text, reply_markup=keyboard)
+
+    def _close_train_list(self, chat_id: int, session: UserSession) -> None:
+        """
+        Take the buttons off the list of trains.
+
+        The router leaves this one keyboard alone while the list is on screen -
+        that is what makes ticking repeatable - so leaving the list is the only
+        moment it can be cleared. Cosmetic, and contained accordingly: a
+        failure here must not cost the user the step they asked for.
+        """
+        message_id = session.train_info.get("trainListMessageId")
+        if not isinstance(message_id, int):
+            return
+
+        try:
+            self.telegram.edit_message_reply_markup(chat_id, message_id, keyboards.empty_keyboard())
+        except Exception as e:
+            logger.warning(f"Could not close the train list for chat_id={chat_id}: {e}")
 
     # ==================== Booking a start time ====================
     #
@@ -985,13 +1173,9 @@ class ConversationHandler:
         """Book the search for the time the user gave, or say why not."""
         from korail_bot.telegramBot.messages import Messages
 
+        # "뒤로" never reaches here: it is taken in handle_message, the same
+        # way it is on every other step.
         text = text.strip()
-
-        if text == keyboards.SCHEDULE_BACK:
-            session.last_action = UserProgress.TRAIN_SELECT_INPUT_SUCCESS
-            self.storage.save_user_session(session)
-            self._show_final_confirmation(chat_id, session)
-            return
 
         start_at = self.parse_start_time(text)
         if start_at is None:

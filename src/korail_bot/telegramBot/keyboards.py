@@ -23,6 +23,10 @@ CALLBACK_DATA_MAX_BYTES = 64
 # Callback data is "<step>:<value>". The step says which question is being
 # answered; the value is the answer, in the form the typed flow expects.
 STEP_START_CONFIRM = "st"
+# The password prompt has no answer that could go on a button, and exists as a
+# step only so the "go back" offered there can be told from a stale press. Its
+# keyboard carries the BACK sentinel and nothing else.
+STEP_PASSWORD = "pw"
 STEP_DATE = "dt"
 STEP_SRC_STATION = "src"
 STEP_DST_STATION = "dst"
@@ -49,8 +53,12 @@ STEP_USERS = "us"
 # Answers to STEP_CONFIRM that are neither yes nor no.
 CONFIRM_SCHEDULE = "*schedule"
 
-# Answers to STEP_SCHEDULE that are not a time. A real one is all digits.
-SCHEDULE_BACK = "*back"
+# Not an answer at all: the user wants the previous question back.
+#
+# One value across every step, so there is one rule in the handler rather than
+# a sentinel per keyboard. The leading * keeps it from ever being mistaken for
+# an answer - no station, time, digit or date starts with one.
+BACK = "*back"
 
 # Answers to STEP_TRAIN_SELECT that are not a train number. Prefixed so they
 # cannot collide with one: Korail numbers its trains in digits.
@@ -87,6 +95,7 @@ USERS_BACK = "*back"
 # step would happily accept: tapping an old "특실만" would be read as "4명".
 STEP_PROGRESS = {
     STEP_START_CONFIRM: UserProgress.STARTED,
+    STEP_PASSWORD: UserProgress.ID_INPUT_SUCCESS,
     STEP_DATE: UserProgress.PW_INPUT_SUCCESS,
     STEP_SRC_STATION: UserProgress.DATE_INPUT_SUCCESS,
     STEP_DST_STATION: UserProgress.SRC_LOCATE_INPUT_SUCCESS,
@@ -156,6 +165,17 @@ def _manual_button(step: str) -> dict:
     return _button("⌨️ 직접 입력", step, MANUAL)
 
 
+def _back_row(step: str) -> list[dict]:
+    """
+    The way to the question before this one.
+
+    On every step that has one. A flow this long is answered wrongly now and
+    then - a station picked in a hurry, a date off by a day - and without this
+    the only remedy is cancelling and typing all of it again.
+    """
+    return [_button("◀️ 뒤로", step, BACK)]
+
+
 def _cancel_row() -> list[dict]:
     """Present on every keyboard: leaving should never need a typed command."""
     return [_button("❌ 취소", STEP_CANCEL, "cancel")]
@@ -172,8 +192,24 @@ def _keyboard(*rows: list[dict]) -> InlineKeyboard:
 
 
 def cancel_only_keyboard() -> InlineKeyboard:
-    """For steps that must be typed - a phone number, a password, a password retry."""
+    """
+    For the phone number, which is typed and has nothing behind it.
+
+    The welcome message is the only step before it, and going back to a
+    question already answered with "yes, go ahead" is not worth a button.
+    """
     return _keyboard(_cancel_row())
+
+
+def password_keyboard() -> InlineKeyboard:
+    """
+    For the password, which is typed but does have something behind it.
+
+    A mistyped phone number is only discovered here - the login fails and the
+    number is on screen in the failure message - so this is exactly where the
+    way back to it is worth having.
+    """
+    return _keyboard(_back_row(STEP_PASSWORD), _cancel_row())
 
 
 def start_confirm_keyboard() -> InlineKeyboard:
@@ -193,6 +229,9 @@ def date_keyboard(today: datetime | None = None) -> InlineKeyboard:
     Dates come from the local clock, the same one validate_date compares
     against, so a button can never offer a date that validation then calls
     past.
+
+    No way back from here: this is the first question of the booking, and what
+    lies behind it is a login that has already succeeded.
     """
     today = today or datetime.now()
 
@@ -214,7 +253,7 @@ def station_keyboard(step: str, exclude: str | None = None) -> InlineKeyboard:
     not offer the station the user just picked as the departure.
     """
     buttons = [_button(station, step, station) for station in MAJOR_STATIONS if station != exclude]
-    return _keyboard(*_rows(buttons, 3), [_manual_button(step)], _cancel_row())
+    return _keyboard(*_rows(buttons, 3), [_manual_button(step)], _back_row(step), _cancel_row())
 
 
 def time_keyboard(step: str, include_unlimited: bool = False) -> InlineKeyboard:
@@ -227,7 +266,9 @@ def time_keyboard(step: str, include_unlimited: bool = False) -> InlineKeyboard:
     unlimited = [_button("⏰ 제한 없음 (24시)", step, "2400")] if include_unlimited else []
     hours = [_button(f"{hour:02d}시", step, f"{hour:02d}00") for hour in range(24)]
 
-    return _keyboard(unlimited, *_rows(hours, 6), [_manual_button(step)], _cancel_row())
+    return _keyboard(
+        unlimited, *_rows(hours, 6), [_manual_button(step)], _back_row(step), _cancel_row()
+    )
 
 
 def train_type_keyboard() -> InlineKeyboard:
@@ -235,6 +276,7 @@ def train_type_keyboard() -> InlineKeyboard:
     return _keyboard(
         [_button("🚅 KTX·KTX-산천만", STEP_TRAIN_TYPE, "1")],
         [_button("🚂 모든 열차", STEP_TRAIN_TYPE, "2")],
+        _back_row(STEP_TRAIN_TYPE),
         _cancel_row(),
     )
 
@@ -246,6 +288,7 @@ def seat_option_keyboard() -> InlineKeyboard:
         [_button("2️⃣ 일반실만", STEP_SEAT_OPTION, "2")],
         [_button("3️⃣ 특실 우선", STEP_SEAT_OPTION, "3")],
         [_button("4️⃣ 특실만", STEP_SEAT_OPTION, "4")],
+        _back_row(STEP_SEAT_OPTION),
         _cancel_row(),
     )
 
@@ -253,7 +296,7 @@ def seat_option_keyboard() -> InlineKeyboard:
 def passenger_count_keyboard() -> InlineKeyboard:
     """One through nine - the range validate_passenger_count accepts."""
     buttons = [_button(f"{count}명", STEP_PASSENGER_COUNT, str(count)) for count in range(1, 10)]
-    return _keyboard(*_rows(buttons, 3), _cancel_row())
+    return _keyboard(*_rows(buttons, 3), _back_row(STEP_PASSENGER_COUNT), _cancel_row())
 
 
 def seat_strategy_keyboard() -> InlineKeyboard:
@@ -261,6 +304,7 @@ def seat_strategy_keyboard() -> InlineKeyboard:
     return _keyboard(
         [_button("🪑 연속 좌석 (권장)", STEP_SEAT_STRATEGY, "1")],
         [_button("🎲 랜덤 배치 (성공률 ↑)", STEP_SEAT_STRATEGY, "2")],
+        _back_row(STEP_SEAT_STRATEGY),
         _cancel_row(),
     )
 
@@ -296,6 +340,7 @@ def train_select_keyboard(options: list[dict], selected: list[str] | None = None
         )
     rows.append([_button("🚄 시간대 전체 감시 (성공률 ↑)", STEP_TRAIN_SELECT, TRAIN_SELECT_ALL)])
     rows.append([_button("🔄 목록 새로고침", STEP_TRAIN_SELECT, TRAIN_SELECT_REFRESH)])
+    rows.append(_back_row(STEP_TRAIN_SELECT))
     rows.append(_cancel_row())
 
     return _keyboard(*rows)
@@ -311,6 +356,7 @@ def confirm_keyboard() -> InlineKeyboard:
     return _keyboard(
         [_button("🎯 지금 검색 시작", STEP_CONFIRM, "Y")],
         [_button("⏰ 시작 시각 예약", STEP_CONFIRM, CONFIRM_SCHEDULE)],
+        _back_row(STEP_CONFIRM),
         [_button("❌ 취소", STEP_CONFIRM, "N")],
     )
 
@@ -348,7 +394,7 @@ def schedule_keyboard(now: datetime | None = None) -> InlineKeyboard:
         relative,
         *_rows(clock_times, 3),
         [_manual_button(STEP_SCHEDULE)],
-        [_button("◀️ 뒤로", STEP_SCHEDULE, SCHEDULE_BACK)],
+        _back_row(STEP_SCHEDULE),
         _cancel_row(),
     )
 

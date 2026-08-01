@@ -27,6 +27,7 @@ from korail_bot.services import (
     TelegramPoller,
     TelegramService,
 )
+from korail_bot.startup import publish_command_menus
 from korail_bot.storage.redis import RedisStorage
 from korail_bot.utils.logger import LoggerFactory, get_logger
 
@@ -137,25 +138,11 @@ logger.info("=" * 60)
 if not is_running_from_reloader():
     reservation_service.reconcile_after_restart()
 
-    # Publish the command menu. Best effort: Telegram being unreachable at
-    # startup means the menu keeps whatever it had, which is not a reason to
-    # refuse to start a bot whose searches run over a different connection.
-    from korail_bot.telegramBot.messages import Messages
-
-    if telegram_service.set_my_commands(Messages.PUBLIC_COMMANDS):
-        logger.info("Command menu published to Telegram")
-    else:
-        logger.warning("Could not publish the command menu - the previous one stays in place")
-
-    # Developer chats get a list of their own, carrying the operator's tools
-    # as well. Republished on every start rather than only when the mode is
-    # claimed: the list grows with the bot, and a chat that claimed developer
-    # mode two releases ago should not be left with the menu of that release.
-    for operator in storage.get_all_developers():
-        if telegram_service.set_my_commands(Messages.DEVELOPER_COMMANDS, chat_id=operator):
-            logger.info(f"Operator command menu published for chat_id={operator}")
-        else:
-            logger.warning(f"Could not publish the operator menu for chat_id={operator}")
+    # Publish the command menu, for everyone and for the operators. Best
+    # effort: Telegram being unreachable at startup means the menus keep what
+    # they had, which is not a reason to refuse to start a bot whose searches
+    # run over a different connection.
+    publish_command_menus(storage, telegram_service)
 
     # Whoever runs the server updates it; the people using it find out by
     # noticing that something moved. Told once, on the start after a version

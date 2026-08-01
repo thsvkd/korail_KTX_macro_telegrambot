@@ -31,7 +31,7 @@
 
 - **텔레그램 봇 토큰** — 텔레그램에서 [@BotFather](https://t.me/BotFather) 에게 `/newbot` 을 보내 봇을 만들면 토큰을 받습니다.
 - **코레일 회원 계정** — 봇이 사용자의 휴대전화번호와 비밀번호로 코레일에 로그인합니다. 미리 가입되어 있어야 합니다.
-- **Docker** — 로컬 Redis(`dev-redis.sh`)와 통합·E2E 테스트(testcontainers)에 필요합니다.
+- **Docker** — 로컬 Redis(`scripts/run.sh redis`)와 통합·E2E 테스트(testcontainers)에 필요합니다.
 - **uv** — 아래 첫 명령으로 설치합니다. Python 3.13 은 uv 가 알아서 받아옵니다.
 
 ### 설치와 실행
@@ -50,7 +50,7 @@ cd korail_KTX_macro_telegrambot
 # .env 에 BOTTOKEN 입력
 
 # 개발용 Redis 기동 (Redis 가 없으면 run.sh 가 기동을 거부합니다)
-./scripts/dev-redis.sh
+./scripts/run.sh redis
 
 # 실행 (기본값인 폴링 모드는 공인 IP·HTTPS 없이 바로 동작합니다)
 ./scripts/run.sh
@@ -285,28 +285,16 @@ cd korail_KTX_macro_telegrambot
 ## 설정법
 
 로컬 개발(macOS/Linux) 절차는 위 [빠른 시작](#설치와-실행)과 같습니다 —
-`setup.sh` → `.env` 에 `BOTTOKEN` 입력 → `dev-redis.sh` → `run.sh`.
+`setup.sh` → `.env` 에 `BOTTOKEN` 입력 → `run.sh redis` → `run.sh`.
 
-### 업데이트 수신 방식 (`RECEIVE_MODE`)
+### Telegram 업데이트 수신
 
-| 값 | 동작 | 언제 |
-|----|------|------|
-| `polling` (기본) | 봇이 텔레그램에 직접 업데이트를 요청 | 공유기 뒤 라즈베리파이, 로컬 개발 등 외부에서 접근할 주소가 없을 때 |
-| `webhook` | 텔레그램이 공개 HTTPS 엔드포인트로 전달 | 도메인과 인증서가 준비된 배포 환경 |
-
-웹훅 모드일 때만 `TELEGRAM_WEBHOOK_SECRET` 과 웹훅 등록이 필요합니다.
-
-```bash
-# .env 에 RECEIVE_MODE=webhook 설정 후
-./scripts/set-webhook.sh https://your.domain/telebot
-```
-
-봇 토큰 하나는 소비자를 하나만 가질 수 있습니다. 폴링은 시작할 때 등록된
-웹훅을 해제하며, 같은 토큰으로 두 인스턴스를 띄우면 텔레그램이 409 를
-돌려줍니다.
+봇은 long polling으로 Telegram 업데이트를 받습니다. 공개 주소, HTTPS 인증서,
+포트포워딩은 필요 없습니다. 시작할 때 과거에 등록된 webhook을 해제하며, 같은
+토큰으로 두 인스턴스를 띄우면 Telegram이 409를 돌려줍니다.
 
 > compose 의 Redis 는 보안상 호스트에 포트를 열지 않습니다. 앱을 호스트에서
-> 직접 실행할 때는 `dev-redis.sh` 가 띄우는 127.0.0.1 전용 인스턴스를
+> 직접 실행할 때는 `run.sh redis`가 띄우는 127.0.0.1 전용 인스턴스를
 > 사용하세요.
 
 **사용 가능한 명령어:** `make help` 또는 [scripts/README.md](scripts/README.md)
@@ -317,8 +305,8 @@ cd korail_KTX_macro_telegrambot
 - `make stop` / `./scripts/run.sh --stop` - 정지
 - `make status` / `./scripts/status.sh` - 상태 확인 (`logs [N] [-f]` 로 로그만)
 - `make test` / `./scripts/test.sh` - 테스트 실행
-- `make secrets` / `./scripts/gen-secrets.sh` - 시크릿 발급 및 로테이션
-- `make security-check` / `./scripts/security-check.sh` - 설정 보안 점검
+- `make secrets` / `./scripts/setup.sh secrets` - 시크릿 발급 및 로테이션
+- `make security-check` / `./scripts/setup.sh check` - 설정 보안 점검
 - `make logs` / `./scripts/status.sh logs -f` - 데몬 로그 따라가기
 - `make up` / `down` / `docker-logs` - docker compose 스택 조작
 
@@ -326,10 +314,10 @@ cd korail_KTX_macro_telegrambot
 
 ```bash
 # 1. Docker 이미지 빌드 (uv.lock 에서 바로 설치하므로 사전 생성 단계가 없습니다)
-./scripts/docker-build.sh
+./scripts/deploy.sh build
 
 # 2. .env 준비 후 스택 기동 (앱 + Redis)
-./scripts/docker-up.sh
+./scripts/deploy.sh up
 ```
 
 이미지는 멀티 스테이지로 빌드되며, 런타임 스테이지에는 `.venv` 만 들어갑니다
@@ -339,15 +327,13 @@ waitress 이고, 폴러가 중복 기동되지 않도록 의도적으로 단일 
 
 `docker-compose.yml` 은 Redis 를 호스트로 노출하지 않고 `--requirepass` 로
 띄웁니다. 따라서 `.env` 에 `REDIS_PASSWORD` 가 반드시 있어야 합니다
-(`./scripts/gen-secrets.sh` 가 채워줍니다).
+(`./scripts/setup.sh secrets` 가 채워줍니다).
 
 ### 환경변수
 
 | 변수명 | 필수 | 설명 |
 |--------|------|------|
 | `BOTTOKEN` | ✅ | 텔레그램 봇 토큰 |
-| `RECEIVE_MODE` | ❌ | 업데이트 수신 방식. `polling`(기본) 또는 `webhook` |
-| `TELEGRAM_WEBHOOK_SECRET` | ⚠️ | 웹훅 인증용 시크릿. 웹훅 모드에서는 없으면 앱이 기동하지 않습니다 |
 | `SESSION_SECRET` | ⚠️ | 코레일 로그인 정보 암호화 키. 없으면 임시 키를 쓰며 재시작 시 세션이 무효화됩니다 |
 | `REDIS_PASSWORD` | ⚠️ | Redis AUTH 비밀번호. docker compose 사용 시 필수 |
 | `ADMIN_PASSWORD` | ❌ | 관리자 명령 비밀번호. 미설정 시 관리자 명령 전체 비활성화. **코레일 비밀번호와 달라야 합니다** |
@@ -383,11 +369,9 @@ waitress 이고, 폴러가 중복 기동되지 않도록 의도적으로 단일 
 
 ## 보안
 
-- **웹훅 인증**: 웹훅 모드에서 `/telebot` POST 는 Telegram 이 보내는
-  `X-Telegram-Bot-Api-Secret-Token` 헤더를 검증합니다. 시크릿을 바꾸면
-  `./scripts/set-webhook.sh` 로 재등록해야 합니다. 폴링 모드에서는 업데이트가
-  우리가 연 아웃바운드 연결로만 들어오므로 이 경로가 아예 쓰이지 않습니다.
-- **내부 콜백**: 백그라운드 예약 프로세스가 쓰는 `/telebot` GET 과
+- **Telegram 수신**: 업데이트는 long polling 아웃바운드 연결로만 받으며 앱의
+  HTTP 포트를 외부에 공개하지 않습니다.
+- **내부 콜백**: 백그라운드 예약 프로세스가 쓰는 `/reservation-callback`과
   `/check_payment` 는 루프백 주소 + 프로세스 시작 시 생성되는 토큰을 함께
   요구합니다.
 - **로그인 정보**: 코레일 비밀번호는 Redis 에 암호화되어 저장되고, 예약
@@ -427,7 +411,7 @@ waitress 이고, 폴러가 중복 기동되지 않도록 의도적으로 단일 
   사는 검색은 예매에 성공해도 알릴 곳이 없어 결제 없이 취소됩니다. 정리를
   거부하는 검색은 `SIGKILL` 로 확실히 종료합니다. Redis 의 기록은 남겨두므로
   다음 기동에서 위 재시작 복구가 그대로 이어받습니다.
-- 배포 전 `./scripts/security-check.sh` 로 설정을 점검하세요.
+- 배포 전 `./scripts/setup.sh check` 로 설정을 점검하세요.
 
 ## 개발 워크플로우
 

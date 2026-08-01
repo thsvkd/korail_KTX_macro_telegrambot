@@ -37,7 +37,7 @@ tests/
 │   └── test_search_process_shutdown.py    # Child process shutdown (4)
 ├── integration/                           # Needs Redis (testcontainers)
 │   ├── test_dead_search.py                # Stalled search watchdog (25)
-│   ├── test_webhook.py                    # Webhook handling (22)
+│   ├── test_reservation_callback.py       # Reservation callback handling
 │   ├── test_conversation_handler.py       # Conversation flow (19)
 │   ├── test_storage_scheduled_search.py   # Scheduled search storage (15)
 │   ├── test_payment_reminder.py           # Payment reminders (11)
@@ -211,17 +211,14 @@ Tests the complete multi-step conversation flow:
 - DateTime serialization through Redis
 - Time-based tests using `freezegun`
 
-#### Webhook Tests (15 tests)
-**File: `tests/integration/test_webhook.py`**
+#### Reservation Callback Tests
+**File: `tests/integration/test_reservation_callback.py`**
 
-- POST: Command routing (/start, /cancel, /status, etc.)
-- POST: Payment confirmation messages
-- POST: Admin authentication flow
-- POST: Conversation message routing
-- POST: Ignoring edited messages and chat member updates
-- GET: Callback handling (success, failure, partial)
-- GET: Multi-reservation callbacks
-- Error handling for malformed requests
+- Successful, failed, and partial reservation results
+- Payment reminder startup
+- Session reset after completion
+- Missing parameter handling
+- Loopback address and per-run token authentication
 
 ### E2E Tests (7 tests)
 
@@ -301,7 +298,7 @@ Current coverage focuses on:
 ✅ **Conversation Flow** - All state transitions
 ✅ **Reservation Management** - Process lifecycle
 ✅ **Payment Reminders** - Timing and timeouts
-✅ **Webhook Handling** - Request routing
+✅ **Long Polling and Internal Callbacks** - Update routing and reservation results
 ✅ **E2E Flows** - Complete user journeys
 
 ## Running Tests in CI/CD

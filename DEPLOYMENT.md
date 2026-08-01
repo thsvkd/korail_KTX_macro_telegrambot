@@ -46,14 +46,12 @@ wget https://raw.githubusercontent.com/thsvkd/korail_KTX_macro_telegrambot/maste
 cd ~/korail_bot
 
 # 시크릿 생성 (로컬 저장소에서 실행 후 값을 복사)
-./scripts/gen-secrets.sh --print
+./scripts/setup.sh secrets --print
 
 # .env 파일 생성
 cat > .env << 'EOF'
 BOTTOKEN=your_telegram_bot_token
 
-# 웹훅 인증 - 필수. 없으면 앱이 기동하지 않습니다.
-TELEGRAM_WEBHOOK_SECRET=generated_value
 # 코레일 로그인 정보 암호화 키
 SESSION_SECRET=generated_value
 # Redis AUTH - docker compose 가 --requirepass 로 기동합니다
@@ -77,18 +75,11 @@ EOF
 chmod 600 .env
 ```
 
-### 5. 텔레그램 웹훅 등록
+### 5. Telegram 수신 확인
 
-`TELEGRAM_WEBHOOK_SECRET` 과 함께 등록해야 앱이 요청을 신뢰합니다.
-시크릿을 바꿀 때마다 다시 등록해야 합니다.
-
-```bash
-# 로컬 저장소에서 (.env 의 값을 사용)
-./scripts/set-webhook.sh https://your.domain/telebot
-
-# 확인
-./scripts/set-webhook.sh --info
-```
+Telegram 업데이트는 long polling으로 받으므로 도메인, HTTPS 인증서, webhook
+등록이 필요하지 않습니다. 컨테이너 로그에서 `Telegram poller started`를
+확인하면 됩니다.
 
 ---
 
@@ -119,7 +110,7 @@ cd ~/korail_bot
 
 # 최신 소스로 이미지 재빌드 (기본 태그 korailbot:local)
 git pull
-./scripts/docker-build.sh
+./scripts/deploy.sh build
 
 # 컨테이너 재시작
 docker compose down
@@ -222,7 +213,7 @@ docker compose down -v
 ```bash
 # 최신 소스로 이미지 재빌드
 git pull
-./scripts/docker-build.sh
+./scripts/deploy.sh build
 
 # 기존 컨테이너 삭제 후 재시작
 docker compose up -d --force-recreate
@@ -296,7 +287,7 @@ ls -la .env
 
 ```bash
 # 값 생성
-./scripts/gen-secrets.sh
+./scripts/setup.sh secrets
 ```
 
 ### 설정 점검
@@ -305,7 +296,7 @@ ls -la .env
 여부를 검사합니다.
 
 ```bash
-./scripts/security-check.sh
+./scripts/setup.sh check
 ```
 
 ### GitHub Actions Secrets
@@ -315,7 +306,6 @@ ls -la .env
 | Secret | 설명 |
 | --- | --- |
 | `TELEGRAM_BOTTOKEN` | 봇 토큰 |
-| `TELEGRAM_WEBHOOK_SECRET` | 웹훅 시크릿 |
 | `SESSION_SECRET` | 자격증명 암호화 키 |
 | `ADMIN_COMMAND_PASSWORD` | 관리자 명령 비밀번호 (코레일 비밀번호와 별개) |
 | `REDIS_PASSWORD` | Redis AUTH |
@@ -372,7 +362,7 @@ sudo systemctl restart docker
 
 문제 발생 시:
 1. 로그 확인: `docker compose logs -f`
-2. Redis 상태: `./scripts/redis-cli.sh PING` (compose 의 Redis 는 `--requirepass`
+2. Redis 상태: `./scripts/status.sh redis PING` (compose 의 Redis 는 `--requirepass`
    로 뜨므로 인증 없이 `redis-cli PING` 을 보내면 실패합니다)
 3. 제보: [GitHub Issues](https://github.com/thsvkd/korail_KTX_macro_telegrambot/issues)
    에 올려주세요. 무엇을 붙이고 무엇을 지워야 하는지는

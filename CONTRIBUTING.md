@@ -27,7 +27,7 @@ uv run pre-commit install
 ```
 
 `setup.sh` 는 `.env.example` 을 `.env` 로 복사하고(권한 600), 비어 있는 시크릿을
-`scripts/gen-secrets.sh` 로 채우고, `uv sync` 로 `.venv` 를 만듭니다. 이미 `.env`
+`scripts/setup.sh secrets` 로 채우고, `uv sync` 로 `.venv` 를 만듭니다. 이미 `.env`
 가 있으면 건드리지 않습니다.
 
 ### Docker 가 왜 필요한가
@@ -35,7 +35,7 @@ uv run pre-commit install
 두 군데에서 필요합니다.
 
 - **로컬 실행**: `scripts/run.sh` 는 Redis 에 못 닿으면 그 자리에서 종료합니다.
-  개발용 Redis 는 `./scripts/dev-redis.sh` (== `make dev-redis`) 가 컨테이너로
+  개발용 Redis 는 `./scripts/run.sh redis` (== `make dev-redis`) 가 컨테이너로
   띄웁니다.
 - **테스트**: `tests/integration` 과 `tests/e2e` 는 `tests/conftest.py` 가
   testcontainers 로 일회용 Redis 컨테이너를 띄워서 돌립니다. Docker 데몬이 없으면
@@ -97,7 +97,7 @@ make typecheck  # mypy
 mypy 가 실패해도 CI 는 초록색입니다. 현재 클린 체크아웃에서
 `make typecheck` 를 돌리면 **12개 파일에서 55개 오류**가 나옵니다(대부분
 `str | None` 이 `int` 파라미터로 들어가는 유형). 오류는
-`handlers/conversation_handler.py` 22개, `api/telegram_webhook.py` 18개에 몰려
+`handlers/conversation_handler.py`와 `api/reservation_callback.py`에 몰려
 있고 나머지 25개 소스 파일은 이미 깨끗합니다.
 
 즉, `make typecheck` 에서 오류가 보인다고 해서 당신이 깬 것이 아닙니다. 대신
@@ -185,8 +185,7 @@ fork PR 에는 시크릿이 주입되지 않고 `GITHUB_TOKEN` 도 읽기 전용
 제보할 때 있으면 좋은 정보:
 
 - 무엇을 했고 무엇을 기대했고 실제로 무엇이 일어났는지
-- 실행 모드(`RECEIVE_MODE=polling` / `webhook`)와 실행 방식(로컬 `run.sh` /
-  Docker)
+- 실행 방식(로컬 `run.sh` / Docker)
 - `make status` 결과, 그리고 관련 로그 몇 줄
 
 로그를 붙일 때는 **전화번호, 텔레그램 chat_id, 코레일 계정 정보를 지우고**

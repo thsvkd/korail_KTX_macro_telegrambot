@@ -196,7 +196,12 @@ class CommandHandler:
         secret = settings.ADMIN_MAGIC_STRING
         if not secret or not text:
             return False
-        if not hmac.compare_digest(text.strip(), secret):
+        # Compared as bytes because compare_digest rejects str inputs
+        # containing non-ASCII characters. Every message typed into the bot
+        # reaches this, station names included, so a str comparison here
+        # raises TypeError on the first Korean word anyone types and takes the
+        # whole update with it - the message simply goes unanswered.
+        if not hmac.compare_digest(text.strip().encode("utf-8"), secret.encode("utf-8")):
             return False
 
         if self.storage.is_developer(chat_id):

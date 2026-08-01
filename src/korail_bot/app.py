@@ -15,7 +15,7 @@ from flask_restful import Api
 from werkzeug.serving import is_running_from_reloader
 
 from korail_bot import __version__
-from korail_bot.api import PaymentCheckAPI, TelegramWebhook
+from korail_bot.api import PaymentCheckAPI, ReservationCallbackAPI
 from korail_bot.config.settings import settings
 from korail_bot.handlers import TelegramUpdateProcessor
 from korail_bot.services import (
@@ -75,12 +75,11 @@ search_watchdog_service = SearchWatchdogService(reservation_service)
 
 # Configure API resources with dependency injection
 api.add_resource(
-    TelegramWebhook,
-    "/telebot",
+    ReservationCallbackAPI,
+    "/reservation-callback",
     resource_class_kwargs={
         "storage": storage,
         "telegram_service": telegram_service,
-        "reservation_service": reservation_service,
         "payment_reminder_service": payment_reminder_service,
     },
 )
@@ -90,7 +89,7 @@ api.add_resource(PaymentCheckAPI, "/check_payment", resource_class_kwargs={"stor
 logger.info("=" * 60)
 logger.info(f"Korail KTX Telegram Bot v{__version__} - Redis Version")
 logger.info("=" * 60)
-logger.info(f"Receive mode: {settings.RECEIVE_MODE}")
+logger.info("Telegram updates: long polling")
 logger.info(f"Flask host: {settings.FLASK_HOST}")
 logger.info(f"Flask port: {settings.FLASK_PORT}")
 logger.info(f"Debug mode: {settings.FLASK_DEBUG}")
@@ -108,10 +107,7 @@ else:
     logger.info(f"Search interval: {settings.KORAIL_SEARCH_INTERVAL}s (fixed)")
 logger.info(f"Payment timeout: {settings.PAYMENT_TIMEOUT_MINUTES}min")
 logger.info(f"Reminder interval: {settings.PAYMENT_REMINDER_INTERVAL_SECONDS}s")
-if settings.RECEIVE_MODE == "webhook":
-    logger.info("Webhook secret: configured")  # validate() guarantees this
-else:
-    logger.info("Updates: pulled with getUpdates (no public endpoint needed)")
+logger.info("Public Telegram endpoint: disabled")
 logger.info(f"Admin commands: {'enabled' if settings.ADMIN_PASSWORD else 'disabled'}")
 logger.info(f"Developer mode: {'enabled' if settings.ADMIN_MAGIC_STRING else 'disabled'}")
 logger.info(
@@ -125,9 +121,8 @@ logger.info(
 logger.info(f"Resume on restart: {'enabled' if settings.RESUME_ON_RESTART else 'disabled'}")
 logger.info("=" * 60)
 
-# In polling mode the bot pulls its own updates instead of waiting for
-# Telegram to reach us. Flask still runs either way: the background
-# reservation processes report their results over loopback to /telebot and
+# The bot pulls updates from Telegram. Flask remains for background reservation
+# processes to report results over loopback to /reservation-callback and
 # /check_payment.
 #
 # The Flask reloader executes this module in two processes, which would give
@@ -165,7 +160,7 @@ if not is_running_from_reloader():
     search_watchdog_service.start()
 
 poller = None
-if settings.RECEIVE_MODE == "polling" and not is_running_from_reloader():
+if not is_running_from_reloader():
     poller = TelegramPoller(
         settings.TELEGRAM_BOT_TOKEN,
         TelegramUpdateProcessor(

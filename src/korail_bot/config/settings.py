@@ -51,23 +51,9 @@ def _internal_callback_token() -> str:
 class Settings:
     """Application settings loaded from environment variables."""
 
-    # How the bot receives updates from Telegram.
-    #
-    # 'polling' pulls updates with getUpdates and therefore works on a host
-    # with no public inbound address (a Raspberry Pi behind a router).
-    # 'webhook' requires Telegram to reach a public HTTPS endpoint.
-    RECEIVE_MODE: str = os.environ.get("RECEIVE_MODE", "polling").strip().lower()
-    RECEIVE_MODES: tuple[str, ...] = ("polling", "webhook")
-
     # Telegram Bot Configuration
     TELEGRAM_BOT_TOKEN: str = os.environ.get("BOTTOKEN", "")
     TELEGRAM_API_BASE_URL: str = "https://api.telegram.org/bot{token}"
-    # Shared secret sent by Telegram as the X-Telegram-Bot-Api-Secret-Token
-    # header. Register it with scripts/set-webhook.sh. Only meaningful in
-    # webhook mode - polling updates arrive over an outbound connection we
-    # opened ourselves.
-    TELEGRAM_WEBHOOK_SECRET: str = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
-
     # Long-poll parameters. The HTTP read timeout must exceed the long-poll
     # timeout, otherwise every idle poll would look like a network failure.
     TELEGRAM_POLL_TIMEOUT: int = 30
@@ -181,12 +167,9 @@ class Settings:
     PENDING_INPUT_TTL_SECONDS: int = int(os.environ.get("PENDING_INPUT_TTL_SECONDS", "300"))
 
     # Flask Configuration
-    # In polling mode the only caller of the HTTP API is the background
-    # reservation process on loopback, so binding to every interface would
-    # expose the app for nothing. An explicit FLASK_HOST still wins.
-    FLASK_HOST: str = os.environ.get(
-        "FLASK_HOST", "127.0.0.1" if RECEIVE_MODE == "polling" else "0.0.0.0"
-    )
+    # Only background reservation processes call the HTTP endpoints, so the
+    # default stays on loopback. An explicit override still wins.
+    FLASK_HOST: str = os.environ.get("FLASK_HOST", "127.0.0.1")
     FLASK_PORT: int = int(os.environ.get("FLASK_PORT", "8080"))
     # Defaults to False: the Werkzeug debugger is a remote code execution
     # surface and must never be enabled on a reachable deployment.
@@ -334,23 +317,6 @@ class Settings:
         if not cls.TELEGRAM_BOT_TOKEN:
             raise ValueError("BOTTOKEN environment variable is required")
 
-        if cls.RECEIVE_MODE not in cls.RECEIVE_MODES:
-            raise ValueError(
-                f"RECEIVE_MODE must be one of "
-                f"{', '.join(cls.RECEIVE_MODES)} (got '{cls.RECEIVE_MODE}')."
-            )
-
-        # Only webhook mode exposes an endpoint that a forged request could
-        # reach; in polling mode the secret protects nothing.
-        if cls.RECEIVE_MODE == "webhook" and not cls.TELEGRAM_WEBHOOK_SECRET:
-            raise ValueError(
-                "TELEGRAM_WEBHOOK_SECRET environment variable is required. "
-                "Without it the /telebot webhook accepts forged updates from "
-                "anyone who can reach it. Generate one with "
-                "'scripts/gen-secrets.sh' and register it with "
-                "'scripts/set-webhook.sh'."
-            )
-
     @classmethod
     def warnings(cls) -> list[str]:
         """Return non-fatal configuration warnings to surface at startup."""
@@ -360,7 +326,7 @@ class Settings:
             messages.append(
                 "SESSION_SECRET is not set - credentials are encrypted with an "
                 "ephemeral key, so stored sessions become unreadable after a "
-                "restart. Generate one with 'scripts/gen-secrets.sh'."
+                "restart. Generate one with 'scripts/setup.sh secrets'."
             )
             if cls.RESUME_ON_RESTART:
                 messages.append(

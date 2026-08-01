@@ -1,80 +1,43 @@
-"""Telegram webhook API endpoint."""
+"""Loopback callback used by background reservation processes."""
 
 from flask import make_response, request
 from flask_restful import Resource
 
-from korail_bot.api.auth import verify_internal_request, verify_telegram_request
-from korail_bot.handlers import TelegramUpdateProcessor
-from korail_bot.services import PaymentReminderService, ReservationService, TelegramService
+from korail_bot.api.auth import verify_internal_request
+from korail_bot.services import (
+    MultiReservationReminderService,
+    PaymentReminderService,
+    TelegramService,
+)
 from korail_bot.storage.base import StorageInterface
 from korail_bot.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class TelegramWebhook(Resource):
-    """
-    Flask-RESTful resource for handling Telegram webhook callbacks.
-
-    This replaces the old Index class from telebotApiHandler.py
-    """
+class ReservationCallbackAPI(Resource):
+    """Accept reservation results from this app's background processes."""
 
     def __init__(
         self,
         storage: StorageInterface,
         telegram_service: TelegramService,
-        reservation_service: ReservationService,
         payment_reminder_service: PaymentReminderService,
         **kwargs,
     ):
         """
-        Initialize webhook handler.
+        Initialize the internal callback handler.
 
         Args:
             storage: Storage interface
             telegram_service: Telegram messaging service
-            reservation_service: Reservation service
             payment_reminder_service: Payment reminder service
         """
         super().__init__(**kwargs)
         self.storage = storage
         self.telegram = telegram_service
-        self.reservation = reservation_service
         self.payment_reminder = payment_reminder_service
-
-        # The routing itself is shared with the poller, so it lives outside
-        # this resource and knows nothing about Flask.
-        self.processor = TelegramUpdateProcessor(
-            storage, telegram_service, reservation_service, payment_reminder_service
-        )
-        # The GET callback needs the same reminder service instance the
-        # processor uses, so that its thread bookkeeping stays consistent.
-        self.multi_reminder = self.processor.multi_reminder
-
-    def post(self):
-        """
-        Handle POST request from Telegram webhook.
-
-        This is called when users send messages to the bot.
-        """
-        # Reject anything that cannot prove it came from Telegram, otherwise
-        # anyone reaching this port could impersonate any chat_id.
-        if not verify_telegram_request():
-            return make_response("Forbidden", 403)
-
-        try:
-            update = request.json
-        except Exception as e:
-            # A body we cannot parse will not become parseable on a retry, so
-            # acknowledge it instead of making Telegram resend it forever.
-            logger.error(f"Malformed webhook body: {e}")
-            return make_response("OK")
-
-        self.processor.process(update)
-
-        # Always OK: Telegram retries anything else, and a retry cannot fix a
-        # failure that happened while handling the update.
-        return make_response("OK")
+        self.multi_reminder = MultiReservationReminderService(storage, telegram_service)
 
     def get(self):
         """
@@ -144,7 +107,7 @@ class TelegramWebhook(Resource):
                     self.multi_reminder.start_reminders(chat_id)
 
                 # Message already sent above, no further action needed
-                # User will send payment confirmation which will be handled by POST webhook
+                # The poller handles the user's payment confirmation.
                 return make_response("OK")
 
             # If reservation successful (status == 0)

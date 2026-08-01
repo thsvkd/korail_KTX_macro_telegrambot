@@ -47,7 +47,6 @@ def pytest_configure(config):
     # Secrets the application expects. Set before any project module is
     # imported so that korail_bot.config.settings picks them up.
     os.environ.setdefault("BOTTOKEN", "test-bot-token")
-    os.environ.setdefault("TELEGRAM_WEBHOOK_SECRET", "test-webhook-secret")
     os.environ.setdefault("SESSION_SECRET", "test-session-secret")
     os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password")
 

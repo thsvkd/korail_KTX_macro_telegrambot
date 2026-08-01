@@ -49,8 +49,6 @@ WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 
 USER app
-EXPOSE 8080
-
 # waitress rather than the Flask development server, and deliberately a
 # single process: korail_bot.app starts the Telegram poller and the registry
 # of running search processes at import time, so a forking server with
@@ -62,6 +60,6 @@ EXPOSE 8080
 # shutdown handling in korail_bot.app rather than a shell that ignores it.
 CMD ["sh", "-c", \
      "exec waitress-serve \
-        --listen=${FLASK_HOST:-0.0.0.0}:${FLASK_PORT:-8080} \
+        --listen=${FLASK_HOST:-127.0.0.1}:${FLASK_PORT:-8080} \
         --threads=${WAITRESS_THREADS:-8} \
         korail_bot.app:application"]

@@ -16,10 +16,9 @@ class TelegramPoller:
     """
     Pulls updates from the Telegram Bot API with getUpdates.
 
-    This is the alternative to a webhook for hosts without a public inbound
-    address (a Raspberry Pi behind a router): every connection is outbound.
-    Updates are handed to the same processor the webhook resource uses, so
-    both receive modes behave identically.
+    Every connection is outbound, so this works on a Raspberry Pi behind a
+    router without a public address. Updates are handed to the transport-free
+    processor used by the conversation and command tests.
     """
 
     # A failing Telegram API is retried forever, but slowly: the bot is
@@ -171,8 +170,7 @@ class TelegramPoller:
                 "getUpdates was refused with 409 Conflict: another poller or "
                 "a webhook is already consuming this bot's updates. Telegram "
                 "allows exactly one consumer per bot token - stop the other "
-                "instance, or unregister the webhook with "
-                "'scripts/set-webhook.sh --delete'."
+                "instance. Startup removes a registered webhook automatically."
             )
             return False, []
 

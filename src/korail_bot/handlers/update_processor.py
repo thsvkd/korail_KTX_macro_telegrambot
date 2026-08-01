@@ -1,9 +1,8 @@
 """
 Routing of a single Telegram update, independent of how it was received.
 
-Webhook and polling deliver exactly the same update objects, so the routing
-lives here rather than in the Flask resource: TelegramWebhook.post() hands
-over request.json, TelegramPoller hands over each getUpdates entry.
+The polling adapter hands each Telegram update here so routing is independent
+from transport and straightforward to exercise directly in tests.
 """
 
 from korail_bot.handlers.command_handler import CommandHandler
@@ -67,8 +66,7 @@ class TelegramUpdateProcessor:
         Handle one Telegram update.
 
         Never raises: an update that cannot be processed must not stop the
-        webhook from acknowledging it, nor the poller from reading the next
-        one.
+        the poller from reading the next one.
 
         Args:
             update: Telegram update object as delivered by the Bot API

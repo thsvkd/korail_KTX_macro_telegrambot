@@ -1,13 +1,11 @@
 services:
   app:
-    # Built locally by scripts/docker-build.sh. Set IMAGE_NAME in .env to run
+    # Built locally by scripts/deploy.sh build. Set IMAGE_NAME in .env to run
     # an image you publish yourself instead; there is no shared registry image
     # to pull, on purpose - running a bot that handles Korail logins from an
     # image someone else controls is not a default anyone should inherit.
     image: ${IMAGE_NAME:-korailbot:local}
     container_name: korail_bot
-    ports:
-      - "8000:8080"
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379

@@ -385,57 +385,15 @@ class TestLifecycle:
             poller._thread.join(timeout=5)
 
 
-class TestReceiveModeSettings:
-    """
-    validate() is a classmethod reading class attributes, so the patches go
-    on the class rather than on the settings instance.
-    """
-
-    def test_polling_mode_does_not_require_the_webhook_secret(self):
-        with (
-            patch.object(Settings, "RECEIVE_MODE", "polling"),
-            patch.object(Settings, "TELEGRAM_BOT_TOKEN", "token"),
-            patch.object(Settings, "TELEGRAM_WEBHOOK_SECRET", ""),
-        ):
-            Settings.validate()
-
-    def test_webhook_mode_still_requires_the_webhook_secret(self):
-        with (
-            patch.object(Settings, "RECEIVE_MODE", "webhook"),
-            patch.object(Settings, "TELEGRAM_BOT_TOKEN", "token"),
-            patch.object(Settings, "TELEGRAM_WEBHOOK_SECRET", ""),
-        ):
-            with pytest.raises(ValueError, match="TELEGRAM_WEBHOOK_SECRET"):
-                Settings.validate()
-
-    def test_webhook_mode_accepts_a_configured_secret(self):
-        with (
-            patch.object(Settings, "RECEIVE_MODE", "webhook"),
-            patch.object(Settings, "TELEGRAM_BOT_TOKEN", "token"),
-            patch.object(Settings, "TELEGRAM_WEBHOOK_SECRET", "secret"),
-        ):
-            Settings.validate()
-
-    def test_unknown_receive_mode_is_rejected(self):
-        with (
-            patch.object(Settings, "RECEIVE_MODE", "carrier-pigeon"),
-            patch.object(Settings, "TELEGRAM_BOT_TOKEN", "token"),
-            patch.object(Settings, "TELEGRAM_WEBHOOK_SECRET", "secret"),
-        ):
-            with pytest.raises(ValueError, match="RECEIVE_MODE"):
-                Settings.validate()
-
+class TestSettings:
     def test_missing_bot_token_is_still_rejected(self):
-        with (
-            patch.object(Settings, "RECEIVE_MODE", "polling"),
-            patch.object(Settings, "TELEGRAM_BOT_TOKEN", ""),
-        ):
+        with patch.object(Settings, "TELEGRAM_BOT_TOKEN", ""):
             with pytest.raises(ValueError, match="BOTTOKEN"):
                 Settings.validate()
 
 
 class TestFlaskHostDefault:
-    """The bind address follows the receive mode unless it is set explicitly."""
+    """The internal callback server stays on loopback unless overridden."""
 
     @staticmethod
     def _reload_with(env):
@@ -461,23 +419,13 @@ class TestFlaskHostDefault:
                     os.environ[key] = value
             importlib.reload(korail_bot.config.settings)
 
-    def test_polling_binds_to_loopback(self):
-        host = self._reload_with({"RECEIVE_MODE": "polling", "FLASK_HOST": None})
+    def test_default_binds_to_loopback(self):
+        host = self._reload_with({"FLASK_HOST": None})
 
         assert host == "127.0.0.1"
 
-    def test_webhook_binds_to_every_interface(self):
-        host = self._reload_with({"RECEIVE_MODE": "webhook", "FLASK_HOST": None})
-
-        assert host == "0.0.0.0"
-
     def test_explicit_value_wins(self):
-        host = self._reload_with(
-            {
-                "RECEIVE_MODE": "polling",
-                "FLASK_HOST": "192.0.2.10",
-            }
-        )
+        host = self._reload_with({"FLASK_HOST": "192.0.2.10"})
 
         assert host == "192.0.2.10"
 

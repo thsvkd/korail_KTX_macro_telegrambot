@@ -815,7 +815,7 @@ class BackgroundReservationProcess:
             seat_strategy: Seat allocation strategy used
         """
         try:
-            callback_url = f"{settings.CALLBACK_BASE_URL}/telebot"
+            callback_url = f"{settings.CALLBACK_BASE_URL}/reservation-callback"
             params = {
                 "chatId": self.chat_id,
                 "msg": message,

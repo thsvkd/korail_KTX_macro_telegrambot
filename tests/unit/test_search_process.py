@@ -575,7 +575,7 @@ class TestReportingBackToTheApp(ProcessFixture):
 
     def test_it_proves_it_came_from_inside(self):
         """
-        /telebot is reachable over loopback and takes a chat id and a message.
+        /reservation-callback is reachable over loopback and takes a chat id and a message.
         Without the token any process on the host could send a user anything
         under the bot's name.
         """

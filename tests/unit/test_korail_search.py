@@ -171,7 +171,7 @@ class TestRenewingTheSession:
         service = self.make(login_result=False)
         service._relogin_interval = 1800
 
-        with self.build, patch("korail_bot.services.korail_service.time.time", return_value=1000.0):
+        with self.build, patch("korail_bot.services.rail_service.time.time", return_value=1000.0):
             service._relogin()
 
         assert service._relogin_due_at > 1000.0

@@ -9,6 +9,7 @@ from korail_bot.models import (
     FavouriteSearch,
     MultiReservationStatus,
     OnboardedAccount,
+    Operator,
     PaymentStatus,
     RunningReservation,
     ScheduledSearch,
@@ -101,22 +102,29 @@ class StorageInterface(ABC):
     # Onboarded Account Management
     @abstractmethod
     def save_onboarded_account(self, account: "OnboardedAccount") -> None:
-        """Store the Korail account a chat registered."""
+        """Store the railway account a chat registered."""
         pass
 
     @abstractmethod
-    def get_onboarded_account(self, chat_id: int) -> "OnboardedAccount | None":
-        """Get the account a chat registered."""
+    def get_onboarded_account(
+        self, chat_id: int, operator: "Operator" = Operator.KORAIL
+    ) -> "OnboardedAccount | None":
+        """Get the account a chat registered with one railway."""
+        pass
+
+    @abstractmethod
+    def get_onboarded_operators(self, chat_id: int) -> list["Operator"]:
+        """Which railways this chat has a registration with."""
         pass
 
     @abstractmethod
     def get_all_onboarded_chat_ids(self) -> list[int]:
-        """Every chat that has registered a Korail account."""
+        """Every chat that has registered with either railway."""
         pass
 
     @abstractmethod
-    def delete_onboarded_account(self, chat_id: int) -> None:
-        """Forget a registered account."""
+    def delete_onboarded_account(self, chat_id: int, operator: "Operator | None" = None) -> None:
+        """Forget a registered account; None forgets every railway's."""
         pass
 
     # Trials, requests and approvals

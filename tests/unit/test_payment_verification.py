@@ -122,7 +122,13 @@ class TestWatchPayment:
 
         self.process = BackgroundReservationProcess.__new__(BackgroundReservationProcess)
         self.process.chat_id = 12345
-        self.process.korail = Mock()
+        self.process.rail = Mock()
+        # Reading a reservation is not faked: which field holds the
+        # reservation number, and which the payment deadline, is the
+        # operator-specific translation this process depends on, and a Mock
+        # would let a wrong reading through.
+        self.process.rail.reservation_id = KorailService.reservation_id
+        self.process.rail.payment_due = KorailService.payment_due
         self.process.telegram = Mock()
         self.process.storage = Mock()
         self.process.storage.get_payment_status.return_value = PaymentStatus(
@@ -137,7 +143,7 @@ class TestWatchPayment:
         its deadline, so a stubbed-out sleep with a real clock would leave the
         loop spinning against a deadline that never arrives.
         """
-        self.process.korail.is_reservation_outstanding.side_effect = outstanding_sequence
+        self.process.rail.is_reservation_outstanding.side_effect = outstanding_sequence
         clock = FakeClock(datetime(2026, 7, 30, 1, 46, 48))
         deadline = clock.now() + timedelta(minutes=minutes_left)
 
@@ -162,7 +168,7 @@ class TestWatchPayment:
     def test_the_watch_stops_as_soon_as_it_knows(self):
         self.watch([False, True, True])
 
-        assert self.process.korail.is_reservation_outstanding.call_count == 1
+        assert self.process.rail.is_reservation_outstanding.call_count == 1
 
     def test_a_reservation_still_listed_at_the_deadline_is_reported_as_lost(self):
         """
@@ -200,7 +206,7 @@ class TestWatchPayment:
         self.watch([None, None, False])
 
         assert Messages.PAYMENT_VERIFIED in self.sent()
-        assert self.process.korail.is_reservation_outstanding.call_count == 3
+        assert self.process.rail.is_reservation_outstanding.call_count == 3
 
     def test_the_reminder_flag_is_cleared_either_way(self):
         """
@@ -236,6 +242,10 @@ class TestPaymentDeadline:
         from korail_bot.telegramBot.telebotBackProcess import BackgroundReservationProcess
 
         self.process = BackgroundReservationProcess.__new__(BackgroundReservationProcess)
+        # Which railway's names the deadline is read under. korail2 calls the
+        # fields buy_limit_date/-time; SR calls them something else, and the
+        # service is what knows which.
+        self.process.rail = KorailService()
 
     def test_korails_own_deadline_is_used(self):
         """

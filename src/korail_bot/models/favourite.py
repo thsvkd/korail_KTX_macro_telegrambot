@@ -4,6 +4,8 @@ import secrets
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from korail_bot.models.operator import Operator
+
 #: How long a favourite's id is, in hex characters. It travels in
 #: callback_data, which Telegram caps at 64 bytes after UTF-8 encoding, and it
 #: only has to be unique within one chat's handful of favourites - so this is
@@ -49,7 +51,17 @@ class FavouriteSearch:
     passenger_count: int = 1
     seat_strategy: str = "consecutive"
     seat_strategy_display: str = ""
+    # Which railway the route belongs to. A favourite saved before there were
+    # two is a Korail one, and 수서→부산 means a different search depending on
+    # the answer, so it is saved rather than guessed at when the favourite is
+    # used.
+    operator: str = Operator.KORAIL
     created_at: datetime = field(default_factory=lambda: datetime.now())
+
+    @property
+    def rail_operator(self) -> Operator:
+        """The operator this favourite is for, however it was stored."""
+        return Operator.parse(self.operator)
 
     @classmethod
     def from_train_info(cls, chat_id: int, info: dict, name: str = "") -> "FavouriteSearch":
@@ -84,6 +96,7 @@ class FavouriteSearch:
             passenger_count=int(info.get("passengerCount", 1) or 1),
             seat_strategy=info.get("seatStrategy", "consecutive"),
             seat_strategy_display=info.get("seatStrategyShow", ""),
+            operator=Operator.parse(info.get("operator")),
         )
 
     def as_train_info(self) -> dict:
@@ -105,6 +118,7 @@ class FavouriteSearch:
             "passengerCount": self.passenger_count,
             "seatStrategy": self.seat_strategy,
             "seatStrategyShow": self.seat_strategy_display,
+            "operator": str(self.operator),
         }
 
     @property

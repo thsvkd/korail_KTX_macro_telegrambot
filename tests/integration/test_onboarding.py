@@ -243,10 +243,19 @@ class TestOnboardingCommand:
         assert "계정 등록" in " ".join(_texts(telegram))
         assert storage.get_user_session(CHAT_ID).last_action == UserProgress.STARTED
 
-    def test_it_confirms_before_replacing_an_account(self, commands, storage, telegram):
+    def test_it_confirms_before_replacing_an_account(
+        self, commands, conversation, storage, telegram
+    ):
+        """
+        Asked once the railway is known, not before. Whether there is a
+        registration to replace depends on which one - a chat may be
+        registered with Korail and not with SR.
+        """
         _register(storage)
 
         commands.handle_onboarding(CHAT_ID)
+        conversation.handle_message(CHAT_ID, "Y")
+        conversation.handle_message(CHAT_ID, "korail")
 
         assert "이미 등록된" in " ".join(_texts(telegram))
         assert (
@@ -254,6 +263,26 @@ class TestOnboardingCommand:
             == UserProgress.ONBOARDING_OVERWRITE_PENDING
         )
         # Still there: nothing is destroyed before the user answers.
+        assert storage.get_onboarded_account(CHAT_ID) is not None
+
+    def test_registering_with_one_railway_leaves_the_other_alone(
+        self, commands, conversation, storage, telegram
+    ):
+        """
+        The whole reason the question moved. A Korail registration is not a
+        reason to stop someone registering with SR - and must survive them
+        doing it.
+        """
+        _register(storage)
+
+        commands.handle_onboarding(CHAT_ID)
+        conversation.handle_message(CHAT_ID, "Y")
+        conversation.handle_message(CHAT_ID, "srt")
+
+        # No registration with SR yet, so nothing to confirm - straight to the
+        # number - and the Korail one is untouched.
+        assert "이미 등록된" not in " ".join(_texts(telegram))
+        assert "휴대전화번호" in " ".join(_texts(telegram))
         assert storage.get_onboarded_account(CHAT_ID) is not None
 
     def test_confirming_drops_the_old_account_and_asks_for_a_number(
@@ -277,13 +306,17 @@ class TestOnboardingCommand:
 
         assert storage.get_onboarded_account(CHAT_ID) is not None
 
-    def test_a_developer_chat_is_told_registration_is_pointless(self, commands, storage, telegram):
+    def test_a_developer_chat_is_told_registration_is_pointless_for_that_railway(
+        self, commands, conversation, storage, telegram
+    ):
         storage.set_developer(CHAT_ID, True)
 
         with _operator_account():
             commands.handle_onboarding(CHAT_ID)
+            conversation.handle_message(CHAT_ID, "Y")
+            conversation.handle_message(CHAT_ID, "korail")
 
-        assert "서버에 설정된" in " ".join(_texts(telegram))
+        assert "서버에 설정된 코레일 계정" in " ".join(_texts(telegram))
 
     def test_an_ordinary_chat_registers_even_with_a_server_account(
         self, commands, storage, telegram

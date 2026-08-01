@@ -14,8 +14,12 @@ setup:			## Create .env, generate secrets, install dependencies
 	./scripts/setup.sh
 
 .PHONY: setup-dev
-setup-dev:		## Same, plus a developer chat: magic string + fixed Korail account
+setup-dev:		## Same, plus a developer chat: magic string + fixed railway accounts
 	./scripts/setup.sh --dev
+
+.PHONY: setup-test
+setup-test:		## Create isolated .env.test configuration for a staging bot
+	./scripts/setup.sh --test
 
 .PHONY: install
 install:		## Install dependencies into .venv from uv.lock
@@ -59,6 +63,30 @@ status:			## Show what the application is doing
 dev-redis:		## Start the local development Redis (127.0.0.1:6379)
 	./scripts/run.sh redis
 
+.PHONY: dev-redis-test
+dev-redis-test:	## Start isolated Redis for run.sh --test (127.0.0.1:6380)
+	./scripts/run.sh --test redis
+
+.PHONY: run-test
+run-test:		## Run the isolated test bot on the host
+	./scripts/run.sh --test
+
+.PHONY: daemon-test
+daemon-test:		## Run the isolated test bot in the background
+	./scripts/run.sh --test --daemon
+
+.PHONY: stop-test
+stop-test:		## Stop the host-side test bot only
+	./scripts/run.sh --test --stop
+
+.PHONY: status-test
+status-test:		## Show host-side test bot status
+	./scripts/status.sh --test
+
+.PHONY: logs-test
+logs-test:		## Follow the host-side test bot log
+	./scripts/status.sh logs --test -f
+
 .PHONY: shell
 shell:			## Open a shell with .venv activated
 	uv run --frozen $$SHELL
@@ -67,9 +95,17 @@ shell:			## Open a shell with .venv activated
 secrets:		## Generate any missing secrets in .env
 	./scripts/setup.sh secrets
 
+.PHONY: secrets-test
+secrets-test:	## Generate any missing secrets in .env.test
+	./scripts/setup.sh secrets --test
+
 .PHONY: security-check
 security-check:	## Check the local configuration for security mistakes
 	./scripts/setup.sh check
+
+.PHONY: security-check-test
+security-check-test:	## Check isolated test-bot configuration
+	./scripts/setup.sh check --test
 
 .PHONY: test
 test:			## Run all tests with pytest
@@ -83,13 +119,25 @@ test-unit:		## Run the unit tests only
 build:			## Build Docker Image
 	./scripts/deploy.sh build ${IMAGE_NAME}
 
+.PHONY: build-test
+build-test:		## Build the isolated test bot image
+	./scripts/deploy.sh --test build
+
 .PHONY: up
 up:				## Start the stack with docker compose
 	./scripts/deploy.sh up
 
+.PHONY: up-test
+up-test:		## Start the isolated test bot stack
+	./scripts/deploy.sh --test up
+
 .PHONY: down
 down:			## Stop the stack
 	./scripts/deploy.sh down
+
+.PHONY: down-test
+down-test:		## Stop the isolated test bot stack
+	./scripts/deploy.sh --test down
 
 .PHONY: logs
 logs:			## Follow the daemon's log (scripts/run.sh --daemon)
@@ -98,6 +146,10 @@ logs:			## Follow the daemon's log (scripts/run.sh --daemon)
 .PHONY: docker-logs
 docker-logs:		## Follow the compose stack's logs
 	./scripts/deploy.sh logs
+
+.PHONY: docker-logs-test
+docker-logs-test:	## Follow the isolated test bot logs
+	./scripts/deploy.sh --test logs
 
 .PHONY: publish
 publish:		## Build and publish the Docker image

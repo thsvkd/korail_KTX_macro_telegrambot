@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, StrEnum
 
+from korail_bot.models.operator import Operator
+
 
 @dataclass
 class TrainSearchParams:
@@ -14,6 +16,10 @@ class TrainSearchParams:
     dst_locate: str  # Station name (without '역')
     dep_time: str  # Format: HHMMSS
     max_dep_time: str = "2400"  # Format: HHMM
+    # Which railway this search is against. Defaulted rather than required so
+    # that every search stored before there were two still reads back as what
+    # it was - see Operator.parse.
+    operator: str = Operator.KORAIL
     train_type: str = "TrainType.KTX"  # korail2.TrainType enum as string
     train_type_display: str = "KTX"
     special_option: str = "ReserveOption.GENERAL_FIRST"  # korail2.ReserveOption enum as string
@@ -29,6 +35,11 @@ class TrainSearchParams:
     def watches_specific_trains(self) -> bool:
         """Whether the search is narrowed to a chosen set of trains."""
         return bool(self.train_numbers)
+
+    @property
+    def rail_operator(self) -> Operator:
+        """The operator this search is against, however it was stored."""
+        return Operator.parse(self.operator)
 
     def validate(self) -> tuple[bool, str | None]:
         """
@@ -49,6 +60,16 @@ class TrainSearchParams:
         # Validate time format
         if not self.dep_time[:4].isdigit() or len(self.dep_time) != 6:
             return False, "시간 형식이 올바르지 않습니다 (HHMMSS)"
+
+        # Validate the stations are ones this operator stops at.
+        #
+        # Only SR can be checked here - its list is short, fixed and published
+        # with the client. Korail's is fetched and cached, and lives behind
+        # InputValidator, which is where a Korail search is checked instead.
+        operator = self.rail_operator
+        for station, label in ((self.src_locate, "출발역"), (self.dst_locate, "도착역")):
+            if operator.serves(station) is False:
+                return False, f"{operator.display_name}은(는) {station}에 서지 않습니다 ({label})"
 
         return True, None
 

@@ -15,6 +15,7 @@ from korail_bot.models import (
     FavouriteSearch,
     MultiReservationStatus,
     OnboardedAccount,
+    Operator,
     PaymentStatus,
     RunningReservation,
     ScheduledSearch,
@@ -280,30 +281,58 @@ class RedisStorage(StorageInterface):
 
     # ==================== Onboarded accounts ====================
 
+    @staticmethod
+    def _credentials_key(chat_id: int, operator: Operator) -> str:
+        """
+        Where a chat's registration for one railway lives.
+
+        Korail keeps the key it has always had, so that every registration
+        made before there were two railways is still found where it was put.
+        SR's is qualified, and put *before* the chat id rather than after it,
+        so that the id stays the last segment - which is how the broadcast
+        list reads chats off these keys.
+        """
+        if operator is Operator.SRT:
+            return f"user_credentials:srt:{chat_id}"
+        return f"user_credentials:{chat_id}"
+
     def save_onboarded_account(self, account: OnboardedAccount) -> None:
         """
-        Store the Korail account a chat registered, encrypted.
+        Store the railway account a chat registered, encrypted.
 
         Unlike the resume credentials, this outlives the booking it was
         entered for - that is what registering once buys. It is kept in a key
         of its own rather than on the session, because the session is reset at
         the end of every flow and would take the registration with it.
+
+        One key per railway: registering with SR must not overwrite a Korail
+        registration that is still in use.
         """
-        key = f"user_credentials:{account.chat_id}"
+        operator = account.rail_operator
+        key = self._credentials_key(account.chat_id, operator)
         box = get_secret_box()
         data = json.dumps(
             {
                 "korail_id": box.encrypt(account.korail_id),
                 "korail_pw": box.encrypt(account.korail_pw),
+                "operator": str(operator),
                 "onboarded_at": account.onboarded_at.isoformat(),
             }
         )
         self.redis.set(key, data, ex=settings.CREDENTIAL_TTL_SECONDS)
-        logger.debug(f"Saved onboarded account for chat_id={account.chat_id}")
+        logger.debug(f"Saved {operator} account for chat_id={account.chat_id}")
 
-    def get_onboarded_account(self, chat_id: int) -> OnboardedAccount | None:
+    def get_onboarded_account(
+        self, chat_id: int, operator: Operator = Operator.KORAIL
+    ) -> OnboardedAccount | None:
         """
-        Get the account a chat registered.
+        Get the account a chat registered with one railway.
+
+        Args:
+            chat_id: Telegram chat ID
+            operator: Which railway's registration to read. Defaults to
+                      Korail, which is what every caller meant when there was
+                      only one.
 
         Returns:
             The account, or None when absent or undecryptable. The latter
@@ -311,7 +340,7 @@ class RedisStorage(StorageInterface):
             the chat as not registered - which is the truth, since nothing
             can log in with what cannot be read.
         """
-        data = self.redis.get(f"user_credentials:{chat_id}")
+        data = self.redis.get(self._credentials_key(chat_id, operator))
         if not data:
             return None
 
@@ -322,31 +351,56 @@ class RedisStorage(StorageInterface):
                 chat_id=chat_id,
                 korail_id=box.decrypt(stored["korail_id"]),
                 korail_pw=box.decrypt(stored["korail_pw"]),
+                # Records written before there were two carry no operator,
+                # and every one of them is a Korail registration.
+                operator=Operator.parse(stored.get("operator")),
                 onboarded_at=datetime.fromisoformat(stored["onboarded_at"]),
             )
         except (json.JSONDecodeError, KeyError, ValueError) as e:
             logger.error(f"Could not read the onboarded account for chat_id={chat_id}: {e}")
             return None
 
-    def delete_onboarded_account(self, chat_id: int) -> None:
-        """Forget a registered account."""
-        self.redis.delete(f"user_credentials:{chat_id}")
-        logger.debug(f"Deleted onboarded account for chat_id={chat_id}")
+    def get_onboarded_operators(self, chat_id: int) -> list[Operator]:
+        """Which railways this chat has a registration with."""
+        return [
+            operator
+            for operator in Operator
+            if self.redis.exists(self._credentials_key(chat_id, operator))
+        ]
+
+    def delete_onboarded_account(self, chat_id: int, operator: Operator | None = None) -> None:
+        """
+        Forget a registered account.
+
+        Args:
+            chat_id: Telegram chat ID
+            operator: Which railway to forget. None forgets all of them,
+                      which is what logging out and being blocked both mean -
+                      leaving one behind would be keeping credentials for
+                      someone who asked the bot to let go of them.
+        """
+        operators = list(Operator) if operator is None else [operator]
+        self.redis.delete(*(self._credentials_key(chat_id, each) for each in operators))
+        logger.debug(f"Deleted onboarded account(s) for chat_id={chat_id}: {operators}")
 
     def get_all_onboarded_chat_ids(self) -> list[int]:
         """
-        Every chat that has registered a Korail account.
+        Every chat that has registered with either railway.
 
         Read off the keys rather than by decrypting each record: this exists
         to address people, and a registration whose SESSION_SECRET has moved
-        on is still a person who uses the bot.
+        on is still a person who uses the bot. Deduplicated, because someone
+        registered with both railways is still one person to write to.
         """
         chat_ids = []
         for key in self._scan_keys("user_credentials:*"):
             try:
-                chat_ids.append(int(key.rpartition(":")[2]))
+                chat_id = int(key.rpartition(":")[2])
             except ValueError:
                 logger.warning(f"Skipping a credentials key with no chat id in it: {key!r}")
+                continue
+            if chat_id not in chat_ids:
+                chat_ids.append(chat_id)
         return chat_ids
 
     # ==================== Favourite searches ====================
@@ -376,6 +430,7 @@ class RedisStorage(StorageInterface):
                     "passenger_count": favourite.passenger_count,
                     "seat_strategy": favourite.seat_strategy,
                     "seat_strategy_display": favourite.seat_strategy_display,
+                    "operator": str(favourite.operator),
                     "created_at": favourite.created_at.isoformat(),
                 }
             ),
@@ -463,6 +518,8 @@ class RedisStorage(StorageInterface):
                 passenger_count=int(stored.get("passenger_count", 1)),
                 seat_strategy=stored.get("seat_strategy", "consecutive"),
                 seat_strategy_display=stored.get("seat_strategy_display", ""),
+                # Saved before there were two railways means Korail.
+                operator=Operator.parse(stored.get("operator")),
                 created_at=datetime.fromisoformat(stored["created_at"]),
             )
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
@@ -1087,6 +1144,7 @@ class RedisStorage(StorageInterface):
             "dst_locate": params.dst_locate,
             "dep_time": params.dep_time,
             "max_dep_time": params.max_dep_time,
+            "operator": str(params.operator),
             "train_type": params.train_type,
             "train_type_display": params.train_type_display,
             "special_option": params.special_option,
@@ -1111,6 +1169,9 @@ class RedisStorage(StorageInterface):
             dst_locate=data["dst_locate"],
             dep_time=data["dep_time"],
             max_dep_time=data.get("max_dep_time", defaults.max_dep_time),
+            # Records written before there were two railways carry no operator
+            # and are Korail searches; Operator.parse is what decides that.
+            operator=Operator.parse(data.get("operator")),
             train_type=data.get("train_type", defaults.train_type),
             train_type_display=data.get("train_type_display", defaults.train_type_display),
             special_option=data.get("special_option", defaults.special_option),

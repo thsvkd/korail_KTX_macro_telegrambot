@@ -251,7 +251,13 @@ class TestNothingBehindIt(BackFixture):
 
     @pytest.mark.parametrize(
         "here",
-        [UserProgress.STARTED, UserProgress.START_ACCEPTED, UserProgress.PW_INPUT_SUCCESS],
+        [
+            UserProgress.STARTED,
+            # Which railway is the first question of the flow now; the one
+            # behind it is "shall we begin?", answered by getting here.
+            UserProgress.OPERATOR_INPUT_PENDING,
+            UserProgress.PW_INPUT_SUCCESS,
+        ],
     )
     def test_the_user_is_told_rather_than_ignored(self, here):
         """
@@ -370,6 +376,10 @@ class TestTheTablesAgree:
         appended = {
             UserProgress.TRAIN_SELECT_INPUT_SUCCESS,
             UserProgress.SCHEDULE_INPUT_PENDING,
+            # Its target, OPERATOR_INPUT_PENDING, was appended for the same
+            # reason: it comes first in the conversation and last in the
+            # numbering, because the numbers are stored in Redis.
+            UserProgress.START_ACCEPTED,
         }
         for here, target in ConversationHandler.BACK_TARGETS.items():
             if here in appended:

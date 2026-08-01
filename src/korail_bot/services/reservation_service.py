@@ -8,7 +8,13 @@ import sys
 import time
 
 from korail_bot.config.settings import settings
-from korail_bot.models import DeadSearch, DeathCause, RunningReservation, TrainSearchParams
+from korail_bot.models import (
+    DeadSearch,
+    DeathCause,
+    Operator,
+    RunningReservation,
+    TrainSearchParams,
+)
 from korail_bot.services.telegram_service import MessageTemplates, TelegramService
 from korail_bot.storage.base import StorageInterface
 from korail_bot.utils.logger import get_logger
@@ -85,12 +91,13 @@ class ReservationService:
             if not resumed and not self._may_start(chat_id):
                 return False
 
-            # Every search asks Korail for seats every few seconds, so the
-            # number of them running at once is what decides whether this
-            # server looks like a user or like an attack. A resumed search is
-            # exempt: it was counted when it first started, and refusing to
-            # bring it back after a restart would quietly lose it.
-            if not resumed and not self._under_concurrency_limit(chat_id):
+            # Every search asks its railway for seats every few seconds, so
+            # the count is kept per railway. A resumed search is exempt: it
+            # was counted when it first started, and refusing to bring it back
+            # after a restart would quietly lose it.
+            if not resumed and not self._under_concurrency_limit(
+                chat_id, search_params.rail_operator
+            ):
                 return False
 
             # Credentials are deliberately absent from argv: anything passed on
@@ -112,6 +119,10 @@ class ReservationService:
                 # Not secret, unlike the credentials above - a train number is
                 # public timetable data.
                 ",".join(search_params.train_numbers),
+                # Which railway to search. Last so that the positions before
+                # it keep their meaning, which is what lets a search started
+                # by an older build resume against the new one.
+                str(search_params.operator),
             ]
 
             # Start background process.
@@ -213,14 +224,15 @@ class ReservationService:
             logger.error(f"Failed to start reservation process: {e}")
             return False
 
-    def _under_concurrency_limit(self, chat_id: int) -> bool:
+    def _under_concurrency_limit(self, chat_id: int, operator: Operator = Operator.KORAIL) -> bool:
         """
         Check that one more search would not put the server over the ceiling.
 
-        Korail sees one IP, not one user. Ten approved people searching at
-        once is ten times the request rate from where Korail is standing, and
-        the thing that gets rate limited or blocked is the operator's server -
-        which takes everyone else's searches down with it.
+        Each railway sees one IP, not one user. Korail traffic does not spend
+        SR's allowance, or vice versa, because they are independent services
+        with independent throttling. Within one railway the thing that gets
+        rate limited or blocked is the operator's server, which takes every
+        search against that railway down with it.
 
         Returns:
             True when there is room for another search
@@ -230,7 +242,10 @@ class ReservationService:
             return True
 
         try:
-            running = len(self.storage.get_all_running_reservations())
+            running = sum(
+                reservation.search_params.rail_operator is operator
+                for reservation in self.storage.get_all_running_reservations()
+            )
         except Exception as e:
             # Not a reason to refuse: failing to read the count is a storage
             # problem, and the search is what the user is waiting for.
@@ -241,11 +256,15 @@ class ReservationService:
             return True
 
         logger.warning(
-            f"Refusing a search for chat_id={chat_id}: {running} already running, limit is {limit}"
+            f"Refusing a {operator} search for chat_id={chat_id}: "
+            f"{running} already running, limit is {limit}"
         )
         from korail_bot.telegramBot.messages import Messages
 
-        self.telegram.send_message(chat_id, Messages.SERVER_BUSY.format(limit=limit))
+        self.telegram.send_message(
+            chat_id,
+            Messages.SERVER_BUSY.format(operator=operator.display_name, limit=limit),
+        )
         return False
 
     def _confirm_started(

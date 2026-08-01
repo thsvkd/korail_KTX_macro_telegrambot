@@ -20,8 +20,8 @@ from korail2 import NoResultsError
 
 from korail_bot.services.korail_service import KorailService, SearchUnavailableError
 
-SEARCH = "korail_bot.services.korail_service.time.sleep"
-CLOCK = "korail_bot.services.korail_service.time.time"
+SEARCH = "korail_bot.services.rail_service.time.sleep"
+CLOCK = "korail_bot.services.rail_service.time.time"
 
 
 def make_service(on_status=None, threshold=3):

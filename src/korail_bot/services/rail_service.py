@@ -1,0 +1,739 @@
+"""What every rail operator's search loop has in common.
+
+Korail and SR are two companies with two APIs, but the thing this bot does to
+them is one thing: ask for seats on a train that is sold out, over and over,
+slowly enough not to look like a machine, and reserve the moment one appears.
+That loop - how long to wait, when to re-authenticate, how to tell "sold out"
+from "not answering", what to tell the user while it waits - has nothing to do
+with which company is on the other end.
+
+This module holds that part. What is left for a subclass is small and entirely
+operator-specific: how to log in, how to ask for trains, how to reserve one,
+and how to check whether a reservation has been paid for.
+"""
+
+import random
+import time
+from abc import ABC, abstractmethod
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+
+from korail_bot.config.settings import settings
+from korail_bot.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class SearchProgress:
+    """
+    What a running search can say about itself.
+
+    Facts only. Whether any of it is worth telling the user, and how it should
+    read when it is, belongs to whoever owns the conversation - this class has
+    never known there is one.
+    """
+
+    #: How many times the loop has asked the operator for trains.
+    attempts: int
+    #: Seconds since the search loop began.
+    elapsed_seconds: float
+    #: Failed requests in a row right now. 0 means the operator is answering.
+    failure_streak: int
+
+    @property
+    def healthy(self) -> bool:
+        """Whether the operator is answering at the moment."""
+        return self.failure_streak == 0
+
+
+class DuplicateReservationError(Exception):
+    """Raised when attempting to reserve a train that's already reserved."""
+
+    pass
+
+
+class SearchUnavailableError(Exception):
+    """
+    Raised when a search could not be carried out at all.
+
+    Distinct from finding no trains, which is an ordinary answer and comes
+    back as an empty list. This one means the operator refused, timed out, or
+    replied with something the client could not read - a state the search
+    cannot fix by asking again immediately, and that the user should hear
+    about if it persists.
+    """
+
+    pass
+
+
+class RailService(ABC):
+    """The search-and-reserve loop, minus the operator."""
+
+    #: What this operator is called when talking to the user.
+    operator_name = "철도"
+
+    def __init__(
+        self,
+        app_session_start: str | None = None,
+        on_status: Callable[[str], None] | None = None,
+        on_progress: Callable[["SearchProgress"], None] | None = None,
+    ):
+        """
+        Initialize the service.
+
+        Args:
+            app_session_start: When this user's app session began, in epoch
+                               milliseconds. A search that a restart
+                               interrupted passes back the value it started
+                               with so it stays one session; None lets the
+                               client stamp the moment it was built. Only
+                               operators that carry such a stamp use it.
+            on_status: Called with a message for the user when the search
+                       stops being able to reach the operator, and again when
+                       it recovers. A callback rather than a TelegramService
+                       so that this class keeps knowing nothing about
+                       Telegram; None means nobody is told, which is right for
+                       the short-lived clients that only log in and stop.
+            on_progress: Called once per pass of the search loop with what the
+                       search knows about itself. Deliberately unthrottled:
+                       deciding how often the user hears anything is the
+                       caller's business, and it is the only party that knows
+                       what the user asked for.
+        """
+        self._logged_in = False
+        self._search_interval = settings.KORAIL_SEARCH_INTERVAL
+        self._search_jitter = settings.KORAIL_SEARCH_INTERVAL_JITTER
+        self._app_session_start = app_session_start
+        self._username: str | None = None
+        self._password: str | None = None
+        self._relogin_interval = settings.KORAIL_RELOGIN_INTERVAL
+        self._relogin_jitter = settings.KORAIL_RELOGIN_INTERVAL_JITTER
+        self._relogin_due_at: float = 0.0
+        self._relogin_count: int = 0
+        self._on_status = on_status
+        self._on_progress = on_progress
+        self._search_started_at: float = 0.0
+        self._failure_streak: int = 0
+        self._failure_since: float = 0.0
+        self._failure_alerted_at: float = 0.0
+        self._failure_threshold = settings.KORAIL_FAILURE_ALERT_THRESHOLD
+        self._failure_realert = settings.KORAIL_FAILURE_REALERT_SECONDS
+        self._failure_backoff_cap = settings.KORAIL_FAILURE_BACKOFF_CAP
+
+    # ==================== What each operator must supply ====================
+
+    @property
+    @abstractmethod
+    def default_train_type(self) -> Any:
+        """The train type a search means when it does not say."""
+
+    @property
+    @abstractmethod
+    def default_reserve_option(self) -> Any:
+        """The seat preference a reservation means when it does not say."""
+
+    @abstractmethod
+    def login(self, username: str, password: str) -> bool:
+        """Authenticate, returning whether it worked."""
+
+    @abstractmethod
+    def _relogin(self) -> bool:
+        """Authenticate again with the stored credentials."""
+
+    @abstractmethod
+    def search_trains(
+        self,
+        dep_date: str,
+        src_locate: str,
+        dst_locate: str,
+        dep_time: str = "000000",
+        max_dep_time: str = "2400",
+        train_type: Any = None,
+        passenger_count: int = 1,
+        verbose: bool = True,
+        include_no_seats: bool = False,
+        train_numbers: list[str] | None = None,
+    ) -> list:
+        """
+        Ask the operator for trains.
+
+        Returns an empty list when there are none to be had - an ordinary
+        answer. Raises SearchUnavailableError when the question could not be
+        put at all, which the loop must be able to tell apart.
+        """
+
+    @abstractmethod
+    def reserve_train(self, train, option: Any = None, passenger_count: int = 1) -> Any:
+        """
+        Try to reserve one train.
+
+        Returns the reservation on success, None when the seat went before the
+        request landed, and the string "DUPLICATE" when the operator refuses
+        because this account already holds an equivalent booking.
+        """
+
+    @abstractmethod
+    def is_reservation_outstanding(self, rsv_id: str) -> bool | None:
+        """
+        Whether a reservation is still sitting unpaid.
+
+        True while it is still unpaid, False once it is gone, and None when
+        the operator could not be asked - which is not the same as gone, and
+        must not be read as one.
+        """
+
+    # ==================== Reading a reservation ====================
+    #
+    # The two clients hand back objects that carry the same facts under
+    # different names - korail2's rsv_id is SR's reservation_number, its
+    # buy_limit_date/-time are SR's payment_date/-time. Everything downstream
+    # of a successful reservation needs those two facts and nothing else about
+    # the object, so the translation happens here rather than at each of the
+    # half-dozen places that ask.
+
+    @staticmethod
+    @abstractmethod
+    def reservation_id(reservation) -> str | None:
+        """
+        The number this operator files the reservation under.
+
+        None when the object does not carry one, which leaves the caller
+        unable to check on it later - worth saying so rather than inventing a
+        value that will never match anything.
+        """
+
+    @staticmethod
+    @abstractmethod
+    def payment_due(reservation) -> tuple[str | None, str | None]:
+        """
+        When the operator stops holding this seat.
+
+        Returns:
+            (YYYYMMDD, HHMMSS), either of which is None when the reservation
+            did not state it.
+        """
+
+    @staticmethod
+    @abstractmethod
+    def describe_train(train) -> dict:
+        """
+        Reduce a train to what the keyboard and the summary need.
+
+        Only strings and booleans: this goes into the session, which is
+        serialised to Redis, and a client's own object would not survive the
+        trip.
+
+        Returns:
+            {"no": train number, "label": what to put on the button,
+             "soldout": whether it has nothing left to book}
+        """
+
+    @staticmethod
+    def _clock(value: str | None) -> str:
+        """HHMMSS as a clock face. The seconds are always zero here."""
+        return f"{value[:2]}:{value[2:4]}" if value and len(value) >= 4 else "??:??"
+
+    # ==================== Pacing ====================
+
+    def _schedule_next_relogin(self) -> None:
+        """
+        Decide when the session should be refreshed next.
+
+        Drawn again after every login rather than kept as a fixed period: a
+        search running for half a day would otherwise re-authenticate exactly
+        on the half hour, every half hour. A base interval of 0 turns the
+        refresh off, leaving the session to be renewed when the operator
+        actually rejects it.
+        """
+        if self._relogin_interval <= 0:
+            self._relogin_due_at = 0.0
+            return
+
+        delay = self._spread(self._relogin_interval, self._relogin_jitter)
+        self._relogin_due_at = time.time() + delay
+        logger.debug(f"🔄 Next session refresh in {delay:.0f}s")
+
+    def _check_session_refresh(self):
+        """Refresh the session before the operator gets around to expiring it."""
+        if self._relogin_due_at and time.time() >= self._relogin_due_at:
+            logger.debug("🔄 Session due for a refresh, re-logging in")
+            self._relogin()
+
+    @staticmethod
+    def _spread(seconds: float, ratio: float) -> float:
+        """
+        Draw a value from seconds * (1 +/- ratio).
+
+        A fixed interval makes the search a metronome: every request lands the
+        same number of seconds after the previous one, a pattern no person
+        browsing the site would ever produce. Drawing each wait uniformly from
+        a band around the configured value keeps the average rate but removes
+        that signature. With ratio at 0 the value is returned unchanged.
+        """
+        if ratio <= 0:
+            return seconds
+
+        spread = seconds * ratio
+        return max(0.0, random.uniform(seconds - spread, seconds + spread))
+
+    def jittered(self, seconds: float) -> float:
+        """Spread a wait between requests over the configured search jitter."""
+        return self._spread(seconds, self._search_jitter)
+
+    def next_interval(self, multiplier: float = 1.0) -> float:
+        """
+        Draw the next wait between requests.
+
+        Args:
+            multiplier: Scales the base interval (e.g. 1.5 for a longer wait)
+
+        Returns:
+            The number of seconds to wait
+        """
+        return self.jittered(self._search_interval * multiplier)
+
+    def wait_between_requests(self, multiplier: float = 1.0) -> float:
+        """Sleep for a randomised interval and return how long it waited."""
+        delay = self.next_interval(multiplier)
+        time.sleep(delay)
+        return delay
+
+    def wait_seconds(self, seconds: float) -> float:
+        """Sleep for a randomised version of a fixed wait, in seconds."""
+        delay = self.jittered(seconds)
+        time.sleep(delay)
+        return delay
+
+    # ==================== Reachability tracking ====================
+    #
+    # The operator answering "no trains" and the operator not answering at all
+    # both leave the loop with nothing to reserve. Told apart, the first is the
+    # whole point of the search and the second is worth waking the user for;
+    # run together, as they were, a blocked search looks exactly like a
+    # sold-out one and reports itself as healthy forever.
+
+    def _announce(self, message: str) -> None:
+        """Pass a message to the user, if anyone is listening."""
+        if not self._on_status:
+            return
+        try:
+            self._on_status(message)
+        except Exception as e:
+            # Telling the user failed. That must not end the search.
+            logger.error(f"Failed to deliver search status message: {e}", exc_info=True)
+
+    def begin_search(self) -> None:
+        """
+        Mark the moment the search loop started.
+
+        Read off a monotonic clock, so a report of "3시간째" cannot be turned
+        into nonsense by the host's wall clock moving under it.
+        """
+        self._search_started_at = time.monotonic()
+
+    def report_progress(self, attempts: int) -> None:
+        """
+        Hand the caller what the search knows about itself.
+
+        Called once per pass of the loop and never throttled here. Reporting
+        is not this class's decision: it does not know whether the user asked
+        for reports, how often they want them, or whether anyone is reading.
+
+        Args:
+            attempts: How many times the loop has asked for trains
+        """
+        if not self._on_progress:
+            return
+
+        started = self._search_started_at or time.monotonic()
+        try:
+            self._on_progress(
+                SearchProgress(
+                    attempts=attempts,
+                    elapsed_seconds=time.monotonic() - started,
+                    failure_streak=self._failure_streak,
+                )
+            )
+        except Exception as e:
+            # Telling the user how it is going must never be the reason the
+            # search stops going.
+            logger.error(f"Failed to deliver search progress: {e}", exc_info=True)
+
+    def note_search_failure(self, error: Exception) -> float:
+        """
+        Record a failed request and say how much to slow down.
+
+        Args:
+            error: What went wrong, for the log and the user-facing message
+
+        Returns:
+            A multiplier for the next wait between requests
+        """
+        self._failure_streak += 1
+        now = time.time()
+        if self._failure_streak == 1:
+            self._failure_since = now
+
+        logger.error(
+            f"❌ {self.operator_name} request failed ({self._failure_streak} in a row): "
+            f"{type(error).__name__}: {error}",
+            exc_info=self._failure_streak == 1,
+        )
+
+        due = self._failure_streak >= self._failure_threshold and (
+            self._failure_alerted_at == 0.0
+            or now - self._failure_alerted_at >= self._failure_realert
+        )
+        if due:
+            self._failure_alerted_at = now
+            minutes = int((now - self._failure_since) // 60)
+            self._announce(
+                f"⚠️ {self.operator_name} 응답을 받지 못하고 있습니다\n\n"
+                f"연속 {self._failure_streak}회 실패"
+                f"{f' (약 {minutes}분째)' if minutes else ''}.\n"
+                f"마지막 오류: {type(error).__name__}\n\n"
+                f"검색은 계속하되 요청 간격을 늘려 재시도합니다.\n"
+                f"{self.operator_name} 점검 중이거나 접속이 차단되었을 수 있습니다.\n\n"
+                f"💡 중단하려면 /cancel 을 사용하세요."
+            )
+
+        # Doubling per failure, capped: at the default 1s interval this walks
+        # 1s, 2s, 4s ... up to a minute between attempts. Shifting instead of
+        # ** so a long outage cannot produce a float overflow.
+        multiplier = float(1 << min(self._failure_streak - 1, 20))
+        return min(multiplier, self._failure_backoff_cap)
+
+    def note_search_success(self) -> None:
+        """Record that the operator answered, and say so if it had stopped."""
+        if self._failure_streak == 0:
+            return
+
+        recovered_from = self._failure_streak
+        alerted = self._failure_alerted_at != 0.0
+        self._failure_streak = 0
+        self._failure_since = 0.0
+        self._failure_alerted_at = 0.0
+
+        logger.info(
+            f"✅ {self.operator_name} is answering again after {recovered_from} failed request(s)"
+        )
+        # Only worth a message if the silence was reported in the first place.
+        if alerted:
+            self._announce(
+                f"✅ {self.operator_name} 응답이 정상으로 돌아왔습니다\n\n"
+                f"원래 간격으로 검색을 계속합니다."
+            )
+
+    # ==================== The loop ====================
+
+    def search_and_reserve_loop(
+        self,
+        dep_date: str,
+        src_locate: str,
+        dst_locate: str,
+        dep_time: str = "000000",
+        max_dep_time: str = "2400",
+        train_type: Any = None,
+        reserve_option: Any = None,
+        passenger_count: int = 1,
+        seat_strategy: str = "consecutive",
+        max_attempts: int | None = None,
+        train_numbers: list[str] | None = None,
+    ):
+        """
+        Continuously search for trains and attempt reservation until successful.
+
+        Args:
+            dep_date: Departure date (YYYYMMDD)
+            src_locate: Source station
+            dst_locate: Destination station
+            dep_time: Departure time (HHMMSS)
+            max_dep_time: Maximum departure time (HHMM)
+            train_type: Train type filter, in whatever the operator understands
+            reserve_option: Seat preference, in whatever the operator understands
+            passenger_count: Number of adult passengers
+            seat_strategy: "consecutive" for seats together, "random" for separate seats
+            max_attempts: Maximum attempts (None for infinite)
+            train_numbers: Watch only these train numbers; empty or None
+                           watches every train in the time window
+
+        Returns:
+            Reservation object(s) when successful, None if max_attempts reached
+        """
+        if not self._logged_in:
+            raise ValueError("Must login before searching")
+
+        if train_type is None:
+            train_type = self.default_train_type
+        if reserve_option is None:
+            reserve_option = self.default_reserve_option
+
+        logger.info(
+            f"Starting reservation loop: {src_locate} -> {dst_locate} "
+            f"on {dep_date} at {dep_time} for {passenger_count} passengers ({seat_strategy} seating)"
+        )
+        self.begin_search()
+
+        if seat_strategy == "consecutive":
+            return self._search_and_reserve_consecutive(
+                dep_date,
+                src_locate,
+                dst_locate,
+                dep_time,
+                max_dep_time,
+                train_type,
+                reserve_option,
+                passenger_count,
+                max_attempts,
+                train_numbers,
+            )
+        else:  # random
+            return self._search_and_reserve_random(
+                dep_date,
+                src_locate,
+                dst_locate,
+                dep_time,
+                max_dep_time,
+                train_type,
+                reserve_option,
+                passenger_count,
+                max_attempts,
+                train_numbers,
+            )
+
+    def _search_and_reserve_consecutive(
+        self,
+        dep_date: str,
+        src_locate: str,
+        dst_locate: str,
+        dep_time: str,
+        max_dep_time: str,
+        train_type: Any,
+        reserve_option: Any,
+        passenger_count: int,
+        max_attempts: int | None,
+        train_numbers: list[str] | None = None,
+    ):
+        """Reserve seats consecutively (together)."""
+        attempts = 0
+        duplicate_notified = False
+
+        logger.info(f"🔄 Starting consecutive seat search loop (passengers={passenger_count})")
+
+        while True:
+            attempts += 1
+            if max_attempts and attempts > max_attempts:
+                logger.warning(f"❌ Reached max attempts ({max_attempts}), stopping")
+                return None
+
+            if attempts % 1000 == 0:
+                logger.info(
+                    f"📊 Search attempt #{attempts} (still searching..., re-logins: {self._relogin_count})"
+                )
+
+            is_summary = attempts % 60 == 0
+
+            if is_summary:
+                logger.debug(f"━━━ Search attempt #{attempts} ━━━")
+
+            self.report_progress(attempts)
+            self._check_session_refresh()
+
+            # Search for trains
+            try:
+                trains = self.search_trains(
+                    dep_date,
+                    src_locate,
+                    dst_locate,
+                    dep_time,
+                    max_dep_time,
+                    train_type,
+                    passenger_count,
+                    verbose=is_summary,
+                    train_numbers=train_numbers,
+                )
+            except SearchUnavailableError as e:
+                self.wait_between_requests(self.note_search_failure(e))
+                continue
+
+            self.note_search_success()
+
+            if not trains:
+                if is_summary:
+                    logger.debug(f"📊 Attempt #{attempts}: no trains found, retrying...")
+                self.wait_between_requests()
+                continue
+
+            # Try to reserve each train found (trains found = rare, always log)
+            for idx, train in enumerate(trains, 1):
+                logger.debug(f"🚂 Trying train {idx}/{len(trains)}")
+                reservation = self.reserve_train(
+                    train, option=reserve_option, passenger_count=passenger_count
+                )
+
+                if reservation == "DUPLICATE":
+                    # Duplicate reservation detected
+                    if not duplicate_notified:
+                        # First time - raise exception to notify user once
+                        duplicate_notified = True
+                        logger.warning("⚠️ First duplicate detection - notifying user")
+                        raise DuplicateReservationError("동일한 예약 내역이 존재합니다")
+                    else:
+                        # Already notified - just log and continue
+                        logger.debug("Duplicate reservation still exists, continuing search...")
+                elif reservation:
+                    logger.info(f"🎉 CONSECUTIVE RESERVATION SUCCESS after {attempts} attempts!")
+                    return reservation
+                else:
+                    logger.debug(f"Train {idx} failed (sold out or unavailable)")
+
+            logger.debug(f"All {len(trains)} trains sold out in attempt #{attempts}")
+
+            # Wait before next search
+            self.wait_between_requests()
+
+    def _search_and_reserve_random(
+        self,
+        dep_date: str,
+        src_locate: str,
+        dst_locate: str,
+        dep_time: str,
+        max_dep_time: str,
+        train_type: Any,
+        reserve_option: Any,
+        passenger_count: int,
+        max_attempts: int | None,
+        train_numbers: list[str] | None = None,
+    ):
+        """Reserve seats randomly (one at a time until target count reached)."""
+        attempts = 0
+        # Whatever the operator's client hands back for a booking; the two
+        # have no type in common, and nothing here reads one except through
+        # reservation_id and payment_due.
+        reservations: list[Any] = []
+        target_count = passenger_count
+        duplicate_notified = False
+
+        logger.info(f"Random seating: will reserve {target_count} individual tickets")
+
+        while len(reservations) < target_count:
+            attempts += 1
+            if max_attempts and attempts > max_attempts:
+                logger.warning(f"Reached max attempts ({max_attempts}), stopping")
+                # Cancel any partial reservations
+                self._cancel_reservations(reservations)
+                return None
+
+            is_summary = attempts % 60 == 0
+
+            self.report_progress(attempts)
+            self._check_session_refresh()
+
+            # Search for trains (search for single passenger each time)
+            try:
+                trains = self.search_trains(
+                    dep_date,
+                    src_locate,
+                    dst_locate,
+                    dep_time,
+                    max_dep_time,
+                    train_type,
+                    passenger_count=1,
+                    verbose=is_summary,
+                    train_numbers=train_numbers,
+                )
+            except SearchUnavailableError as e:
+                self.wait_between_requests(self.note_search_failure(e))
+                continue
+
+            self.note_search_success()
+
+            if not trains:
+                if is_summary:
+                    logger.debug(f"📊 Attempt #{attempts}: no trains found, retrying...")
+                self.wait_between_requests()
+                continue
+
+            # Try to reserve each train found (trains found = rare, always log)
+            for train in trains:
+                logger.debug(
+                    f"Found train: {train}, attempting reservation "
+                    f"({len(reservations) + 1}/{target_count})..."
+                )
+
+                # Reserve one seat at a time
+                reservation = self.reserve_train(train, option=reserve_option, passenger_count=1)
+
+                if reservation == "DUPLICATE":
+                    # Duplicate reservation detected
+                    if not duplicate_notified:
+                        # First time - raise exception to notify user once
+                        duplicate_notified = True
+                        logger.warning("First duplicate detection - notifying user")
+                        raise DuplicateReservationError("동일한 예약 내역이 존재합니다")
+                    else:
+                        # Already notified - just log and continue
+                        logger.debug("Duplicate reservation still exists, continuing search...")
+                elif reservation:
+                    reservations.append(reservation)
+                    current_count = len(reservations)
+                    logger.info(
+                        f"Reserved seat {current_count}/{target_count} (attempt #{attempts})"
+                    )
+                    logger.debug(f"Reservation details: {reservation}")
+
+                    # Check if we've reached target
+                    if current_count >= target_count:
+                        logger.info(
+                            f"All {target_count} seats reserved successfully! "
+                            f"Total attempts: {attempts}"
+                        )
+                        # Return the first reservation as primary (for compatibility)
+                        # Store all reservations in a custom attribute for later access
+                        first_reservation = reservations[0]
+                        first_reservation._all_reservations = reservations
+                        first_reservation._is_random_allocation = True
+                        first_reservation._total_seats = target_count
+                        return first_reservation
+
+                    # Add delay between individual reservations to avoid rate limit
+                    # Use longer interval for safety
+                    self.wait_between_requests(1.5)
+                    break  # Found a train and reserved, restart search loop
+
+                else:
+                    logger.debug("Reservation failed, continuing search...")
+
+            # Wait before next search attempt
+            self.wait_between_requests()
+
+        return reservations[0] if reservations else None
+
+    def _cancel_reservations(self, reservations: list) -> None:
+        """
+        Release the seats a random-seating run took but could not finish with.
+
+        The default gives them up in the only way that always works: it stops
+        paying for them, and the operator reclaims the seats when the deadline
+        passes. An operator whose client can cancel outright should override
+        this and do so - the seats go back sooner, and the user is not left
+        with bookings they never completed.
+        """
+        if not reservations:
+            return
+
+        logger.warning(f"Leaving {len(reservations)} partial reservation(s) to expire unpaid")
+        for reservation in reservations:
+            # Reached while giving up on a search that has already gone wrong.
+            # Describing a reservation must not be the thing that raises.
+            try:
+                logger.warning(f"  giving up: {reservation}")
+            except Exception as e:
+                logger.error(f"Failed to describe an abandoned reservation: {e}")
+
+    @property
+    def is_logged_in(self) -> bool:
+        """Check if currently logged in."""
+        return self._logged_in

@@ -18,6 +18,7 @@ import pytest
 
 from korail_bot.config.settings import settings
 from korail_bot.handlers.command_handler import CommandHandler
+from korail_bot.models import Operator
 from korail_bot.services import PaymentReminderService, ReservationService, TelegramService
 from korail_bot.services.korail_service import KorailService, SearchProgress
 from korail_bot.storage.base import StorageInterface
@@ -117,6 +118,7 @@ class ReportingFixture:
 
     def setup_method(self):
         self.process = object.__new__(BackgroundReservationProcess)
+        self.process.operator = Operator.KORAIL
         self.process.chat_id = CHAT_ID
         self.process.storage = Mock(spec=StorageInterface)
         self.process.storage.get_progress_report_minutes.return_value = 0

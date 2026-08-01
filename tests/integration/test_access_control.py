@@ -17,7 +17,7 @@ import pytest
 
 from korail_bot.config.settings import Settings, settings
 from korail_bot.handlers.command_handler import CommandHandler
-from korail_bot.models import ApprovedUser, OnboardedAccount
+from korail_bot.models import ApprovedUser, OnboardedAccount, Operator
 from korail_bot.services import (
     AccessLevel,
     AccessService,
@@ -360,17 +360,22 @@ class TestConcurrencyCeiling:
 
         return Real(storage, telegram)
 
-    def _running(self, storage, count):
+    def _running(self, storage, count, operator=Operator.KORAIL):
         from korail_bot.models import RunningReservation, TrainSearchParams
 
+        base = 1000 if operator is Operator.KORAIL else 2000
         for index in range(count):
             storage.save_running_reservation(
                 RunningReservation(
-                    chat_id=1000 + index,
-                    process_id=9000 + index,
+                    chat_id=base + index,
+                    process_id=9000 + base + index,
                     korail_id=f"010-0000-{index:04d}",
                     search_params=TrainSearchParams(
-                        dep_date="20991231", src_locate="서울", dst_locate="부산", dep_time="090000"
+                        dep_date="20991231",
+                        src_locate="수서" if operator is Operator.SRT else "서울",
+                        dst_locate="부산",
+                        dep_time="090000",
+                        operator=operator,
                     ),
                     run_id=settings.RUN_ID,
                 )
@@ -395,3 +400,14 @@ class TestConcurrencyCeiling:
 
         with patch.object(Settings, "MAX_CONCURRENT_SEARCHES", 0):
             assert reservation._under_concurrency_limit(CHAT_ID) is True
+
+    def test_each_railway_has_its_own_allowance(self, reservation, storage, telegram):
+        self._running(storage, 5, Operator.KORAIL)
+        self._running(storage, 4, Operator.SRT)
+
+        with patch.object(Settings, "MAX_CONCURRENT_SEARCHES", 5):
+            assert reservation._under_concurrency_limit(CHAT_ID, Operator.SRT) is True
+            self._running(storage, 5, Operator.SRT)
+            assert reservation._under_concurrency_limit(CHAT_ID, Operator.SRT) is False
+
+        assert "SRT 검색" in " ".join(_texts(telegram))

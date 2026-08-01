@@ -50,12 +50,14 @@ def pytest_configure(config):
     os.environ.setdefault("SESSION_SECRET", "test-session-secret")
     os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password")
 
-    # A real USERID/USERPW inherited from the developer's environment would
-    # make the bot skip the login prompts, so every test of those prompts
-    # would exercise a different flow than it means to. Tests that want the
-    # skip set it explicitly.
+    # Real fixed-account credentials inherited from the developer's
+    # environment would make the bot skip the login prompts, so every test of
+    # those prompts would exercise a different flow than it means to. Tests
+    # that want the skip set it explicitly.
     os.environ.pop("USERID", None)
     os.environ.pop("USERPW", None)
+    os.environ.pop("SRT_ID", None)
+    os.environ.pop("SRT_PW", None)
 
     os.environ["REDIS_DB"] = "0"
     # The throwaway container runs without auth, and the unit tests never

@@ -23,8 +23,12 @@ import requests
 from korail2 import ReserveOption, TrainType
 
 from korail_bot.config.settings import settings
-from korail_bot.models import ReservationPaymentStatus
-from korail_bot.services.korail_service import DuplicateReservationError, SearchUnavailableError
+from korail_bot.models import Operator, ReservationPaymentStatus
+from korail_bot.services.korail_service import (
+    DuplicateReservationError,
+    KorailService,
+    SearchUnavailableError,
+)
 from korail_bot.storage.base import StorageInterface
 from korail_bot.telegramBot.telebotBackProcess import (
     BackgroundReservationProcess,
@@ -220,6 +224,7 @@ class TestReadingTheTrainType:
     )
     def test_it_reads_every_spelling_that_has_shipped(self, given, expected):
         process = object.__new__(BackgroundReservationProcess)
+        process.operator = Operator.KORAIL
 
         assert process._parse_train_type(given) == expected
 
@@ -243,6 +248,7 @@ class TestReadingTheSeatOption:
     )
     def test_it_reads_every_spelling_that_has_shipped(self, given, expected):
         process = object.__new__(BackgroundReservationProcess)
+        process.operator = Operator.KORAIL
 
         assert process._parse_reserve_option(given) == expected
 
@@ -252,6 +258,7 @@ class TestReadingTheSeatOption:
         they would find out about by being charged for it.
         """
         process = object.__new__(BackgroundReservationProcess)
+        process.operator = Operator.KORAIL
 
         assert process._parse_reserve_option("???") == ReserveOption.GENERAL_FIRST
 
@@ -266,6 +273,7 @@ class ProcessFixture:
 
     def setup_method(self):
         self.process = object.__new__(BackgroundReservationProcess)
+        self.process.operator = Operator.KORAIL
         self.process.username = USERNAME
         self.process.password = PASSWORD
         self.process.chat_id = CHAT_ID
@@ -279,7 +287,13 @@ class ProcessFixture:
         self.process.passenger_count = 1
         self.process.seat_strategy = "consecutive"
         self.process.train_numbers = []
-        self.process.korail = Mock()
+        self.process.rail = Mock()
+        # Reading a reservation is not faked: which field holds the
+        # reservation number, and which the payment deadline, is the
+        # operator-specific translation this process depends on, and a Mock
+        # would let a wrong reading through.
+        self.process.rail.reservation_id = KorailService.reservation_id
+        self.process.rail.payment_due = KorailService.payment_due
         self.process.telegram = Mock()
         self.process.storage = Mock(spec=StorageInterface)
         self.process.payment_reminder = Mock()
@@ -318,17 +332,17 @@ class TestRunEndsSomewhere(RunFixture):
     """
 
     def test_a_failed_login_is_reported_and_the_search_stops(self):
-        self.process.korail.login.return_value = False
+        self.process.rail.login.return_value = False
 
         self.run_process()
 
         assert self.statuses() == [1]
         assert "로그인 실패" in self.messages()[0]
-        self.process.korail.search_and_reserve_loop.assert_not_called()
+        self.process.rail.search_and_reserve_loop.assert_not_called()
 
     def test_a_booked_seat_is_reported_as_success(self):
-        self.process.korail.login.return_value = True
-        self.process.korail.search_and_reserve_loop.return_value = FakeReservation()
+        self.process.rail.login.return_value = True
+        self.process.rail.search_and_reserve_loop.return_value = FakeReservation()
 
         self.run_process()
 
@@ -342,16 +356,16 @@ class TestRunEndsSomewhere(RunFixture):
         - so it is the only thing that can find out whether the payment
         actually happened.
         """
-        self.process.korail.login.return_value = True
-        self.process.korail.search_and_reserve_loop.return_value = FakeReservation()
+        self.process.rail.login.return_value = True
+        self.process.rail.search_and_reserve_loop.return_value = FakeReservation()
 
         self.run_process()
 
         self.watch.assert_called_once()
 
     def test_the_success_message_says_the_payment_window_is_short(self):
-        self.process.korail.login.return_value = True
-        self.process.korail.search_and_reserve_loop.return_value = FakeReservation()
+        self.process.rail.login.return_value = True
+        self.process.rail.search_and_reserve_loop.return_value = FakeReservation()
 
         self.run_process()
 
@@ -363,8 +377,8 @@ class TestRunEndsSomewhere(RunFixture):
         Should not happen - the loop runs until it books something. If it
         ever does, silence would leave the user waiting on a dead process.
         """
-        self.process.korail.login.return_value = True
-        self.process.korail.search_and_reserve_loop.return_value = None
+        self.process.rail.login.return_value = True
+        self.process.rail.search_and_reserve_loop.return_value = None
 
         self.run_process()
 
@@ -372,13 +386,13 @@ class TestRunEndsSomewhere(RunFixture):
         self.watch.assert_not_called()
 
     def test_random_seating_goes_down_its_own_path(self):
-        self.process.korail.login.return_value = True
+        self.process.rail.login.return_value = True
         self.process.seat_strategy = "random"
 
         self.run_process()
 
         self.random_run.assert_called_once()
-        self.process.korail.search_and_reserve_loop.assert_not_called()
+        self.process.rail.search_and_reserve_loop.assert_not_called()
 
     def test_being_told_to_stop_is_not_an_error_report(self):
         """
@@ -387,7 +401,7 @@ class TestRunEndsSomewhere(RunFixture):
         the search is over, and SearchStopped is a BaseException so that it
         travels through untouched.
         """
-        self.process.korail.login.side_effect = SearchStopped(signal.SIGTERM)
+        self.process.rail.login.side_effect = SearchStopped(signal.SIGTERM)
 
         with pytest.raises(SearchStopped):
             self.run_process()
@@ -398,7 +412,7 @@ class TestRunSurvivesKorail(RunFixture):
 
     def setup_method(self):
         super().setup_method()
-        self.process.korail.login.return_value = True
+        self.process.rail.login.return_value = True
 
     @pytest.mark.parametrize(
         ("error", "expected"),
@@ -415,7 +429,7 @@ class TestRunSurvivesKorail(RunFixture):
         fix the station name, or report it - and they can only pick one if
         they are told which happened.
         """
-        self.process.korail.search_and_reserve_loop.side_effect = error
+        self.process.rail.search_and_reserve_loop.side_effect = error
 
         self.run_process()
 
@@ -423,7 +437,7 @@ class TestRunSurvivesKorail(RunFixture):
         assert expected in self.messages()[0]
 
     def test_every_failure_message_says_what_to_do_next(self):
-        self.process.korail.search_and_reserve_loop.side_effect = RuntimeError("무언가")
+        self.process.rail.search_and_reserve_loop.side_effect = RuntimeError("무언가")
 
         self.run_process()
 
@@ -441,11 +455,11 @@ class TestAnExistingReservationIsNotTheEnd(RunFixture):
 
     def setup_method(self):
         super().setup_method()
-        self.process.korail.login.return_value = True
+        self.process.rail.login.return_value = True
 
     def test_the_user_is_told_and_the_search_carries_on(self):
         booked = FakeReservation()
-        self.process.korail.search_and_reserve_loop.side_effect = [
+        self.process.rail.search_and_reserve_loop.side_effect = [
             DuplicateReservationError("동일한 예약 내역이 존재합니다"),
             booked,
         ]
@@ -454,11 +468,11 @@ class TestAnExistingReservationIsNotTheEnd(RunFixture):
 
         assert self.statuses() == [2, 0]
         assert "기존 예약 감지" in self.messages()[0]
-        assert self.process.korail.search_and_reserve_loop.call_count == 2
+        assert self.process.rail.search_and_reserve_loop.call_count == 2
 
     def test_the_notice_says_the_search_has_not_stopped(self):
         """Otherwise it reads as a failure and the user starts over."""
-        self.process.korail.search_and_reserve_loop.side_effect = [
+        self.process.rail.search_and_reserve_loop.side_effect = [
             DuplicateReservationError("동일한 예약 내역이 존재합니다"),
             FakeReservation(),
         ]
@@ -469,7 +483,7 @@ class TestAnExistingReservationIsNotTheEnd(RunFixture):
 
     def test_a_second_duplicate_does_not_take_the_process_down(self):
         """Should not happen, having been reported once. It must not crash."""
-        self.process.korail.search_and_reserve_loop.side_effect = [
+        self.process.rail.search_and_reserve_loop.side_effect = [
             DuplicateReservationError("first"),
             DuplicateReservationError("again"),
         ]
@@ -487,7 +501,7 @@ class TestSeveralSeatsAtOnce(RunFixture):
 
     def setup_method(self):
         super().setup_method()
-        self.process.korail.login.return_value = True
+        self.process.rail.login.return_value = True
         self.process.passenger_count = 3
         seats = [FakeReservation("1"), FakeReservation("2"), FakeReservation("3")]
         self.booked = FakeReservation(
@@ -496,7 +510,7 @@ class TestSeveralSeatsAtOnce(RunFixture):
             _total_seats=3,
             _all_reservations=seats,
         )
-        self.process.korail.search_and_reserve_loop.return_value = self.booked
+        self.process.rail.search_and_reserve_loop.return_value = self.booked
 
     def test_every_seat_is_named_in_the_message(self):
         with patch.object(BackgroundReservationProcess, "_create_multi_reservation_status"):
@@ -732,33 +746,33 @@ class TestSearchingForOneSeat(ProcessFixture):
     def setup_method(self):
         super().setup_method()
         self.train = Mock()
-        self.process.korail.note_search_failure.return_value = 2.0
+        self.process.rail.note_search_failure.return_value = 2.0
 
     def test_a_seat_that_is_there_is_taken(self):
         booked = FakeReservation()
-        self.process.korail.search_trains.return_value = [self.train]
-        self.process.korail.reserve_train.return_value = booked
+        self.process.rail.search_trains.return_value = [self.train]
+        self.process.rail.reserve_train.return_value = booked
 
         assert self.process._reserve_single_seat_random(0) is booked
 
     def test_it_asks_for_one_seat_however_many_the_user_wants(self):
         """The whole point of random allocation is that they are booked apart."""
         self.process.passenger_count = 4
-        self.process.korail.search_trains.return_value = [self.train]
-        self.process.korail.reserve_train.return_value = FakeReservation()
+        self.process.rail.search_trains.return_value = [self.train]
+        self.process.rail.reserve_train.return_value = FakeReservation()
 
         self.process._reserve_single_seat_random(0)
 
-        assert self.process.korail.search_trains.call_args.kwargs["passenger_count"] == 1
-        assert self.process.korail.reserve_train.call_args.kwargs["passenger_count"] == 1
+        assert self.process.rail.search_trains.call_args.kwargs["passenger_count"] == 1
+        assert self.process.rail.reserve_train.call_args.kwargs["passenger_count"] == 1
 
     def test_no_trains_means_look_again(self):
         booked = FakeReservation()
-        self.process.korail.search_trains.side_effect = [[], [], [self.train]]
-        self.process.korail.reserve_train.return_value = booked
+        self.process.rail.search_trains.side_effect = [[], [], [self.train]]
+        self.process.rail.reserve_train.return_value = booked
 
         assert self.process._reserve_single_seat_random(0) is booked
-        assert self.process.korail.wait_between_requests.call_count == 2
+        assert self.process.rail.wait_between_requests.call_count == 2
 
     def test_korail_not_answering_backs_the_search_off(self):
         """
@@ -766,21 +780,21 @@ class TestSearchingForOneSeat(ProcessFixture):
         which is what made a blocked search look exactly like a busy one.
         """
         booked = FakeReservation()
-        self.process.korail.search_trains.side_effect = [
+        self.process.rail.search_trains.side_effect = [
             SearchUnavailableError("timeout"),
             [self.train],
         ]
-        self.process.korail.reserve_train.return_value = booked
+        self.process.rail.reserve_train.return_value = booked
 
         self.process._reserve_single_seat_random(0)
 
-        self.process.korail.note_search_failure.assert_called_once()
-        self.process.korail.wait_between_requests.assert_called_once_with(2.0)
+        self.process.rail.note_search_failure.assert_called_once()
+        self.process.rail.wait_between_requests.assert_called_once_with(2.0)
 
     def test_a_sold_out_train_is_no_reason_to_stop(self):
         booked = FakeReservation()
-        self.process.korail.search_trains.return_value = [self.train, self.train]
-        self.process.korail.reserve_train.side_effect = [None, booked]
+        self.process.rail.search_trains.return_value = [self.train, self.train]
+        self.process.rail.reserve_train.side_effect = [None, booked]
 
         assert self.process._reserve_single_seat_random(0) is booked
 
@@ -790,8 +804,8 @@ class TestSearchingForOneSeat(ProcessFixture):
         and a message on every pass would be a message every ten seconds.
         """
         booked = FakeReservation()
-        self.process.korail.search_trains.return_value = [self.train]
-        self.process.korail.reserve_train.side_effect = [
+        self.process.rail.search_trains.return_value = [self.train]
+        self.process.rail.reserve_train.side_effect = [
             "DUPLICATE",
             "DUPLICATE",
             "DUPLICATE",
@@ -808,24 +822,24 @@ class TestSearchingForOneSeat(ProcessFixture):
         Nothing will change until a person cancels something on their phone,
         so asking once a second is asking a few hundred times for nothing.
         """
-        self.process.korail.search_trains.return_value = [self.train]
-        self.process.korail.reserve_train.side_effect = ["DUPLICATE", FakeReservation()]
+        self.process.rail.search_trains.return_value = [self.train]
+        self.process.rail.reserve_train.side_effect = ["DUPLICATE", FakeReservation()]
 
         self.process._reserve_single_seat_random(0)
 
-        self.process.korail.wait_seconds.assert_called_once_with(10)
+        self.process.rail.wait_seconds.assert_called_once_with(10)
 
     def test_the_progress_report_is_offered_on_every_pass(self):
         """
         The throttle is the process's business, not the loop's - the loop
         just says how it is going.
         """
-        self.process.korail.search_trains.side_effect = [[], [], [self.train]]
-        self.process.korail.reserve_train.return_value = FakeReservation()
+        self.process.rail.search_trains.side_effect = [[], [], [self.train]]
+        self.process.rail.reserve_train.return_value = FakeReservation()
 
         self.process._reserve_single_seat_random(0)
 
-        assert self.process.korail.report_progress.call_count == 3
+        assert self.process.rail.report_progress.call_count == 3
 
 
 class TestRecordingSeveralSeats(ProcessFixture):

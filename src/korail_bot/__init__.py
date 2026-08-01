@@ -7,4 +7,4 @@
 #:
 #: Bumping this is what makes the bot announce itself to its users on the next
 #: start, so the entry in korail_bot.release_notes belongs in the same commit.
-__version__ = "4.1.1"
+__version__ = "4.2.0-beta.1"

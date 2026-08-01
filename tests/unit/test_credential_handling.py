@@ -94,6 +94,9 @@ class TestCredentialHandoff:
             "random",
             # No trains picked: the whole time window is watched.
             "",
+            # Which railway. Last, so that everything before it keeps the
+            # position an older build wrote it at.
+            "korail",
         ]
 
     def test_credentials_written_to_stdin(self, service, search_params):

@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
+from korail_bot.models.operator import Operator
+
 if TYPE_CHECKING:
     from korail_bot.models.reservation import TrainSearchParams
 
@@ -19,18 +21,30 @@ class UserCredentials:
 @dataclass
 class OnboardedAccount:
     """
-    The Korail account a chat registered once and reuses from then on.
+    A railway account a chat registered once and reuses from then on.
 
     Held apart from the session because the session is reset at the end of
     every booking, and a registration that disappeared with the booking it was
     made for would not be a registration at all. Encrypted at rest, given an
     expiry, and deleted the moment the user logs out or blocks the bot.
+
+    One per railway: Korail and SR are separate companies with separate
+    logins, and a chat may well have registered with both. The fields are
+    still called korail_id and korail_pw because that is what every caller
+    and every stored record already says; renaming them is a change worth
+    making on its own rather than in passing.
     """
 
     chat_id: int
     korail_id: str
     korail_pw: str
+    operator: str = Operator.KORAIL
     onboarded_at: datetime = field(default_factory=lambda: datetime.now())
+
+    @property
+    def rail_operator(self) -> Operator:
+        """The railway this account is with, however it was stored."""
+        return Operator.parse(self.operator)
 
     def as_credentials(self) -> UserCredentials:
         """The same account in the shape the conversation flow expects."""
@@ -130,3 +144,11 @@ class UserProgress:
     # Registering again is rare and destructive - it throws away a working
     # login - so it is confirmed rather than done on the way past.
     ONBOARDING_OVERWRITE_PENDING = 17
+    # Waiting on which railway to search. Asked first, before the login,
+    # because Korail and SR are separate companies with separate accounts -
+    # the answer decides which one the chat is about to log in to.
+    #
+    # Numbered last for the reason the two above it are: these numbers are
+    # stored in Redis, and renumbering would move every session that outlived
+    # a deploy to a different question than the one it was answering.
+    OPERATOR_INPUT_PENDING = 18

@@ -17,6 +17,7 @@ name: CI/CD
 #                                rather than a variable because GitHub masks
 #                                `secrets.*` in run logs and `vars.*` not.
 #   ADMIN_USERID, ADMIN_PASSWD - optional Korail account for the magic login
+#   SRT_ID, SRT_PW             - optional SRT account for the magic login
 #   ADMIN_MAGIC_STRING         - optional trigger for that shortcut
 # Required repository variables (cicd only):
 #   IMAGE_NAME                 - image to build and push, e.g. you/korailbot:latest.
@@ -84,9 +85,9 @@ jobs:
         run: uv run --frozen pytest tests/integration tests/e2e -q
     -
         name: Type check
-        # Not blocking yet: 55 pre-existing errors in 12 files as of 2026-07-30,
+        # Not blocking yet: 51 pre-existing errors in 11 files as of 2026-08-01,
         # mostly str|None reaching parameters typed int, concentrated in
-        # handlers/conversation_handler.py and api/telegram_webhook.py. A failure
+        # handlers/conversation_handler.py and other legacy call sites. A failure
         # here does not stop a merge, so do not read a green tick on this job as
         # "mypy is clean". Drop continue-on-error once the backlog is cleared.
         continue-on-error: true
@@ -193,6 +194,8 @@ jobs:
                 ADMIN_MAGIC_STRING=${{ secrets.ADMIN_MAGIC_STRING }}
                 USERID=${{ secrets.ADMIN_USERID }}
                 USERPW=${{ secrets.ADMIN_PASSWD }}
+                SRT_ID=${{ secrets.SRT_ID }}
+                SRT_PW=${{ secrets.SRT_PW }}
                 ALLOW_LIST=${{ secrets.ALLOW_LIST || vars.ALLOW_LIST }}
                 REDIS_HOST=redis
                 REDIS_PORT=6379

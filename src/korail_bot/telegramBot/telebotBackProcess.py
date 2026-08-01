@@ -16,10 +16,12 @@ from datetime import datetime, timedelta
 
 import requests
 from korail2 import ReserveOption, TrainType
+from SRT import SeatType
 
 from korail_bot.config.settings import settings
 from korail_bot.models import (
     MultiReservationStatus,
+    Operator,
     ReservationPaymentStatus,
     SingleReservationInfo,
 )
@@ -27,9 +29,10 @@ from korail_bot.services import (
     KorailService,
     MultiReservationReminderService,
     PaymentReminderService,
+    SrtService,
     TelegramService,
 )
-from korail_bot.services.korail_service import (
+from korail_bot.services.rail_service import (
     DuplicateReservationError,
     SearchUnavailableError,
 )
@@ -116,6 +119,9 @@ class BackgroundReservationProcess:
         self.train_numbers = [
             number for number in (sys.argv[11] if len(sys.argv) > 11 else "").split(",") if number
         ]
+        # Which railway to search. Absent is how a search started by an older
+        # build arrives, and every one of those is a Korail search.
+        self.operator = Operator.parse(sys.argv[12] if len(sys.argv) > 12 else None)
 
         # Parse train type
         self.train_type = self._parse_train_type(self.train_type_str)
@@ -126,13 +132,7 @@ class BackgroundReservationProcess:
         self.telegram = TelegramService(settings.TELEGRAM_BOT_TOKEN)
         self.payment_reminder = PaymentReminderService(self.storage, self.telegram)
         self.multi_reminder = MultiReservationReminderService(self.storage, self.telegram)
-        # A resumed search is the same app session the user started, not a
-        # freshly launched one, so it picks up the timestamp it began with.
-        self.korail = KorailService(
-            app_session_start=self.storage.get_or_create_app_session_start(self.chat_id),
-            on_status=self._announce_search_status,
-            on_progress=self._report_search_progress,
-        )
+        self.rail = self._build_rail_service()
 
         # Progress reporting state. The first report is due one interval from
         # now rather than immediately: the user has just been told the search
@@ -152,6 +152,7 @@ class BackgroundReservationProcess:
         logger.info("Background Process Initialized")
         logger.info("========================================")
         logger.info(f"  chat_id: {self.chat_id}")
+        logger.info(f"  operator: {self.operator} ({self.operator_name})")
         logger.info(f"  username: {mask_phone(self.username)}")
         logger.info(f"  dep_date: '{self.dep_date}'")
         logger.info(f"  src_locate: '{self.src_locate}'")
@@ -206,8 +207,54 @@ class BackgroundReservationProcess:
 
         return username, password
 
-    def _parse_train_type(self, train_type_str: str) -> TrainType:
-        """Parse train type from string."""
+    @property
+    def operator_name(self) -> str:
+        """What to call this railway when talking to the user."""
+        return self.operator.display_name
+
+    @property
+    def payment_url(self) -> str:
+        """Where the user goes to pay for a seat this search just took."""
+        if self.operator is Operator.SRT:
+            return settings.SRT_PAYMENT_URL
+        return settings.KORAIL_PAYMENT_URL
+
+    def _build_rail_service(self):
+        """
+        Build the service for the railway this search is against.
+
+        A resumed search is the same app session the user started, not a
+        freshly launched one, so it picks up the timestamp it began with.
+        Only Korail's client carries such a stamp; SR's has nothing to hand
+        it to, and passing it anyway would be inventing a meaning for it.
+        """
+        if self.operator is Operator.SRT:
+            return SrtService(
+                on_status=self._announce_search_status,
+                on_progress=self._report_search_progress,
+                # Needed while searching, not just while reserving: SR reports
+                # the two seat classes separately, so a search for 일반실만
+                # must not stop on a train with only a special seat left.
+                seat_type=self.reserve_option,
+            )
+
+        return KorailService(
+            app_session_start=self.storage.get_or_create_app_session_start(self.chat_id),
+            on_status=self._announce_search_status,
+            on_progress=self._report_search_progress,
+        )
+
+    def _parse_train_type(self, train_type_str: str):
+        """
+        Parse train type from string.
+
+        SR runs SRT and nothing else, so there is nothing here to choose
+        between and whatever the user answered for a Korail search - or a
+        favourite carried over from one - is not a filter here.
+        """
+        if self.operator is Operator.SRT:
+            return "SRT"
+
         # Check for exact string representation of enum
         if "TrainType.KTX" in train_type_str:
             return TrainType.KTX
@@ -224,30 +271,38 @@ class BackgroundReservationProcess:
         else:
             return TrainType.ALL
 
-    def _parse_reserve_option(self, option_str: str) -> ReserveOption:
-        """Parse reserve option from string."""
-        # Check for exact string representation of enum
-        if "ReserveOption.GENERAL_FIRST" in option_str:
-            return ReserveOption.GENERAL_FIRST
-        elif "ReserveOption.GENERAL_ONLY" in option_str:
-            return ReserveOption.GENERAL_ONLY
-        elif "ReserveOption.SPECIAL_FIRST" in option_str:
-            return ReserveOption.SPECIAL_FIRST
-        elif "ReserveOption.SPECIAL_ONLY" in option_str:
-            return ReserveOption.SPECIAL_ONLY
+    #: The four seat preferences, in the order that lets a substring search
+    #: find the right one: no name here is contained in another.
+    SEAT_OPTION_NAMES = ("GENERAL_FIRST", "GENERAL_ONLY", "SPECIAL_FIRST", "SPECIAL_ONLY")
 
-        # Fallback to checking for keywords
-        option_str_upper = option_str.upper()
-        if "GENERAL_FIRST" in option_str_upper:
-            return ReserveOption.GENERAL_FIRST
-        elif "GENERAL_ONLY" in option_str_upper:
-            return ReserveOption.GENERAL_ONLY
-        elif "SPECIAL_FIRST" in option_str_upper:
-            return ReserveOption.SPECIAL_FIRST
-        elif "SPECIAL_ONLY" in option_str_upper:
-            return ReserveOption.SPECIAL_ONLY
-        else:
-            return ReserveOption.GENERAL_FIRST
+    def _parse_reserve_option(self, option_str: str):
+        """
+        Parse the seat preference from what was stored.
+
+        korail2 and SR spell the four preferences identically -
+        GENERAL_FIRST, GENERAL_ONLY, SPECIAL_FIRST, SPECIAL_ONLY - in two
+        enums that know nothing of each other. So the name is read once and
+        looked up in whichever enum this search's railway takes, and a
+        favourite saved against one railway still means something against the
+        other.
+
+        Args:
+            option_str: What was stored, e.g. "ReserveOption.GENERAL_FIRST"
+
+        Returns:
+            A ReserveOption for Korail, a SeatType for SR
+
+        Note that only one of the two is an Enum - korail2's ReserveOption is
+        a plain class holding four strings - so the name is looked up with
+        getattr rather than by subscripting.
+        """
+        wanted = option_str.upper()
+        name = next(
+            (option for option in self.SEAT_OPTION_NAMES if option in wanted),
+            "GENERAL_FIRST",
+        )
+
+        return getattr(SeatType if self.operator is Operator.SRT else ReserveOption, name)
 
     def run(self):
         """Run the reservation process."""
@@ -255,20 +310,20 @@ class BackgroundReservationProcess:
             logger.info(f"Logging in as {mask_phone(self.username)}...")
 
             # Login
-            if not self.korail.login(self.username, self.password):
+            if not self.rail.login(self.username, self.password):
                 logger.error("Login failed")
                 message = f"""
-❌ 코레일 로그인 실패
+❌ {self.operator_name} 로그인 실패
 
-아이디/비밀번호가 올바르지 않거나 코레일 서버에 문제가 있습니다.
+아이디/비밀번호가 올바르지 않거나 {self.operator_name} 서버에 문제가 있습니다.
 
 💡 조치 방법:
-1. 코레일 회원번호를 확인하세요
+1. {self.operator_name} 회원번호를 확인하세요
 2. 비밀번호가 올바른지 확인하세요
-3. 코레일 사이트에서 직접 로그인을 시도해보세요
+3. {self.operator_name} 사이트에서 직접 로그인을 시도해보세요
 4. 계정이 잠기지 않았는지 확인하세요
 
-🔗 코레일 로그인: {settings.KORAIL_PAYMENT_URL}
+🔗 {self.operator_name} 로그인: {self.payment_url}
 
 정보 수정이 필요하면 /cancel 후 다시 시작하세요.
 """
@@ -287,7 +342,7 @@ class BackgroundReservationProcess:
             # Search and reserve
             reservation = None
             try:
-                reservation = self.korail.search_and_reserve_loop(
+                reservation = self.rail.search_and_reserve_loop(
                     dep_date=self.dep_date,
                     src_locate=self.src_locate,
                     dst_locate=self.dst_locate,
@@ -309,7 +364,7 @@ class BackgroundReservationProcess:
 
 🔄 기존 예약이 취소될 때까지 대기하면서 계속 검색합니다...
 
-🔗 기존 예약 확인: {settings.KORAIL_PAYMENT_URL}
+🔗 기존 예약 확인: {self.payment_url}
 
 💡 검색을 중단하려면 /cancel 명령어를 사용하세요.
 💡 기존 예약을 취소하면 자동으로 새 예약을 시도합니다.
@@ -320,7 +375,7 @@ class BackgroundReservationProcess:
                 # Continue the reservation loop (retry)
                 logger.info("Continuing search after duplicate detection...")
                 try:
-                    reservation = self.korail.search_and_reserve_loop(
+                    reservation = self.rail.search_and_reserve_loop(
                         dep_date=self.dep_date,
                         src_locate=self.src_locate,
                         dst_locate=self.dst_locate,
@@ -341,16 +396,16 @@ class BackgroundReservationProcess:
                 message = f"""
 🌐 네트워크 오류
 
-코레일 서버와 통신 중 오류가 발생했습니다.
+{self.operator_name} 서버와 통신 중 오류가 발생했습니다.
 
 오류 내용: {e!s}
 
 💡 조치 방법:
 1. 인터넷 연결을 확인하세요
 2. 잠시 후 다시 시도하세요 (/cancel 후 /start)
-3. 코레일 서버가 점검 중일 수 있습니다
+3. {self.operator_name} 서버가 점검 중일 수 있습니다
 
-🔗 코레일 사이트 상태 확인: {settings.KORAIL_PAYMENT_URL}
+🔗 {self.operator_name} 사이트 상태 확인: {self.payment_url}
 """
                 self._send_callback(message, status=1)
                 return
@@ -419,7 +474,7 @@ class BackgroundReservationProcess:
 ⚠️ 중요: {settings.PAYMENT_TIMEOUT_MINUTES}분내에 사이트에서 결제를 완료하지 않으면 예약이 취소됩니다!
 
 💡 결제 완료 후 아무 메시지나 입력하시면 리마인더 알림이 중단됩니다.
-🔗 결제 링크: {settings.KORAIL_PAYMENT_URL}
+🔗 결제 링크: {self.payment_url}
 """
 
                     # Create MultiReservationStatus for smart reminders
@@ -448,7 +503,7 @@ class BackgroundReservationProcess:
 ⚠️ 중요: {settings.PAYMENT_TIMEOUT_MINUTES}분내에 사이트에서 결제를 완료하지 않으면 예약이 취소됩니다!
 
 💡 결제 완료 후 아무 메시지나 입력하시면 리마인더 알림이 중단됩니다.
-🔗 결제 링크: {settings.KORAIL_PAYMENT_URL}
+🔗 결제 링크: {self.payment_url}
 """
 
                 # Send callback with reservation metadata
@@ -501,11 +556,11 @@ class BackgroundReservationProcess:
 
 💡 조치 방법:
 1. 인터넷 연결 상태를 확인하세요
-2. 코레일 계정 정보가 올바른지 확인하세요
-3. 코레일 사이트가 정상 작동하는지 확인하세요
+2. {self.operator_name} 계정 정보가 올바른지 확인하세요
+3. {self.operator_name} 사이트가 정상 작동하는지 확인하세요
 4. /cancel 후 다시 시도하세요
 
-🔗 코레일 사이트 확인: {settings.KORAIL_PAYMENT_URL}
+🔗 {self.operator_name} 사이트 확인: {self.payment_url}
 """
             self._send_callback(message, status=1)
 
@@ -513,16 +568,15 @@ class BackgroundReservationProcess:
 
     def _payment_deadline(self, reservation) -> datetime:
         """
-        When Korail stops holding this seat.
+        When the railway stops holding this seat.
 
-        Korail states the deadline on the reservation itself, so that is what
-        is used rather than PAYMENT_TIMEOUT_MINUTES - the configured value is
-        this bot's idea of the window and can only ever be an approximation
-        of theirs. Falls back to it when the reservation does not carry a
-        readable one.
+        Both railways state the deadline on the reservation itself, so that is
+        what is used rather than PAYMENT_TIMEOUT_MINUTES - the configured
+        value is this bot's idea of the window and can only ever be an
+        approximation of theirs. Falls back to it when the reservation does
+        not carry a readable one.
         """
-        raw_date = getattr(reservation, "buy_limit_date", None)
-        raw_time = getattr(reservation, "buy_limit_time", None)
+        raw_date, raw_time = self.rail.payment_due(reservation)
 
         if isinstance(raw_date, str) and isinstance(raw_time, str):
             try:
@@ -551,9 +605,9 @@ class BackgroundReservationProcess:
         seat, while someone who paid and said nothing was nagged until the
         window closed.
         """
-        rsv_id = getattr(reservation, "rsv_id", None)
+        rsv_id = self.rail.reservation_id(reservation)
         if not rsv_id:
-            logger.warning("Reservation has no rsv_id - cannot verify payment")
+            logger.warning("Reservation has no number - cannot verify payment")
             return
 
         deadline = self._payment_deadline(reservation)
@@ -563,7 +617,7 @@ class BackgroundReservationProcess:
         while datetime.now() < deadline:
             time.sleep(min(interval, max(1.0, (deadline - datetime.now()).total_seconds())))
 
-            outstanding = self.korail.is_reservation_outstanding(rsv_id)
+            outstanding = self.rail.is_reservation_outstanding(rsv_id)
             if outstanding is None:
                 # Korail could not be asked. Not an answer, and certainly not
                 # "it is gone" - saying the payment went through here would
@@ -639,7 +693,7 @@ class BackgroundReservationProcess:
                 )
 
             # Add this reservation
-            rsv_id = getattr(reservation, "rsv_id", f"seat_{seat_index + 1}")
+            rsv_id = self.rail.reservation_id(reservation) or f"seat_{seat_index + 1}"
             info = SingleReservationInfo(
                 reservation_id=rsv_id,
                 reservation_obj=reservation,
@@ -676,8 +730,7 @@ class BackgroundReservationProcess:
             # Create SingleReservationInfo for each reservation
             reservation_infos = []
             for i, res in enumerate(all_reservations):
-                # Extract reservation ID (try to get from korail2 object)
-                rsv_id = getattr(res, "rsv_id", f"unknown_{i + 1}")
+                rsv_id = self.rail.reservation_id(res) or f"unknown_{i + 1}"
 
                 info = SingleReservationInfo(
                     reservation_id=rsv_id,
@@ -779,9 +832,9 @@ class BackgroundReservationProcess:
             else "시간대 전체"
         )
         health = (
-            "코레일 응답 정상"
+            f"{self.operator_name} 응답 정상"
             if progress.healthy
-            else f"코레일 응답 없음 (연속 {progress.failure_streak}회 실패, 간격을 늘려 재시도 중)"
+            else f"{self.operator_name} 응답 없음 (연속 {progress.failure_streak}회 실패, 간격을 늘려 재시도 중)"
         )
 
         return Messages.SEARCH_PROGRESS.format(
@@ -980,11 +1033,11 @@ class BackgroundReservationProcess:
             if is_summary:
                 logger.debug(f"🔄 Search attempt #{attempts} for seat {seat_index + 1}")
 
-            self.korail.report_progress(attempts)
+            self.rail.report_progress(attempts)
 
             # Search for trains (single passenger)
             try:
-                trains = self.korail.search_trains(
+                trains = self.rail.search_trains(
                     dep_date=self.dep_date,
                     src_locate=self.src_locate,
                     dst_locate=self.dst_locate,
@@ -1000,10 +1053,10 @@ class BackgroundReservationProcess:
                 # long enough to mean something. Used to be a bare
                 # `except Exception` that logged and retried at full rate,
                 # so a Korail that had stopped answering was invisible.
-                self.korail.wait_between_requests(self.korail.note_search_failure(e))
+                self.rail.wait_between_requests(self.rail.note_search_failure(e))
                 continue
 
-            self.korail.note_search_success()
+            self.rail.note_search_success()
 
             if trains:
                 logger.debug(f"✅ Search completed: found {len(trains)} trains")
@@ -1011,7 +1064,7 @@ class BackgroundReservationProcess:
                 logger.debug(f"📊 Attempt #{attempts}: no trains found, retrying...")
 
             if not trains:
-                self.korail.wait_between_requests()
+                self.rail.wait_between_requests()
                 continue
 
             # Try to reserve (trains found = rare, always log)
@@ -1019,7 +1072,7 @@ class BackgroundReservationProcess:
             for idx, train in enumerate(trains, 1):
                 logger.info(f"🚂 Trying train {idx}/{len(trains)}: {train}")
 
-                reservation = self.korail.reserve_train(
+                reservation = self.rail.reserve_train(
                     train, option=self.reserve_option, passenger_count=1
                 )
 
@@ -1035,7 +1088,7 @@ class BackgroundReservationProcess:
                             f"⚠️ {seat_index + 1}번째 좌석 예약 시도 중 기존 예약 감지\n\n"
                             f"이미 해당 시간에 예약된 좌석이 있습니다.\n"
                             f"기존 예약이 취소될 때까지 10초마다 재시도합니다.\n\n"
-                            f"🔗 기존 예약 확인: {settings.KORAIL_PAYMENT_URL}\n\n"
+                            f"🔗 기존 예약 확인: {self.payment_url}\n\n"
                             f"💡 검색을 중단하려면 /cancel 명령어를 사용하세요.\n"
                             f"💡 기존 예약을 취소하면 자동으로 새 예약을 시도합니다.",
                         )
@@ -1057,10 +1110,10 @@ class BackgroundReservationProcess:
             # All trains in this search failed
             if duplicate_found:
                 logger.info("⚠️ Duplicate reservation detected, waiting ~10s before retry...")
-                self.korail.wait_seconds(10)  # Around 10 seconds when duplicate found
+                self.rail.wait_seconds(10)  # Around 10 seconds when duplicate found
             else:
                 logger.debug(f"All {len(trains)} trains sold out in attempt #{attempts}")
-                self.korail.wait_between_requests()
+                self.rail.wait_between_requests()
 
     def _build_partial_reservation_message(
         self, seat_index: int, total_seats: int, reservation
@@ -1074,7 +1127,7 @@ class BackgroundReservationProcess:
 ━━━━━━━━━━━━━━━━━━━━
 
 ⏰ 예약 후 {settings.PAYMENT_TIMEOUT_MINUTES}분 이내 결제하세요!
-🔗 결제: {settings.KORAIL_PAYMENT_URL}
+🔗 결제: {self.payment_url}
 
 💡 결제 후 아무 메시지나 보내면 다음 좌석 예약이 시작됩니다.
 
@@ -1101,7 +1154,7 @@ class BackgroundReservationProcess:
 • 모든 좌석을 {settings.PAYMENT_TIMEOUT_MINUTES}분 내 결제해야 합니다!
 • 미결제 시 자동 취소됩니다!
 
-🔗 결제 링크: {settings.KORAIL_PAYMENT_URL}
+🔗 결제 링크: {self.payment_url}
 
 ✅ 축하합니다! 🎊
 """

@@ -49,10 +49,7 @@ cd korail_KTX_macro_telegrambot
 
 # .env 에 BOTTOKEN 입력
 
-# 개발용 Redis 기동 (Redis 가 없으면 run.sh 가 기동을 거부합니다)
-./scripts/run.sh redis
-
-# 실행 (long polling은 공인 IP·HTTPS 없이 바로 동작합니다)
+# 실행 (Redis가 없으면 자동 기동하며, 공인 IP·HTTPS는 필요 없습니다)
 ./scripts/run.sh
 
 # 계속 띄워둘 거라면 백그라운드로. 상태는 status.sh 로 봅니다.
@@ -238,13 +235,67 @@ cd korail_KTX_macro_telegrambot
   명령을 비밀번호 없이 쓰며 승인 요청 알림을 받습니다. 해제는 `/devoff`.
 
   ```bash
-  ./scripts/setup.sh --dev    # 문구 생성 + 개발용 코레일 계정 입력
+  ./scripts/setup.sh --dev    # 문구 생성 + 개발용 코레일/SRT 계정 입력
   ```
 
   이 명령이 `ADMIN_MAGIC_STRING` 을 만들어 보여줍니다. 봇을 띄운 뒤 그 문구를
   텔레그램으로 보내면 보낸 채팅방이 개발자 방이 됩니다. 문구를 직접 정하게
   하지 않는 이유는, 그것을 아는 사람은 누구나 개발자 방을 만들 수 있는데
   사람이 고른 문구는 대개 짧고 추측하기 쉽기 때문입니다.
+
+### 배포 전 별도 테스트 봇
+
+운영 봇의 채팅·Redis 상태를 건드리지 않고 현재 체크아웃을 검증하려면
+BotFather에서 테스트용 봇을 하나 더 만든 뒤 다음을 실행합니다.
+
+```bash
+# 별도 토큰, Redis 볼륨, 포트와 개발자 문구를 .env.test에 설정
+./scripts/setup.sh --test
+
+# 현재 체크아웃(예: worktree-srt-support)을 테스트 전용 이미지로 빌드·기동
+./scripts/deploy.sh --test build
+./scripts/deploy.sh --test up
+
+# 확인과 종료
+./scripts/deploy.sh --test logs
+./scripts/deploy.sh --test down
+```
+
+Docker Compose 대신 호스트에서 직접 실행할 수도 있습니다. 이 경우에도 운영
+`run.sh` 프로세스와 별도의 PID·로그·HTTP 포트·Redis를 사용합니다.
+
+```bash
+./scripts/run.sh --test --daemon
+./scripts/status.sh --test
+./scripts/status.sh logs --test -f
+./scripts/setup.sh check --test
+
+# 운영 봇은 건드리지 않고 테스트 봇만 중지
+./scripts/run.sh --test --stop
+./scripts/run.sh --test redis stop
+```
+
+`run.sh --test`는 6380 포트의 테스트 전용 Redis가 없으면 자동으로
+기동합니다. `run.sh --test redis`는 Redis만 별도로 관리할 때 사용합니다.
+
+설정 중 출력된 개발자 문구를 **테스트 봇과의 채팅방**에 보내면 그 방만
+개발자 모드가 됩니다. `.env.test`는 Git에서 제외되고 권한은 `600`으로
+만들어집니다. 기본값은 다음처럼 운영과 분리됩니다.
+
+| 항목 | 운영 봇 | 테스트 봇 |
+| --- | --- | --- |
+| Telegram 토큰 | `.env`의 `BOTTOKEN` | `.env.test`의 별도 `BOTTOKEN` |
+| Compose 프로젝트 | 기본 프로젝트 | `korail-bot-test` |
+| 앱·Redis 컨테이너 | `korail_bot` / `korail_redis` | `korail_bot_test` / `korail_redis_test` |
+| Redis 데이터 | 운영 전용 볼륨 | 테스트 전용 볼륨 |
+| HTTP 포트 | Compose 비공개 / `run.sh` 8080 | Compose 비공개 / `run.sh` 8081 |
+| 호스트 실행용 Redis | 127.0.0.1:6379 | 127.0.0.1:6380 |
+| 검색 접근·동시 실행 | 운영 설정 | 체험 0회, 철도별 최대 1개 |
+
+테스트 봇도 실제 철도 서버에 로그인하고 실제 예약을 만듭니다. 본인 계정만
+사용하고, 예약 성공·취소 검증 뒤에는 예약 목록에서 남은 건이 없는지
+확인해야 합니다. 운영 봇과 테스트 봇의 요청은 외부에서는 같은 IP로 보이므로
+두 봇에서 장시간 취소표 검색을 동시에 돌리지 마세요.
 
 > **왜 제한이 있나요?** 텔레그램 봇은 이름으로 검색되고 링크만 알면 누구나
 > 말을 걸 수 있습니다. 검색 하나가 몇 초마다 코레일에 요청을 보내는데,
@@ -294,21 +345,24 @@ cd korail_KTX_macro_telegrambot
 토큰으로 두 인스턴스를 띄우면 Telegram이 409를 돌려줍니다.
 
 > compose 의 Redis 는 보안상 호스트에 포트를 열지 않습니다. 앱을 호스트에서
-> 직접 실행할 때는 `run.sh redis`가 띄우는 127.0.0.1 전용 인스턴스를
-> 사용하세요.
+> 직접 실행하면 `run.sh`가 127.0.0.1 전용 Redis를 필요할 때 자동 기동합니다.
 
 **사용 가능한 명령어:** `make help` 또는 [scripts/README.md](scripts/README.md)
 
 - `make setup` / `./scripts/setup.sh` - 개발 환경 설정
+- `make setup-test` / `./scripts/setup.sh --test` - 격리된 테스트 봇 설정
 - `make run` / `./scripts/run.sh` - 애플리케이션 실행 (포그라운드)
 - `make daemon` / `./scripts/run.sh --daemon` - 백그라운드 실행
 - `make stop` / `./scripts/run.sh --stop` - 정지
 - `make status` / `./scripts/status.sh` - 상태 확인 (`logs [N] [-f]` 로 로그만)
 - `make test` / `./scripts/test.sh` - 테스트 실행
 - `make secrets` / `./scripts/setup.sh secrets` - 시크릿 발급 및 로테이션
+- `make secrets-test` / `./scripts/setup.sh secrets --test` - 테스트 시크릿 관리
 - `make security-check` / `./scripts/setup.sh check` - 설정 보안 점검
 - `make logs` / `./scripts/status.sh logs -f` - 데몬 로그 따라가기
 - `make up` / `down` / `docker-logs` - docker compose 스택 조작
+- `make up-test` / `down-test` / `docker-logs-test` - 테스트 봇 스택 조작
+- `make dev-redis-test` / `daemon-test` / `status-test` / `stop-test` - 호스트 테스트 봇 조작
 
 ### Docker 배포
 
@@ -339,6 +393,7 @@ waitress 이고, 폴러가 중복 기동되지 않도록 의도적으로 단일 
 | `ADMIN_PASSWORD` | ❌ | 관리자 명령 비밀번호. 미설정 시 관리자 명령 전체 비활성화. **코레일 비밀번호와 달라야 합니다** |
 | `ADMIN_MAGIC_STRING` | ❌ | 개발자 모드 전환 문자열. 16자 이상 권장, 미설정 시 비활성 |
 | `USERID` / `USERPW` | ❌ | 개발·테스트용 고정 코레일 계정. **개발자 모드인 채팅방에서만** 적용되어 로그인 단계를 건너뜁니다. 일반 사용자는 설정 여부와 무관하게 자기 계정을 등록합니다 |
+| `SRT_ID` / `SRT_PW` | ❌ | 개발·테스트용 고정 SRT 계정. `USERID`/`USERPW`와 독립적이며 **개발자 모드인 채팅방에서 SRT를 선택했을 때만** 적용됩니다 |
 | `SEARCH_INTERVAL` | ❌ | 코레일 요청 사이의 기본 대기 시간. 앱 fallback은 1초, `.env.example`은 3초 |
 | `SEARCH_INTERVAL_JITTER` | ❌ | 대기 시간 랜덤화 폭. 기본 `0.4` = 기본 간격의 ±40% 범위에서 매번 다시 뽑음. `0` 이면 고정 간격 |
 | `SEARCH_FAILURE_ALERT_THRESHOLD` | ❌ | 연속 조회 실패를 사용자에게 알리기 시작하는 횟수 (기본 10) |
@@ -356,7 +411,7 @@ waitress 이고, 폴러가 중복 기동되지 않도록 의도적으로 단일 
 | `PREAPPROVED_USERS` | ❌ | 승인 없이 바로 쓸 수 있는 번호 목록. 옛 이름 `ALLOW_LIST` 도 계속 읽습니다 |
 | `TRIAL_SEARCH_LIMIT` | ❌ | 승인 전 써볼 수 있는 검색 횟수 (기본 3). `0` 은 처음부터 승인 필요, 음수는 승인 불필요 |
 | `REQUEST_TTL_SECONDS` | ❌ | 미처리 승인 요청 보관 기한 (기본 2592000 = 30일) |
-| `MAX_CONCURRENT_SEARCHES` | ❌ | 서버 전체 동시 검색 상한 (기본 5). `0` 이면 제한 없음 |
+| `MAX_CONCURRENT_SEARCHES` | ❌ | 철도별 동시 검색 상한 (각 기본 5). 코레일과 SRT는 따로 세며, `0` 이면 제한 없음 |
 | `MAX_FAVOURITES` | ❌ | 한 사용자가 저장할 수 있는 즐겨찾기 개수 (기본 10) |
 | `PENDING_INPUT_TTL_SECONDS` | ❌ | "다음에 입력하는 것이 답" 상태의 유효 시간 (기본 300). 즐겨찾기 이름 변경, `/notify` 직접 입력에 쓰입니다 |
 | `PROGRESS_REPORT_MIN_MINUTES` | ❌ | `/notify` 로 설정할 수 있는 가장 짧은 보고 간격 (기본 1분) |
@@ -423,8 +478,8 @@ waitress 이고, 폴러가 중복 기동되지 않도록 의도적으로 단일 
 ## 개발 워크플로우
 
 ```bash
-make test        # 전체 1,455개 (testcontainers 가 Redis 를 띄우므로 Docker 필요)
-make test-unit   # 단위 1,224개 (Docker 불필요)
+make test        # 전체 1,604개 (testcontainers 가 Redis 를 띄우므로 Docker 필요)
+make test-unit   # 단위 1,344개 (Docker 불필요)
 make lint        # ruff format --check + ruff check
 make format      # 포맷 및 자동 수정 적용
 make typecheck   # mypy
@@ -435,9 +490,9 @@ make typecheck   # mypy
 있습니다. CI 의 `check` 잡이 통과해야만 이미지 빌드와 배포가 진행됩니다.
 
 **테스트 구성:**
-- `tests/unit/` (1,224개) - Redis 없이 도는 단위 테스트 (입력 검증, 키보드, 암호화,
+- `tests/unit/` (1,344개) - Redis 없이 도는 단위 테스트 (입력 검증, 키보드, 암호화,
   마스킹, 자격증명 전달, 스케줄, 재시작 복구 등)
-- `tests/integration/` (224개) - Redis 와 서비스 계층 통합 테스트
+- `tests/integration/` (253개) - Redis 와 서비스 계층 통합 테스트
 - `tests/e2e/` (7개) - 예약 플로우 전체 시나리오
 
 ### 의존성 추가 시

@@ -6,12 +6,13 @@
 #   scripts/setup.sh            # install dev dependencies and create .env
 #   scripts/setup.sh --no-deps  # only create .env and secrets
 #   scripts/setup.sh --dev      # also set up a developer chat (see below)
+#   scripts/setup.sh --test     # create an isolated .env.test staging bot
 #   scripts/setup.sh onboarding # guided setup from bot token to first reply
-#   scripts/setup.sh secrets    # generate or rotate secrets
-#   scripts/setup.sh check      # validate local and deployment settings
+#   scripts/setup.sh secrets [--test] # generate or rotate selected secrets
+#   scripts/setup.sh check [--test] # validate deployment settings
 #
-# --dev generates ADMIN_MAGIC_STRING and asks for a fixed Korail account to
-# put in USERID/USERPW. Sending that string to the bot turns the chat it was
+# --dev generates ADMIN_MAGIC_STRING and optionally stores fixed Korail/SRT
+# accounts. Sending that string to the bot turns the chat it was
 # sent from into a developer chat: no trial limit, admin commands without a
 # password, and logins with that account instead of a registered one. Only
 # developer chats are affected, which is why the string has to be a real
@@ -25,14 +26,18 @@ setup_secrets() {
 MANAGED_KEYS=(SESSION_SECRET ADMIN_PASSWORD REDIS_PASSWORD)
 
 MODE="fill"
+SECRET_TEST_RUNTIME=0
 for arg in "$@"; do
     case "$arg" in
         --print) MODE="print" ;;
         --force) MODE="force" ;;
-        -h|--help) printf '%s\n' 'Usage: scripts/setup.sh secrets [--print|--force]'; exit 0 ;;
+        --test) SECRET_TEST_RUNTIME=1 ;;
+        -h|--help) printf '%s\n' 'Usage: scripts/setup.sh secrets [--test] [--print|--force]'; exit 0 ;;
         *) die "Unknown option: $arg" ;;
     esac
 done
+
+(( SECRET_TEST_RUNTIME )) && use_test_stack
 
 if [[ "$MODE" == "print" ]]; then
     for key in "${MANAGED_KEYS[@]}"; do
@@ -87,15 +92,22 @@ if [[ "$changed" -eq 1 ]]; then
     warn "Restart the app so the new values take effect."
 fi
 
-ok "Secrets written to .env (mode 600)"
+ok "Secrets written to ${ENV_FILE#"$ROOT_DIR"/} (mode 600)"
 
 }
 
 setup_check() {
 
-case "${1:-}" in
-    -h|--help) printf '%s\n' 'Usage: scripts/setup.sh check'; exit 0 ;;
-esac
+TEST_RUNTIME=0
+PRODUCTION_ENV_FILE="$ENV_FILE"
+for arg in "$@"; do
+    case "$arg" in
+        --test) TEST_RUNTIME=1 ;;
+        -h|--help) printf '%s\n' 'Usage: scripts/setup.sh check [--test]'; exit 0 ;;
+        *) die "Unknown option: $arg" ;;
+    esac
+done
+(( TEST_RUNTIME )) && use_test_stack
 
 cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
 
@@ -127,15 +139,16 @@ check_required() {
 }
 
 echo "Configuration"
+ENV_LABEL="${ENV_FILE#"$ROOT_DIR"/}"
 
 if [[ -f "$ENV_FILE" ]]; then
-    pass_check ".env exists"
+    pass_check "${ENV_LABEL} exists"
 
     perms="$(stat -c '%a' "$ENV_FILE" 2>/dev/null || stat -f '%A' "$ENV_FILE" 2>/dev/null || echo '???')"
     if [[ "$perms" == "600" || "$perms" == "400" ]]; then
-        pass_check ".env permissions are ${perms}"
+        pass_check "${ENV_LABEL} permissions are ${perms}"
     else
-        warn_check ".env permissions are ${perms} - tighten with 'chmod 600 .env'"
+        warn_check "${ENV_LABEL} permissions are ${perms} - tighten with 'chmod 600 ${ENV_LABEL}'"
     fi
 
     check_required BOTTOKEN
@@ -157,7 +170,7 @@ if [[ -f "$ENV_FILE" ]]; then
         if [[ -n "$(env_value "$key")" ]]; then
             pass_check "${key} is set"
         else
-            fail_check "${key} is empty - run 'scripts/setup.sh secrets'"
+            fail_check "${key} is empty - generate it in ${ENV_LABEL}"
         fi
     done
 
@@ -190,8 +203,11 @@ if [[ -f "$ENV_FILE" ]]; then
     # The sample list locks the owner out of their own bot with a confusing
     # "권한이 없습니다", which is not obviously a config problem.
     allow_list="$(env_value ALLOW_LIST)"
-    if [[ -z "$allow_list" ]]; then
-        warn_check "ALLOW_LIST is empty - anyone who finds the bot can use it"
+    trial_limit="$(env_value TRIAL_SEARCH_LIMIT)"
+    if [[ -z "$allow_list" && "$TEST_RUNTIME" -eq 1 && "$trial_limit" == "0" ]]; then
+        pass_check "TRIAL_SEARCH_LIMIT=0 - non-developers cannot start test searches"
+    elif [[ -z "$allow_list" ]]; then
+        warn_check "ALLOW_LIST is empty - anyone who finds the bot can use its trial"
     elif [[ "$allow_list" == *"010-1234-5678"* || "$allow_list" == *"010-9876-5432"* ]]; then
         fail_check "ALLOW_LIST still holds the .env.example sample numbers - real users will be refused"
     else
@@ -205,23 +221,35 @@ if [[ -f "$ENV_FILE" ]]; then
         fail_check "FLASK_DEBUG=${debug_value} - the Werkzeug debugger allows remote code execution"
     fi
 else
-    fail_check ".env is missing - run 'scripts/setup.sh'"
+    setup_option=""
+    (( TEST_RUNTIME )) && setup_option=" --test"
+    fail_check "${ENV_LABEL} is missing - run 'scripts/setup.sh${setup_option}'"
+fi
+
+if (( TEST_RUNTIME )) && [[ -f "$PRODUCTION_ENV_FILE" && -f "$ENV_FILE" ]]; then
+    production_token="$(sed -n 's/^BOTTOKEN=//p' "$PRODUCTION_ENV_FILE" | tail -n 1)"
+    test_token="$(env_value BOTTOKEN)"
+    if [[ -n "$production_token" && "$test_token" == "$production_token" ]]; then
+        fail_check "${ENV_LABEL} reuses the production BOTTOKEN"
+    else
+        pass_check "test and production BOTTOKEN values are distinct"
+    fi
 fi
 
 echo
 echo "Repository"
 
 if git -C "$ROOT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
-    if git -C "$ROOT_DIR" ls-files --error-unmatch .env >/dev/null 2>&1; then
-        fail_check ".env is tracked by git - remove it from the index immediately"
+    if git -C "$ROOT_DIR" ls-files --error-unmatch "$ENV_LABEL" >/dev/null 2>&1; then
+        fail_check "${ENV_LABEL} is tracked by git - remove it from the index immediately"
     else
-        pass_check ".env is not tracked by git"
+        pass_check "${ENV_LABEL} is not tracked by git"
     fi
 
-    if git -C "$ROOT_DIR" check-ignore -q .env 2>/dev/null; then
-        pass_check ".env is covered by .gitignore"
+    if git -C "$ROOT_DIR" check-ignore -q "$ENV_LABEL" 2>/dev/null; then
+        pass_check "${ENV_LABEL} is covered by .gitignore"
     else
-        warn_check ".env is not covered by .gitignore"
+        warn_check "${ENV_LABEL} is not covered by .gitignore"
     fi
 else
     warn_check "Not a git repository - skipping repository checks"
@@ -576,12 +604,12 @@ else
     fi
 fi
 
-# =================================================== [6] 코레일 계정
+# =================================================== [6] 철도 계정
 
-step 6 "코레일 계정"
+step 6 "코레일·SRT 계정"
 
 if [[ "$USAGE_MODE" == "solo" ]]; then
-    say "혼자 사용하실 때는 코레일 계정을 여기에 저장해두는 편이 낫습니다."
+    say "혼자 사용하실 때는 자주 쓰는 철도 계정을 여기에 저장해두는 편이 낫습니다."
     say "매번 채팅에 비밀번호를 입력하지 않아도 되고, 무엇보다"
     say "${C_YELLOW}비밀번호가 텔레그램 대화 기록에 남지 않습니다.${C_RESET}"
     echo
@@ -589,6 +617,7 @@ if [[ "$USAGE_MODE" == "solo" ]]; then
     say "문구를 텔레그램으로 보내면 그 채팅방이 개발자 방이 됩니다."
     echo
 
+    STORED_FIXED_ACCOUNT=0
     if ask_yn "코레일 계정을 저장할까요?" y; then
         KORAIL_ID="$(ask "코레일 회원번호 (예: 010-1234-5678)" "$(clean_default "$(env_value USERID)")")"
         KORAIL_PW="$(ask_secret "코레일 비밀번호")"
@@ -596,29 +625,49 @@ if [[ "$USAGE_MODE" == "solo" ]]; then
         if [[ -n "$KORAIL_ID" && -n "$KORAIL_PW" ]]; then
             set_env_key USERID "$KORAIL_ID"
             set_env_key USERPW "$KORAIL_PW"
-
-            # 직접 정하게 두지 않는다. 이 문구를 아는 사람은 누구나 개발자 방을
-            # 만들 수 있는데, 사람이 고른 문구는 짧고 추측하기 쉽다.
-            MAGIC="$(env_value ADMIN_MAGIC_STRING)"
-            [[ -n "$MAGIC" ]] || MAGIC="$(gen_secret 24)"
-            set_env_key ADMIN_MAGIC_STRING "$MAGIC"
-
-            echo
-            ok "설정 완료. 봇을 띄운 뒤 아래 문구를 텔레그램으로 보내세요."
-            say "${C_YELLOW}${MAGIC}${C_RESET}"
-            say "보낸 채팅방이 개발자 방이 되고, 그 방에서는 로그인 없이 바로 예약합니다."
-            say "해제는 /devoff, 공유는 금물입니다."
+            STORED_FIXED_ACCOUNT=1
         else
             note "입력이 비어 있어 건너뜁니다."
         fi
     else
         say "→ 매번 채팅에서 코레일 정보를 입력하게 됩니다."
     fi
+
+    if ask_yn "SRT 계정을 저장할까요?" n; then
+        SRT_ACCOUNT_ID="$(ask "SRT 회원번호·휴대전화번호·이메일" "$(clean_default "$(env_value SRT_ID)")")"
+        SRT_ACCOUNT_PW="$(ask_secret "SRT 비밀번호")"
+
+        if [[ -n "$SRT_ACCOUNT_ID" && -n "$SRT_ACCOUNT_PW" ]]; then
+            set_env_key SRT_ID "$SRT_ACCOUNT_ID"
+            set_env_key SRT_PW "$SRT_ACCOUNT_PW"
+            STORED_FIXED_ACCOUNT=1
+        else
+            note "입력이 비어 있어 건너뜁니다."
+        fi
+    fi
+
+    if (( STORED_FIXED_ACCOUNT )); then
+        # 이 문구를 아는 사람은 누구나 개발자 방을 만들 수 있으므로 직접
+        # 정하게 두지 않고 충분히 긴 무작위 값을 만든다.
+        MAGIC="$(env_value ADMIN_MAGIC_STRING)"
+        [[ -n "$MAGIC" ]] || MAGIC="$(gen_secret 24)"
+        set_env_key ADMIN_MAGIC_STRING "$MAGIC"
+
+        echo
+        ok "설정 완료. 봇을 띄운 뒤 아래 문구를 텔레그램으로 보내세요."
+        say "${C_YELLOW}${MAGIC}${C_RESET}"
+        say "보낸 채팅방이 개발자 방이 되고, 선택한 철도의 고정 계정을 사용합니다."
+        say "해제는 /devoff, 공유는 금물입니다."
+    fi
 else
-    say "여러 명이 사용하므로 각자 텔레그램에서 코레일 정보를 입력합니다."
-    say "서버에는 코레일 계정을 저장하지 않습니다."
+    say "여러 명이 사용하므로 각자 텔레그램에서 철도 계정을 등록합니다."
+    say "서버 고정 계정은 사용하지 않습니다."
     # A magic string in a shared bot would let any user log in as the owner.
     set_env_key ADMIN_MAGIC_STRING ""
+    set_env_key USERID ""
+    set_env_key USERPW ""
+    set_env_key SRT_ID ""
+    set_env_key SRT_PW ""
 fi
 
 # =================================================== [7] 접근 제어
@@ -651,7 +700,7 @@ CHAT_ID=""
 
 # getUpdates has exactly one consumer per token, so a running bot would fight
 # this check for the same updates.
-if pgrep -f "python[0-9.]* .*src/app\.py" >/dev/null 2>&1; then
+if [[ -n "$(bot_pids)" ]]; then
     note "봇이 이미 실행 중이라 연결 확인을 건너뜁니다."
     note "  확인하시려면 봇을 멈춘 뒤 이 단계를 다시 실행하세요."
 elif ask_yn "지금 실제로 메시지를 주고받아 확인해볼까요?" y; then
@@ -732,25 +781,25 @@ if [[ "$RUN_MODE" == "docker" ]]; then
     say "  scripts/deploy.sh logs        # 로그 보기"
     say "  docker compose down           # 중지"
 else
-    say "  scripts/run.sh redis          # Redis 시작"
-    say "  scripts/run.sh                # 봇 시작"
+    say "  scripts/run.sh                # Redis 자동 준비 후 봇 시작"
 fi
 
 echo
 say "예매하는 방법:"
 say "  1. 텔레그램에서 @${BOT_USERNAME} 열기"
-say "  2. /start 입력"
 MAGIC_VALUE="$(env_value ADMIN_MAGIC_STRING)"
 if [[ -n "$MAGIC_VALUE" ]]; then
-    say "  3. '예' → '${MAGIC_VALUE}' 입력하면 로그인 완료"
+    say "  2. '${MAGIC_VALUE}' 입력해 개발자 방 활성화"
+    say "  3. /start → '예' → 코레일 또는 SRT 선택"
 else
-    say "  3. '예' → 코레일 회원번호와 비밀번호 입력"
+    say "  2. /start → '예' → 코레일 또는 SRT 선택"
+    say "  3. 선택한 철도의 회원번호와 비밀번호 입력"
 fi
-say "  4. 날짜(20260815) → 출발역(서울) → 도착역(부산) 순으로 답하기"
+say "  4. 날짜(20260815) → 출발역 → 도착역 순으로 답하기"
 say "  5. 시간대·인원까지 답하면 검색이 시작됩니다"
 echo
 say "취소표가 나오면 자동으로 예약하고 알려드립니다."
-note "예약 후 ${C_YELLOW}10분 안에 코레일에서 직접 결제${C_RESET}해야 취소되지 않습니다."
+note "예약 후 ${C_YELLOW}10분 안에 선택한 철도사에서 직접 결제${C_RESET}해야 취소되지 않습니다."
 echo
 say "  /status  진행 상황 확인"
 say "  /cancel  검색 중단"
@@ -779,11 +828,13 @@ esac
 
 INSTALL_DEPS=1
 DEV_SETUP=0
+TEST_SETUP=0
 for arg in "$@"; do
     case "$arg" in
         --no-deps) INSTALL_DEPS=0 ;;
         --dev) DEV_SETUP=1 ;;
-        -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --test) TEST_SETUP=1 ;;
+        -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "Unknown option: $arg" ;;
     esac
 done
@@ -804,10 +855,15 @@ fi
 info "Generating missing secrets"
 setup_secrets
 
-# ------------------------------------------------------- developer chat
-if [[ "$DEV_SETUP" -eq 1 ]]; then
+# configure_developer_chat <label>
+#
+# Works against whichever file ENV_FILE currently names. The test-bot setup
+# points it at .env.test; ordinary --dev leaves it on .env.
+configure_developer_chat() {
+    local label="$1" existing_magic magic korail_id korail_pw srt_id srt_pw
+
     echo
-    info "개발자 채팅방 설정"
+    info "${label} 개발자 채팅방 설정"
 
     # No terminal check: answers may legitimately be fed in from a file. An
     # input that runs out simply leaves the account unset, which is the same
@@ -815,18 +871,18 @@ if [[ "$DEV_SETUP" -eq 1 ]]; then
     # still does something useful without a single answer.
     [[ -t 0 ]] || warn "터미널이 아닙니다. 답이 없으면 계정 저장은 건너뜁니다."
 
-    EXISTING_MAGIC="$(env_value ADMIN_MAGIC_STRING)"
-    if [[ -n "$EXISTING_MAGIC" ]]; then
+    existing_magic="$(env_value ADMIN_MAGIC_STRING)"
+    if [[ -n "$existing_magic" ]]; then
         printf '  %s\n' "이미 설정된 개발자 문구가 있습니다."
         if ask_yn "새로 만들까요? (기존 개발자 방은 그대로 유지됩니다)" n; then
-            MAGIC="$(gen_secret 24)"
+            magic="$(gen_secret 24)"
         else
-            MAGIC="$EXISTING_MAGIC"
+            magic="$existing_magic"
         fi
     else
-        MAGIC="$(gen_secret 24)"
+        magic="$(gen_secret 24)"
     fi
-    set_env_key ADMIN_MAGIC_STRING "$MAGIC"
+    set_env_key ADMIN_MAGIC_STRING "$magic"
 
     echo
     printf '  %s\n' "이 봇으로 개발·테스트할 때 쓸 코레일 계정을 넣어두면,"
@@ -835,26 +891,122 @@ if [[ "$DEV_SETUP" -eq 1 ]]; then
     echo
 
     if ask_yn "코레일 계정을 저장할까요?" y; then
-        KORAIL_ID="$(ask "코레일 아이디 (휴대전화번호, 예: 010-1234-5678)" "$(clean_default "$(env_value USERID)")")"
-        KORAIL_PW="$(ask_secret "코레일 비밀번호")"
+        korail_id="$(ask "코레일 아이디 (휴대전화번호, 예: 010-1234-5678)" "$(clean_default "$(env_value USERID)")")"
+        korail_pw="$(ask_secret "코레일 비밀번호")"
 
-        if [[ -n "$KORAIL_ID" && -n "$KORAIL_PW" ]]; then
-            set_env_key USERID "$KORAIL_ID"
-            set_env_key USERPW "$KORAIL_PW"
-            ok "코레일 계정을 .env 에 저장했습니다."
+        if [[ -n "$korail_id" && -n "$korail_pw" ]]; then
+            set_env_key USERID "$korail_id"
+            set_env_key USERPW "$korail_pw"
+            ok "코레일 계정을 ${ENV_FILE#"$ROOT_DIR"/} 에 저장했습니다."
         else
             warn "입력이 비어 있어 계정 저장은 건너뜁니다."
+        fi
+    fi
+
+    if ask_yn "SRT 계정을 저장할까요?" n; then
+        srt_id="$(ask "SRT 아이디 (회원번호·휴대전화번호·이메일)" "$(clean_default "$(env_value SRT_ID)")")"
+        srt_pw="$(ask_secret "SRT 비밀번호")"
+
+        if [[ -n "$srt_id" && -n "$srt_pw" ]]; then
+            set_env_key SRT_ID "$srt_id"
+            set_env_key SRT_PW "$srt_pw"
+            ok "SRT 계정을 ${ENV_FILE#"$ROOT_DIR"/} 에 저장했습니다."
+        else
+            warn "입력이 비어 있어 SRT 계정 저장은 건너뜁니다."
         fi
     fi
 
     echo
     ok "개발자 문구가 준비되었습니다."
     printf '%s\n' "  ────────────────────────────────────────────────"
-    printf '  %s\n' "${C_YELLOW}${MAGIC}${C_RESET}"
+    printf '  %s\n' "${C_YELLOW}${magic}${C_RESET}"
     printf '%s\n' "  ────────────────────────────────────────────────"
     printf '  %s\n' "봇을 띄운 뒤 텔레그램에서 이 문구를 그대로 보내세요."
     printf '  %s\n' "보낸 채팅방이 개발자 방이 됩니다. 해제는 /devoff 입니다."
     printf '  %s\n' "${C_YELLOW}이 문구를 아는 사람은 누구나 개발자 방을 만들 수 있으니 공유하지 마세요.${C_RESET}"
+}
+
+# ------------------------------------------------------- developer chat
+if [[ "$DEV_SETUP" -eq 1 ]]; then
+    configure_developer_chat "운영 봇"
+fi
+
+# ----------------------------------------------------------- test bot
+if [[ "$TEST_SETUP" -eq 1 ]]; then
+    production_env="$ENV_FILE"
+    production_token="$(clean_default "$(env_value BOTTOKEN)")"
+    production_port="$(clean_default "$(env_value FLASK_PORT)")"
+    production_port="${production_port:-8080}"
+
+    echo
+    info "격리된 테스트 봇 설정"
+
+    if [[ -f "$TEST_ENV_FILE" ]]; then
+        info "${TEST_ENV_FILE#"$ROOT_DIR"/} already exists - keeping it"
+    else
+        cp "$ENV_EXAMPLE" "$TEST_ENV_FILE"
+        chmod 600 "$TEST_ENV_FILE"
+        ok "Created ${TEST_ENV_FILE#"$ROOT_DIR"/} from .env.example"
+    fi
+
+    ENV_FILE="$TEST_ENV_FILE"
+    export ENV_FILE
+
+    # Compose interpolation, service env, containers, port and project all
+    # get names of their own. The project name is what gives Redis its own
+    # network and named volume rather than sharing production state.
+    set_env_key COMPOSE_PROJECT_NAME "korail-bot-test"
+    set_env_key APP_CONTAINER_NAME "korail_bot_test"
+    set_env_key REDIS_CONTAINER_NAME "korail_redis_test"
+    set_env_key DEV_REDIS_CONTAINER_NAME "korail_test_dev_redis"
+    set_env_key BOT_ENV_FILE "${TEST_ENV_FILE#"$ROOT_DIR"/}"
+    set_env_key BOT_RUNTIME_PROFILE "test"
+    set_env_key TRIAL_SEARCH_LIMIT "0"
+    set_env_key MAX_CONCURRENT_SEARCHES "1"
+    set_env_key RESUME_ON_RESTART "false"
+    set_env_key DEV_REDIS_PORT "6380"
+
+    current_test_port="$(clean_default "$(env_value FLASK_PORT)")"
+    [[ "$current_test_port" == "$production_port" ]] && current_test_port=""
+    test_port="$(ask "테스트 봇 내부 HTTP 포트" "$current_test_port")"
+    test_port="${test_port:-8081}"
+    if ! [[ "$test_port" =~ ^[0-9]+$ ]] || \
+        (( test_port < 1 || test_port > 65535 )); then
+        die "테스트 봇 포트는 1~65535 숫자여야 합니다."
+    fi
+    [[ "$test_port" != "$production_port" ]] || \
+        die "${test_port}은 운영 봇 포트입니다. 테스트 봇에는 다른 포트를 쓰세요."
+    set_env_key FLASK_PORT "$test_port"
+
+    test_image="$(ask "테스트 이미지 태그" "$(clean_default "$(env_value IMAGE_NAME)")")"
+    test_image="${test_image:-korailbot:test}"
+    set_env_key IMAGE_NAME "$test_image"
+
+    test_token="$(ask "BotFather에서 만든 테스트 봇 토큰" "$(clean_default "$(env_value BOTTOKEN)")")"
+    if [[ -n "$production_token" && "$test_token" == "$production_token" ]]; then
+        warn "운영 봇과 같은 토큰은 사용할 수 없습니다. BOTTOKEN을 비워둡니다."
+        test_token=""
+    fi
+    set_env_key BOTTOKEN "$test_token"
+
+    info "Generating missing test-bot secrets"
+    setup_secrets
+    configure_developer_chat "테스트 봇"
+
+    ENV_FILE="$production_env"
+    export ENV_FILE
+
+    echo
+    ok "격리된 테스트 봇 설정이 준비되었습니다."
+    echo "  이미지 빌드: scripts/deploy.sh --test build"
+    echo "  테스트 봇 기동: scripts/deploy.sh --test up"
+    echo "  호스트 데몬: scripts/run.sh --test --daemon  # 전용 Redis도 자동 기동"
+    echo "  로그 확인: scripts/deploy.sh --test logs"
+    echo "  테스트 봇 중지: scripts/deploy.sh --test down"
+    echo "  설정 점검: scripts/setup.sh check --test"
+    if [[ -z "$test_token" ]]; then
+        warn "기동 전에 .env.test 의 BOTTOKEN에 별도 테스트 봇 토큰을 넣으세요."
+    fi
 fi
 
 # ------------------------------------------------------------- dependencies
@@ -889,5 +1041,12 @@ else
     echo "Optional:"
     echo "  PREAPPROVED_USERS   승인 없이 바로 쓸 사람들의 전화번호 (비워두면 모두 체험부터)"
     echo "  TRIAL_SEARCH_LIMIT  승인 전 써볼 수 있는 검색 횟수 (기본 3)"
-    echo "  scripts/setup.sh --dev  개발자 방 문구 생성 + 고정 코레일 계정 설정"
+    echo "  scripts/setup.sh --dev  개발자 방 문구 생성 + 고정 철도 계정 설정"
+fi
+if [[ "$TEST_SETUP" -eq 1 ]]; then
+    echo
+    echo "테스트 봇:"
+    echo "  Compose: scripts/deploy.sh --test build && scripts/deploy.sh --test up"
+    echo "  호스트: scripts/run.sh --test --daemon  # 전용 Redis도 자동 기동"
+    echo "  운영 봇과 다른 Telegram 토큰·Redis 볼륨·포트를 사용합니다."
 fi

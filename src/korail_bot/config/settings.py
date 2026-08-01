@@ -66,6 +66,11 @@ class Settings:
     KORAIL_ADMIN_USER_ID: str | None = (os.environ.get("USERID") or "").strip() or None
     # Not stripped: a password may legitimately begin or end with a space.
     KORAIL_ADMIN_PASSWORD: str | None = os.environ.get("USERPW") or None
+    # The equivalent fixed account for SR. Kept under names of its own because
+    # Korail and SR accounts are independent; filling one pair must never make
+    # the bot try those credentials against the other railway.
+    SRT_ADMIN_USER_ID: str | None = (os.environ.get("SRT_ID") or "").strip() or None
+    SRT_ADMIN_PASSWORD: str | None = os.environ.get("SRT_PW") or None
     KORAIL_SEARCH_INTERVAL: float = float(os.environ.get("SEARCH_INTERVAL", "1"))  # seconds
     # Every wait between Korail requests is drawn from
     # interval * (1 +/- jitter) instead of being a fixed number of seconds, so
@@ -115,6 +120,14 @@ class Settings:
     # The station guide, offered when a station name has to be typed.
     KORAIL_STATION_LIST_URL: str = os.environ.get(
         "KORAIL_STATION_LIST_URL", "https://www.korail.com/ticket/train/stationGuide/station"
+    )
+    # The same, for SR. etk.srail.kr is the ticketing site rather than the
+    # corporate one, and this is its reservation list - where a seat the bot
+    # just took is paid for. Signed-out visitors are redirected to the login
+    # page with ?goUrl= pointing back here, so the link works whatever state
+    # the browser is in, exactly as Korail's does.
+    SRT_PAYMENT_URL: str = os.environ.get(
+        "SRT_PAYMENT_URL", "https://etk.srail.kr/hpg/hra/02/selectReservationList.do"
     )
 
     # Payment Reminder Configuration
@@ -249,11 +262,11 @@ class Settings:
     TRIAL_SEARCH_LIMIT: int = int(os.environ.get("TRIAL_SEARCH_LIMIT", "3"))
     # How long an unanswered access request is kept. Default 30 days.
     REQUEST_TTL_SECONDS: int = int(os.environ.get("REQUEST_TTL_SECONDS", "2592000"))
-    # Ceiling on searches running at once, across every user.
+    # Ceiling on searches running at once, across every user, per railway.
     #
-    # Each search asks Korail for seats every few seconds, so this is what
-    # stands between a handful of approved users and an IP that Korail starts
-    # refusing. 0 disables the ceiling.
+    # Each search asks its railway for seats every few seconds. Korail and SR
+    # have separate endpoints and rate limits, so one railway being full does
+    # not consume the other's allowance. 0 disables the ceiling.
     MAX_CONCURRENT_SEARCHES: int = int(os.environ.get("MAX_CONCURRENT_SEARCHES", "5"))
 
     # ==================== Scheduled searches ====================
@@ -363,6 +376,19 @@ class Settings:
                     "ADMIN_MAGIC_STRING to use it, or unset USERID/USERPW."
                 )
 
+        if cls.has_preconfigured_srt_credentials():
+            if cls.ADMIN_MAGIC_STRING:
+                messages.append(
+                    "SRT_ID/SRT_PW are set - developer chats book with that SRT "
+                    "account instead of registering one. Everyone else is unaffected."
+                )
+            else:
+                messages.append(
+                    "SRT_ID/SRT_PW are set but ADMIN_MAGIC_STRING is not, so no chat "
+                    "can become a developer chat and the account is never used. Set "
+                    "ADMIN_MAGIC_STRING to use it, or unset SRT_ID/SRT_PW."
+                )
+
         if not cls.REDIS_PASSWORD:
             messages.append(
                 "REDIS_PASSWORD is not set - make sure Redis is not reachable "
@@ -387,6 +413,38 @@ class Settings:
         so the conversation skips straight past them.
         """
         return bool(cls.KORAIL_ADMIN_USER_ID and cls.KORAIL_ADMIN_PASSWORD)
+
+    @classmethod
+    def has_preconfigured_srt_credentials(cls) -> bool:
+        """Whether the server has a complete fixed SR login."""
+        return bool(cls.SRT_ADMIN_USER_ID and cls.SRT_ADMIN_PASSWORD)
+
+    @classmethod
+    def preconfigured_credentials(
+        cls, operator: object = "korail"
+    ) -> tuple[str | None, str | None]:
+        """Return the fixed credentials belonging to one railway.
+
+        ``operator`` is deliberately accepted as an object so this low-level
+        configuration module does not have to import the domain model and
+        create a settings -> models -> settings cycle. Operator is a StrEnum,
+        so its string value is the stable boundary here.
+        """
+        value = str(getattr(operator, "value", operator) or "korail").strip().lower()
+        if value == "srt":
+            return cls.SRT_ADMIN_USER_ID, cls.SRT_ADMIN_PASSWORD
+        return cls.KORAIL_ADMIN_USER_ID, cls.KORAIL_ADMIN_PASSWORD
+
+    @classmethod
+    def has_preconfigured_credentials(cls, operator: object = "korail") -> bool:
+        """Whether both fixed-login fields are present for one railway."""
+        username, password = cls.preconfigured_credentials(operator)
+        return bool(username and password)
+
+    @classmethod
+    def has_any_preconfigured_credentials(cls) -> bool:
+        """Whether at least one railway can use a server-side login."""
+        return cls.has_preconfigured_korail_credentials() or cls.has_preconfigured_srt_credentials()
 
     @classmethod
     def is_preapproved(cls, phone_number: str) -> bool:

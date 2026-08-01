@@ -13,9 +13,11 @@ arrives collapsed behind a fold - there for whoever wants it, costing nothing
 to whoever does not. A release with four features and a paragraph each would
 otherwise be a wall of text arriving unasked.
 
-Releasing means bumping korail_bot.__version__ and adding the entry here in
-the same commit. A version with no entry is still announced, plainly; that is
-the fallback, not the intent.
+Releasing means bumping the version in pyproject.toml, running `make lock` so
+the lockfile follows it, and adding the entry here - all in the same commit.
+The key is the version as packaging normalises it, which is what the lookup
+arrives with: 4.2.0b1, not 4.2.0-beta.1. A version with no entry is still
+announced, plainly; that is the fallback, not the intent.
 """
 
 from dataclasses import dataclass
@@ -86,7 +88,9 @@ NOTES: dict[str, ReleaseNote] = {
 문제입니다. 오류 메시지조차 없어서 봇이 멈춘 것처럼 보였고, 다시 보내도
 마찬가지였습니다. 이제 한글로 답한 것도 다른 답과 똑같이 처리됩니다.""",
     ),
-    "4.2.0-beta.1": ReleaseNote(
+    # Keyed the way packaging normalises it, which is the form the lookup
+    # arrives in - "4.2.0-beta.1" as declared would never be found.
+    "4.2.0b1": ReleaseNote(
         headline="""• 코레일에 더해 SRT 열차도 검색하고 예약할 수 있습니다.
 • 예약을 시작할 때 철도사를 먼저 고르고, 각 철도 계정으로 로그인합니다.
 • 실제 SRT 예약 성공 경로를 확인 중인 베타 버전입니다.""",

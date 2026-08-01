@@ -1,10 +1,22 @@
 """코레일 KTX 예매 텔레그램 봇."""
 
-#: The single source of truth for the version. pyproject.toml reads it from
-#: here rather than the other way round, so the running bot can name its own
-#: version without depending on having been pip-installed - a source checkout
-#: and a container built from one have to answer that question the same way.
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _distribution_version
+
+#: The version, read from the installed distribution's metadata. The number
+#: itself is declared in pyproject.toml, which is the one place a release
+#: edits.
 #:
-#: Bumping this is what makes the bot announce itself to its users on the next
-#: start, so the entry in korail_bot.release_notes belongs in the same commit.
-__version__ = "4.2.0-beta.1"
+#: Metadata is a copy written at install time, so it can in principle lag the
+#: declaration. Nothing here has to guard against that: scripts/run.sh syncs
+#: the environment before it starts the bot, and it does so with --frozen, so
+#: a lockfile left behind by a bump stops the start with a message about it
+#: rather than serving the old number quietly.
+#:
+#: A checkout that was never installed has no metadata to read. The bot still
+#: starts and still runs; it just cannot name itself, and says so rather than
+#: inventing a number that would be announced as if it were a release.
+try:
+    __version__ = _distribution_version("korail-ktx-bot")
+except PackageNotFoundError:  # pragma: no cover - needs an uninstalled checkout
+    __version__ = "0.0.0+unknown"

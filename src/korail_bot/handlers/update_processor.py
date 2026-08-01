@@ -195,6 +195,14 @@ class TelegramUpdateProcessor:
                 self.command_handler.handle_favourite_rename(chat_id, renaming, text)
                 return
 
+            # A reporting interval typed into the reply box that "직접 입력"
+            # opens. Same shape as the rename above, and outside the session
+            # for the same reason: choosing how often to hear from a search is
+            # not a step of the flow that books one.
+            if self.storage.is_waiting_for_notify_input(chat_id):
+                self.command_handler.handle_notify_input(chat_id, text)
+                return
+
             # Handle conversation flow (non-command messages)
             if in_progress:
                 # Handle conversation flow

@@ -217,6 +217,9 @@ class CommandHandler:
         self.storage.set_developer(chat_id, True)
         logger.warning(f"chat_id={chat_id} entered developer mode with the magic string")
 
+        # The tools arrive in the menu at the same moment they start working.
+        self.publish_command_menu(chat_id)
+
         self.telegram.send_message(chat_id, MessageTemplates.DEVELOPER_ON)
         if existing:
             self.telegram.send_to_multiple(existing, MessageTemplates.DEVELOPER_NEW_NOTICE)
@@ -232,9 +235,40 @@ class CommandHandler:
 
         self.storage.set_developer(chat_id, False)
         logger.warning(f"chat_id={chat_id} left developer mode")
+
+        # And leave with it, rather than sitting in the menu offering
+        # /flushredis to a chat the bot no longer treats as an operator.
+        self.publish_command_menu(chat_id)
+
         self.telegram.send_message(chat_id, MessageTemplates.DEVELOPER_OFF)
 
     # ==================== Approving people ====================
+
+    def publish_command_menu(self, chat_id: int) -> None:
+        """
+        Put the right command menu on one chat.
+
+        Developer chats get a list of their own, carrying the operator's tools
+        as well as everyone else's commands - Telegram shows the narrowest
+        matching list rather than merging them. Every other chat has no list
+        of its own and falls back to the default one.
+
+        Keyed on developer mode rather than may_administer: a password session
+        expires on its own, and a menu that quietly went stale an hour later
+        would offer /flushredis to a chat that would then be asked to
+        authenticate for it. Developer mode is the standing grant, and it
+        changes only when someone changes it - which is when this runs.
+
+        Best effort. Telegram being unreachable must not be the reason
+        /devoff appears to have failed.
+        """
+        try:
+            if self.storage.is_developer(chat_id):
+                self.telegram.set_my_commands(MessageTemplates.DEVELOPER_COMMANDS, chat_id=chat_id)
+            else:
+                self.telegram.delete_my_commands(chat_id)
+        except Exception as e:
+            logger.warning(f"Could not update the command menu for chat_id={chat_id}: {e}")
 
     def may_administer(self, chat_id: int) -> bool:
         """
@@ -709,14 +743,52 @@ class CommandHandler:
             value: The interval in minutes, or the "off" sentinel
         """
         if value == keyboards.NOTIFY_OFF:
+            self.storage.set_waiting_for_notify_input(chat_id, False)
             self.set_progress_reports(chat_id, 0)
+            return
+
+        if value == keyboards.MANUAL:
+            self._ask_for_notify_interval(chat_id)
             return
 
         if not value.isdigit():
             logger.warning(f"Unknown notify choice {value!r} from chat_id={chat_id}")
             return
 
+        self.storage.set_waiting_for_notify_input(chat_id, False)
         self.set_progress_reports(chat_id, int(value))
+
+    def _ask_for_notify_interval(self, chat_id: int) -> None:
+        """
+        Wait for the next message to be a number of minutes.
+
+        Sent with force_reply so Telegram opens a reply box rather than
+        leaving the user to work out that a bare number is now expected. The
+        keyboard offers round numbers; this is how someone asks for seven.
+        """
+        self.storage.set_waiting_for_notify_input(chat_id)
+        self.telegram.send_message(
+            chat_id,
+            MessageTemplates.NOTIFY_ASK_MINUTES.format(
+                min=settings.PROGRESS_REPORT_MIN_MINUTES,
+                max=settings.PROGRESS_REPORT_MAX_MINUTES,
+            ),
+            reply_markup=keyboards.force_reply("분 단위 숫자"),
+        )
+
+    def handle_notify_input(self, chat_id: int, text: str) -> None:
+        """
+        Take the interval someone typed into the reply box.
+
+        Args:
+            chat_id: Telegram chat ID
+            text: What they typed
+        """
+        # Read as an answer once. A value the parser refuses gets its own
+        # message from handle_notify, and the reply box is gone by then, so
+        # leaving the flag set would silently claim the next thing typed.
+        self.storage.set_waiting_for_notify_input(chat_id, False)
+        self.handle_notify(chat_id, text)
 
     def handle_cancel(self, chat_id: int) -> None:
         """
@@ -753,10 +825,12 @@ class CommandHandler:
             session.reset()
             self.storage.save_user_session(session)
 
-        # Waiting on a new name for a saved search is one of the states
-        # /cancel exists to get out of - and the only way out of it, since
-        # anything else typed would be taken as the name.
+        # Waiting on something typed - a new name for a saved search, a
+        # reporting interval - is one of the states /cancel exists to get out
+        # of, and the only way out of it: anything else typed would be taken
+        # as the answer.
         self.storage.set_pending_favourite_rename(chat_id, None)
+        self.storage.set_waiting_for_notify_input(chat_id, False)
 
         # Clear multi-reservation status (for random seating)
         self.storage.delete_multi_reservation_status(chat_id)
@@ -933,7 +1007,9 @@ class CommandHandler:
             chat_id: Telegram chat ID
         """
         logger.info(f"Handling /help for chat_id={chat_id}")
-        self.telegram.send_message(chat_id, MessageTemplates.help_message())
+        self.telegram.send_message(
+            chat_id, MessageTemplates.help_message(is_admin=self.may_administer(chat_id))
+        )
 
     def handle_unknown_command(self, chat_id: int, command: str) -> None:
         """
@@ -949,10 +1025,10 @@ class CommandHandler:
             f"알 수 없는 명령어입니다: {command}\n\n"
             f"📌 사용 가능한 명령어:\n"
             f"/start - 예약 시작\n"
+            f"/fav - 즐겨찾기\n"
             f"/cancel - 예약 취소\n"
             f"/status - 상태 확인\n"
-            f"/help - 도움말\n\n"
-            f"🔧 관리자 명령어는 별도로 문의하세요.",
+            f"/help - 전체 목록",
         )
 
     def is_command(self, text: str) -> bool:

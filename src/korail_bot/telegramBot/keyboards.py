@@ -578,6 +578,10 @@ def notify_keyboard(current: int = 0) -> InlineKeyboard:
 
     return _keyboard(
         *_rows(buttons, 3),
+        # The offered intervals are the round numbers, not the whole range.
+        # Someone who wants 7 minutes should not have to know that /notify 7
+        # is a thing they could have typed.
+        [_manual_button(STEP_NOTIFY)],
         [_button(f"{'✅ ' if current <= 0 else '🔕 '}알림 끄기", STEP_NOTIFY, NOTIFY_OFF)],
     )
 
@@ -658,6 +662,27 @@ def dead_search_keyboard(resumable: bool = True) -> InlineKeyboard:
         rows.append([_button("🔄 같은 조건으로 재개", STEP_DEAD, DEAD_RESUME)])
     rows.append([_button("🗑️ 그만두기", STEP_DEAD, DEAD_DISCARD)])
     return _keyboard(*rows)
+
+
+def force_reply(placeholder: str = "") -> dict:
+    """
+    Ask Telegram to open a reply box.
+
+    Not a keyboard at all, but it goes in the same reply_markup slot and it
+    answers the same need: a screen that ends with "type the value" is only
+    usable if the client puts a cursor where the value goes.
+
+    Args:
+        placeholder: Greyed-out hint inside the box. Telegram caps it at 64
+                     characters and rejects the whole send if it is longer.
+
+    Returns:
+        The reply_markup a Bot API call wants
+    """
+    markup: dict = {"force_reply": True, "selective": False}
+    if placeholder:
+        markup["input_field_placeholder"] = placeholder[:64]
+    return markup
 
 
 def empty_keyboard() -> InlineKeyboard:

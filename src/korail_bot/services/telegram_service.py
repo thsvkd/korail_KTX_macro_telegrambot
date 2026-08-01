@@ -71,7 +71,13 @@ class TelegramService:
         result = body.get("result")
         return result if isinstance(result, dict) else {}
 
-    def send_message(self, chat_id: int, text: str, reply_markup: dict | None = None) -> bool:
+    def send_message(
+        self,
+        chat_id: int,
+        text: str,
+        reply_markup: dict | None = None,
+        parse_mode: str | None = None,
+    ) -> bool:
         """
         Send a text message to a Telegram chat.
 
@@ -79,6 +85,10 @@ class TelegramService:
             chat_id: Telegram chat ID
             text: Message text to send
             reply_markup: Optional inline keyboard to attach
+            parse_mode: "HTML" when the text carries markup. Left off for
+                everything else: nearly every message this bot sends is a
+                station name or something a user typed, and turning markup on
+                for those would mean a stray < costing the whole send.
 
         Returns:
             True if message was sent successfully, False otherwise
@@ -86,6 +96,8 @@ class TelegramService:
         payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
+        if parse_mode is not None:
+            payload["parse_mode"] = parse_mode
 
         if self._call("sendMessage", payload) is None:
             return False
@@ -122,20 +134,23 @@ class TelegramService:
         message_id = result.get("message_id")
         return message_id if isinstance(message_id, int) else None
 
-    def send_to_multiple(self, chat_ids: list[int], text: str) -> int:
+    def send_to_multiple(
+        self, chat_ids: list[int], text: str, parse_mode: str | None = None
+    ) -> int:
         """
         Send a message to multiple chats.
 
         Args:
             chat_ids: List of Telegram chat IDs
             text: Message text to send
+            parse_mode: Passed through, so a broadcast can carry markup
 
         Returns:
             Number of successful sends
         """
         success_count = 0
         for chat_id in chat_ids:
-            if self.send_message(chat_id, text):
+            if self.send_message(chat_id, text, parse_mode=parse_mode):
                 success_count += 1
         return success_count
 
@@ -214,7 +229,7 @@ class TelegramService:
             is not None
         )
 
-    def set_my_commands(self, commands: list[dict[str, str]]) -> bool:
+    def set_my_commands(self, commands: list[dict[str, str]], chat_id: int | None = None) -> bool:
         """
         Publish the command list Telegram shows in its menu button.
 
@@ -223,8 +238,36 @@ class TelegramService:
 
         Args:
             commands: Entries of {"command": ..., "description": ...}
+            chat_id: Publish for this chat alone. Telegram shows the narrowest
+                matching list rather than merging, so a chat-scoped list has
+                to carry everything that chat should see - it replaces the
+                default one, it does not add to it. None sets the default,
+                which is what every other chat gets.
 
         Returns:
             True when Telegram accepted the list
         """
-        return self._call("setMyCommands", {"commands": commands}) is not None
+        payload: dict[str, Any] = {"commands": commands}
+        if chat_id is not None:
+            payload["scope"] = {"type": "chat", "chat_id": chat_id}
+
+        return self._call("setMyCommands", payload) is not None
+
+    def delete_my_commands(self, chat_id: int) -> bool:
+        """
+        Drop one chat's own command list, so it falls back to the default.
+
+        How a chat stops being a developer chat: without this the operator's
+        menu would outlive the mode it belonged to, offering /flushredis to
+        someone the bot no longer treats as an operator.
+
+        Args:
+            chat_id: The chat whose scoped list should go
+
+        Returns:
+            True when Telegram accepted the change
+        """
+        return (
+            self._call("deleteMyCommands", {"scope": {"type": "chat", "chat_id": chat_id}})
+            is not None
+        )

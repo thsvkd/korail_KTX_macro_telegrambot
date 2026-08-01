@@ -380,15 +380,74 @@ class TestTheNotifyKeyboard(NotifyFixture):
 
     def test_every_offered_interval_is_one_the_command_would_accept(self):
         """A button that gets refused is worse than no button."""
-        for button in self.buttons():
-            value = button["callback_data"].partition(":")[2]
-            if value == keyboards.NOTIFY_OFF:
-                continue
+        for value in self.intervals():
             assert (
                 settings.PROGRESS_REPORT_MIN_MINUTES
                 <= int(value)
                 <= settings.PROGRESS_REPORT_MAX_MINUTES
             )
+
+    def intervals(self, current=0):
+        """
+        The values that are actually intervals.
+
+        "Turn it off" and "let me type one" are instructions to the handler
+        rather than answers, so validating them against the range would be
+        checking the wrong thing.
+        """
+        sentinels = {keyboards.NOTIFY_OFF, keyboards.MANUAL}
+        return [
+            value
+            for button in self.buttons(current)
+            if (value := button["callback_data"].partition(":")[2]) not in sentinels
+        ]
+
+    def test_typing_an_interval_is_offered_too(self):
+        """
+        The keyboard carries round numbers. Someone who wants seven minutes
+        should not have to know that /notify 7 was a thing they could type.
+        """
+        data = {b["callback_data"] for b in self.buttons()}
+
+        assert f"{keyboards.STEP_NOTIFY}:{keyboards.MANUAL}" in data
+
+    def test_choosing_to_type_opens_a_reply_box(self):
+        """
+        A screen that ends with "type the value" is only usable if the client
+        puts a cursor where the value goes.
+        """
+        self.handler.handle_notify_callback(CHAT_ID, keyboards.MANUAL)
+
+        self.storage.set_waiting_for_notify_input.assert_called_once_with(CHAT_ID)
+        self.storage.set_progress_report_minutes.assert_not_called()
+        assert self.telegram.send_message.call_args.kwargs["reply_markup"]["force_reply"]
+
+    def test_the_typed_interval_is_taken(self):
+        self.handler.handle_notify_input(CHAT_ID, "7")
+
+        assert self.stored() == 7
+
+    def test_it_stops_listening_afterwards(self):
+        """Otherwise the next message becomes an interval too."""
+        self.handler.handle_notify_input(CHAT_ID, "7")
+
+        self.storage.set_waiting_for_notify_input.assert_called_with(CHAT_ID, False)
+
+    def test_it_stops_listening_even_when_the_value_makes_no_sense(self):
+        """
+        The reply box is gone by the time the refusal is sent, so leaving the
+        flag set would silently claim whatever is typed next.
+        """
+        self.handler.handle_notify_input(CHAT_ID, "가끔")
+
+        self.storage.set_progress_report_minutes.assert_not_called()
+        self.storage.set_waiting_for_notify_input.assert_called_with(CHAT_ID, False)
+
+    def test_a_placeholder_stays_inside_telegrams_limit(self):
+        """Over 64 characters and the whole sendMessage is refused."""
+        markup = keyboards.force_reply("가" * 200)
+
+        assert len(markup["input_field_placeholder"]) <= 64
 
     def test_the_callback_data_fits_telegrams_limit(self):
         for button in self.buttons():

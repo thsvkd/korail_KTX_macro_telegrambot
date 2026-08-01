@@ -11,6 +11,7 @@ Once, and only on a change. A notice that arrives on every restart is not an
 announcement, it is a symptom.
 """
 
+import html
 import threading
 
 from korail_bot import __version__
@@ -22,8 +23,23 @@ from korail_bot.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _escape(text: str) -> str:
+    """
+    Make a note safe to put inside the announcement's markup.
+
+    quote=False because these land in text, not in an attribute: escaping the
+    quotes there would turn every "직접 입력" in a release note into &quot;,
+    which is correct HTML and needless noise in the payload.
+    """
+    return html.escape(text, quote=False)
+
+
 class ReleaseAnnouncer:
     """Announces a version change to everyone who uses the bot."""
+
+    #: How the announcement is sent. The only message this bot marks up, and
+    #: only because a fold has no other spelling in the Bot API.
+    PARSE_MODE = "HTML"
 
     def __init__(
         self,
@@ -91,7 +107,7 @@ class ReleaseAnnouncer:
             return 0
 
         message = self.message()
-        sent = self.telegram.send_to_multiple(audience, message)
+        sent = self.telegram.send_to_multiple(audience, message, parse_mode=self.PARSE_MODE)
         logger.info(
             f"Announced v{self.version} (from {previous or 'an unknown version'}) "
             f"to {sent}/{len(audience)} chats"
@@ -123,13 +139,30 @@ class ReleaseAnnouncer:
         return list(dict.fromkeys(found))
 
     def message(self) -> str:
-        """The announcement, with release notes when the release has any."""
+        """
+        The announcement, with release notes when the release has any.
+
+        Everything interpolated is escaped: these lines are written by hand
+        in release_notes.py, and one stray < in a hurried entry would take
+        the whole announcement down rather than showing up wrong.
+        """
         from korail_bot.telegramBot.messages import Messages
 
         notes = notes_for(self.version)
-        if notes:
-            return Messages.UPDATED_WITH_NOTES.format(version=self.version, notes=notes)
-        return Messages.UPDATED.format(version=self.version)
+        version = _escape(self.version)
+
+        if not notes:
+            return Messages.UPDATED.format(version=version)
+
+        headline = _escape(notes.headline)
+        if not notes.detail.strip():
+            # No fold rather than an empty one: a box that opens onto nothing
+            # is worse than no box.
+            return Messages.UPDATED_HEADLINE_ONLY.format(version=version, headline=headline)
+
+        return Messages.UPDATED_WITH_NOTES.format(
+            version=version, headline=headline, detail=_escape(notes.detail)
+        )
 
     def _is_due(self) -> bool:
         """

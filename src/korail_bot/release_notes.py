@@ -7,29 +7,65 @@ that make it worth the interruption, so they are written for the person who
 books tickets rather than for whoever wrote the diff - no module names, no
 refactors, nothing they cannot see from the chat.
 
+Two parts, because the interruption should stay small. The headline is what
+lands in the chat: a few lines someone reads without deciding to. The detail
+arrives collapsed behind a fold - there for whoever wants it, costing nothing
+to whoever does not. A release with four features and a paragraph each would
+otherwise be a wall of text arriving unasked.
+
 Releasing means bumping korail_bot.__version__ and adding the entry here in
 the same commit. A version with no entry is still announced, plainly; that is
 the fallback, not the intent.
 """
 
-#: Version -> the highlights, one per line, already written as bullets.
-NOTES: dict[str, str] = {
-    "4.0.0": """• 앞 단계로 돌아가는 ◀️ 뒤로 버튼이 생겼습니다.
-  날짜를 하루 잘못 골랐다고 처음부터 다시 하지 않아도 됩니다.
-• /notify 로 켜두면 검색이 도는 동안 진행 상황을 알려줍니다. (기본 꺼짐)
-• /fav 로 자주 타는 구간을 저장해두고 한 번에 불러올 수 있습니다.
-• "모든 열차" 가 무엇을 포함하는지, 무엇을 조심해야 하는지 안내합니다.""",
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class ReleaseNote:
+    """One release, as its users hear about it."""
+
+    #: The few lines shown outright. Short on purpose - this is the part that
+    #: interrupts someone, so it has to earn the interruption on its own.
+    headline: str
+    #: Everything else, shown folded. Optional: a small release has nothing to
+    #: hide and should not grow a fold to prove it.
+    detail: str = ""
+
+
+NOTES: dict[str, ReleaseNote] = {
+    "4.0.0": ReleaseNote(
+        headline="""• ◀️ 뒤로 버튼으로 앞 단계로 돌아갈 수 있습니다.
+• /fav 로 자주 타는 구간을 저장해두고 불러옵니다.
+• /notify 로 검색 진행 상황을 받아볼 수 있습니다. (기본 꺼짐)""",
+        detail="""◀️ 뒤로
+날짜를 하루 잘못 골랐다고 처음부터 다시 할 필요가 없습니다. 뒤에 질문이
+있는 모든 단계에 버튼이 있고, "뒤로" 라고 입력해도 됩니다.
+
+⭐ 즐겨찾기 (/fav)
+확인 화면의 "즐겨찾기에 저장" 을 누르면 날짜를 뺀 모든 답을 저장합니다.
+다음부터는 /fav 에서 불러와 날짜만 고르면 됩니다. 이름 변경과 삭제도
+/fav 안에서 합니다.
+
+🔔 진행 상황 알림 (/notify)
+검색이 도는 동안 정해둔 간격마다 얼마나 오래 몇 번 조회했는지, 코레일이
+응답하고 있는지 알려줍니다. 기본은 꺼져 있습니다.
+
+🚄 "모든 열차" 안내
+무엇이 포함되는지, 그리고 먼저 나오는 자리를 잡기 때문에 무궁화호가
+예약될 수 있다는 점을 고르기 전에 알려줍니다.""",
+    ),
 }
 
 
-def notes_for(version: str) -> str | None:
+def notes_for(version: str) -> ReleaseNote | None:
     """
-    The highlights for a version, if any were written.
+    The notes for a version, if any were written.
 
     Args:
         version: The version being announced
 
     Returns:
-        The bullets, or None when the release shipped without them
+        The note, or None when the release shipped without one
     """
     return NOTES.get(version)

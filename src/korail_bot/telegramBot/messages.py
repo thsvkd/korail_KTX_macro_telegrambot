@@ -16,9 +16,14 @@ class Messages:
     # Telegram 의 메뉴 버튼에 표시되는 목록. 명령어를 외워서 타이핑하는 대신
     # 골라서 쓰게 만드는 용도다.
     #
-    # 관리자 명령어는 일부러 빼두었다. 메뉴는 모든 사용자에게 똑같이 보이므로,
-    # 여기에 넣는 순간 /flushredis 가 있다는 사실을 전원에게 광고하게 된다.
-    BOT_COMMANDS: ClassVar[list[dict[str, str]]] = [
+    # 두 벌인 이유는 메뉴가 방마다 다르게 붙기 때문이다. 예전에는 한 벌을
+    # 모두에게 붙였고, 그래서 관리자 명령어를 넣는 순간 /flushredis 가 있다는
+    # 사실을 전원에게 광고하는 셈이 되어 아예 뺄 수밖에 없었다. 운영자는
+    # 자기 도구가 메뉴에 없는 채로 외워서 쳤다.
+    #
+    # 지금은 기본 목록을 모두에게 붙이고, 개발자 방에는 그 방만 범위로 하는
+    # 전체 목록을 따로 붙인다. 각자 자기가 쓸 수 있는 것만 본다.
+    PUBLIC_COMMANDS: ClassVar[list[dict[str, str]]] = [
         {"command": "start", "description": "🎫 예약 시작"},
         {"command": "fav", "description": "⭐ 즐겨찾기"},
         {"command": "status", "description": "📊 예약 상태 확인"},
@@ -28,6 +33,24 @@ class Messages:
         {"command": "cancel", "description": "🚫 진행 중인 예약 취소"},
         {"command": "help", "description": "❓ 도움말"},
     ]
+
+    # 운영자 도구. 위험한 순서가 아니라 자주 쓰는 순서로 둔다. 메뉴에서
+    # /flushredis 가 /approve 바로 옆에 있으면 잘못 누르기 좋다.
+    ADMIN_COMMANDS: ClassVar[list[dict[str, str]]] = [
+        {"command": "approve", "description": "🙋 사용 승인 요청 처리"},
+        {"command": "users", "description": "👥 승인된 사용자 관리"},
+        {"command": "allusers", "description": "📋 전체 사용자 확인"},
+        {"command": "cancelall", "description": "🛑 전체 예약 취소"},
+        {"command": "broadcast", "description": "📢 공지사항 전송"},
+        {"command": "debug_on", "description": "🐛 상세 디버그 로그 켜기"},
+        {"command": "debug_off", "description": "🐛 디버그 로그 끄기"},
+        {"command": "devoff", "description": "🛠️ 개발자 모드 해제"},
+        {"command": "flushredis", "description": "⚠️ Redis 초기화 (위험)"},
+    ]
+
+    #: 개발자 방에 붙는 목록. Telegram 은 방 범위 목록을 기본 목록과 합치지
+    #: 않고 그것만 보여주므로, 공개 명령어까지 함께 담아야 한다.
+    DEVELOPER_COMMANDS: ClassVar[list[dict[str, str]]] = PUBLIC_COMMANDS + ADMIN_COMMANDS
 
     # ========== 시작 및 안내 메시지 ==========
     WELCOME = """🚄 코레일 예매 봇을 이용해 주셔서 감사합니다.
@@ -258,6 +281,9 @@ class Messages:
     USERS_REVOKED = "🚫 {maskedPhone} 의 승인을 취소했습니다."
     USERS_REVOKE_GONE = "이미 승인이 취소된 사용자입니다."
 
+    # 도움말도 방에 따라 다르다. 쓸 수 없는 명령어를 늘어놓는 도움말은 읽는
+    # 사람이 자기에게 해당하는 줄을 골라내야 하는 목록이고, 그러면서 서버에
+    # 어떤 위험한 문이 있는지 알려준다.
     HELP = """📌 사용 가능한 명령어
 
 🎫 예약 관련
@@ -274,17 +300,20 @@ class Messages:
   /notify - 진행 상황 알림 설정 (기본 꺼짐)
   /help - 도움말 보기
 
-🔧 관리자 명령어 (인증 필요)
+💡 결제 알림은 예약 성공 후 아무 메시지나 입력하면 중단됩니다.
+"""
+
+    HELP_ADMIN_SECTION = """
+🔧 관리자 명령어
   /approve - 사용 승인 요청 처리
   /users - 승인된 사용자 관리
   /allusers - 전체 사용자 확인
   /cancelall - 전체 예약 취소
   /broadcast [메시지] - 공지사항 전송
-  /flushredis - Redis 메모리 초기화 (⚠️ 위험)
   /debug_on - 상세 디버그 로그 활성화
   /debug_off - 디버그 로그 비활성화
-
-💡 결제 알림은 예약 성공 후 아무 메시지나 입력하면 중단됩니다.
+  /devoff - 개발자 모드 해제
+  /flushredis - Redis 메모리 초기화 (⚠️ 위험)
 """
 
     # ========== 로그인 관련 메시지 ==========
@@ -734,6 +763,13 @@ class Messages:
    /notify 10     → 10분마다
    /notify off    → 끄기"""
 
+    NOTIFY_ASK_MINUTES = """⌨️ 몇 분마다 알려드릴까요?
+
+숫자만 입력해주세요. (예: 7)
+{min}분에서 {max}분 사이로 정할 수 있습니다.
+
+그만두려면 /cancel 을 입력하세요."""
+
     NOTIFY_CURRENT_OFF = "꺼짐"
     NOTIFY_CURRENT_ON = "{minutes}분마다"
 
@@ -838,9 +874,22 @@ class Messages:
     # 것을 어쩌다 발견해서 알게 되는데, 그래서는 새로 생긴 기능이 있는 줄도
     # 모른 채 계속 쓴다. 버전이 바뀌면 한 번 알린다. 한 번이고, 바뀔 때만
     # 이다. 재시작할 때마다 오는 안내는 안내가 아니라 증상이다.
+    # HTML 로 보낸다. expandable blockquote 는 텔레그램이 접어서 보여주는
+    # 유일한 방법이고, 이 메시지가 마크업을 쓰는 유일한 메시지다. 넣는 값은
+    # 전부 이스케이프한다.
     UPDATED_WITH_NOTES = """🚀 v{version} 으로 업데이트되었습니다
 
-{notes}
+{headline}
+
+<blockquote expandable>{detail}</blockquote>
+
+/help 로 전체 명령어를 확인할 수 있습니다."""
+
+    # 접을 것이 없는 릴리스. 접는 상자만 있고 안이 비어 있으면 눌러본 사람을
+    # 속이는 셈이라 아예 만들지 않는다.
+    UPDATED_HEADLINE_ONLY = """🚀 v{version} 으로 업데이트되었습니다
+
+{headline}
 
 /help 로 전체 명령어를 확인할 수 있습니다."""
 
@@ -1076,8 +1125,18 @@ class Messages:
         return Messages.CANCELLED
 
     @staticmethod
-    def help_message():
-        """Help message (compatibility method)"""
+    def help_message(is_admin: bool = False):
+        """
+        The command list, for whoever is asking.
+
+        Args:
+            is_admin: Whether this chat may actually use the operator's tools.
+                Listing them for someone who cannot makes them work out which
+                lines apply to them, and tells them which dangerous doors the
+                server has.
+        """
+        if is_admin:
+            return Messages.HELP + Messages.HELP_ADMIN_SECTION
         return Messages.HELP
 
     @staticmethod

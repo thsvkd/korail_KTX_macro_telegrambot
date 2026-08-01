@@ -171,9 +171,14 @@ class Settings:
     # forty rows on it is not a list anyone reads. Ten is more journeys than
     # anyone takes regularly, and hitting it is a prompt to tidy up.
     MAX_FAVOURITES: int = int(os.environ.get("MAX_FAVOURITES", "10"))
-    # How long "the next thing you type is the new name" stays true. A rename
-    # abandoned mid-thought must not swallow whatever is typed an hour later.
-    FAVOURITE_RENAME_TTL_SECONDS: int = int(os.environ.get("FAVOURITE_RENAME_TTL_SECONDS", "300"))
+
+    # Waiting for something typed
+    #
+    # A few screens end with "the next thing you send is the answer" - a new
+    # name for a favourite, a reporting interval that is not on the keyboard.
+    # How long that stays true. One abandoned mid-thought must not swallow
+    # whatever gets typed an hour later.
+    PENDING_INPUT_TTL_SECONDS: int = int(os.environ.get("PENDING_INPUT_TTL_SECONDS", "300"))
 
     # Flask Configuration
     # In polling mode the only caller of the HTTP API is the background

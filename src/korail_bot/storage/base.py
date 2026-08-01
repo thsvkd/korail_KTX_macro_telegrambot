@@ -233,6 +233,16 @@ class StorageInterface(ABC):
         """Set the reporting interval, or 0 to stop reporting."""
         pass
 
+    @abstractmethod
+    def set_waiting_for_notify_input(self, chat_id: int, waiting: bool = True) -> None:
+        """Note that the next message typed here is a reporting interval."""
+        pass
+
+    @abstractmethod
+    def is_waiting_for_notify_input(self, chat_id: int) -> bool:
+        """Whether this chat is in the middle of typing a reporting interval."""
+        pass
+
     # Resume Credentials Management
     @abstractmethod
     def save_resume_credentials(self, chat_id: int, username: str, password: str) -> None:

@@ -437,7 +437,7 @@ class RedisStorage(StorageInterface):
         if fav_id is None:
             self.redis.delete(key)
         else:
-            self.redis.set(key, fav_id, ex=settings.FAVOURITE_RENAME_TTL_SECONDS)
+            self.redis.set(key, fav_id, ex=settings.PENDING_INPUT_TTL_SECONDS)
 
     def get_pending_favourite_rename(self, chat_id: int) -> str | None:
         """Which favourite this chat is in the middle of renaming, if any."""
@@ -632,6 +632,24 @@ class RedisStorage(StorageInterface):
             self.redis.delete(key)
         else:
             self.redis.set(key, str(int(minutes)))
+
+    def set_waiting_for_notify_input(self, chat_id: int, waiting: bool = True) -> None:
+        """
+        Note that the next message typed here is a reporting interval.
+
+        The keyboard offers round numbers; this is how someone asks for seven
+        minutes. Short-lived for the same reason the rename flag is: a screen
+        walked away from must not claim the next thing typed an hour later.
+        """
+        key = f"notify_input:{chat_id}"
+        if waiting:
+            self.redis.set(key, "1", ex=settings.PENDING_INPUT_TTL_SECONDS)
+        else:
+            self.redis.delete(key)
+
+    def is_waiting_for_notify_input(self, chat_id: int) -> bool:
+        """Whether this chat is in the middle of typing a reporting interval."""
+        return self.redis.exists(f"notify_input:{chat_id}") > 0
 
     # ==================== Resume Credentials Management ====================
 

@@ -1,372 +1,145 @@
-# 대화 플로우 문서
+# 대화 플로우
 
-이 문서는 텔레그램 봇의 예약 프로세스 전체 대화 플로우를 정리합니다.
+이 문서는 `handlers/conversation_handler.py`와 `handlers/update_processor.py`의 현재
+동작을 기준으로 예약 대화의 상태 전이를 설명합니다. `UserProgress`의 이름은
+"완료된 입력"을 가리키지만, 런타임에서는 그 다음 질문을 기다리는 상태로
+사용됩니다. 상태 숫자는 Redis에 저장되므로 새 단계를 중간에 끼우지 않고 뒤에
+추가합니다.
 
-## 전체 플로우 개요
+## 기본 예약 흐름
 
-| 단계 | Progress 상태 | 핸들러 메서드 | 사용자 입력 | 응답 메시지 | 다음 상태 |
-|-----|--------------|-------------|-----------|-----------|---------|
-| 0 | INIT | - | - | - | - |
-| 1 | STARTED | `_handle_start_confirmation` | "Y" 또는 "예" | REQUEST_PHONE (전화번호 요청) | START_ACCEPTED |
-| 1-1 | STARTED | `_handle_preconfigured_login` | "Y" 또는 "예" (**개발자 방** + USERID/USERPW 설정 시) | LOGIN_SUCCESS_PRECONFIGURED (2·3단계 생략) | PW_INPUT_SUCCESS |
-| 1-2 | STARTED | `_handle_admin_login` | ADMIN_MAGIC_STRING | LOGIN_SUCCESS (환경변수 자동로그인) | PW_INPUT_SUCCESS |
-| 2 | START_ACCEPTED | `_handle_phone_input` | 010-1234-5678 | REQUEST_PASSWORD (비밀번호 요청) | ID_INPUT_SUCCESS |
-| 3 | ID_INPUT_SUCCESS | `_handle_password_input` | 비밀번호 | LOGIN_SUCCESS (로그인 성공) | PW_INPUT_SUCCESS |
-| 4 | PW_INPUT_SUCCESS | `_handle_date_input` | 20260408 | REQUEST_DATE (✅ 출발일 입력 완료 + 출발역 요청) | DATE_INPUT_SUCCESS |
-| 5 | DATE_INPUT_SUCCESS | `_handle_src_station_input` | 광주송정 | REQUEST_SRC_STATION (✅ 출발역 입력 완료 + 도착역 요청) | SRC_LOCATE_INPUT_SUCCESS |
-| 6 | SRC_LOCATE_INPUT_SUCCESS | `_handle_dst_station_input` | 대전 | "도착역 입력 완료" + 시간 입력 요청 | DST_LOCATE_INPUT_SUCCESS |
-| 7 | DST_LOCATE_INPUT_SUCCESS | `_handle_dep_time_input` | 1200 | "검색 시작 시각 완료" + 최대 시각 요청 | DEP_TIME_INPUT_SUCCESS |
-| 8 | DEP_TIME_INPUT_SUCCESS | `_handle_max_dep_time_input` | 2400 | "기준 시각 완료" + 열차 타입 선택 | MAX_DEP_TIME_INPUT_SUCCESS |
-| 9 | MAX_DEP_TIME_INPUT_SUCCESS | `_handle_train_type_input` | 1 또는 2 | "열차 타입 완료" + 특실 옵션 선택 | TRAIN_TYPE_INPUT_SUCCESS |
-| 10 | TRAIN_TYPE_INPUT_SUCCESS | `_handle_special_option_input` | 1~4 | "특실 타입 완료" + 탑승 인원 요청 | SPECIAL_INPUT_SUCCESS |
-| 11 | SPECIAL_INPUT_SUCCESS | `_handle_passenger_count_input` | 1~9 | 인원수별 좌석 배치 선택 요청 | PASSENGER_COUNT_INPUT_SUCCESS |
-| 12 | PASSENGER_COUNT_INPUT_SUCCESS | `_handle_seat_strategy_input` | 1 또는 2 | 최종 확인 화면 | SEAT_STRATEGY_INPUT_SUCCESS |
-| 13 | SEAT_STRATEGY_INPUT_SUCCESS | `_handle_final_confirmation` | "Y" 또는 "예" | "예약 시작" | FINDING_TICKET |
+| 현재 상태 | 기다리는 입력 | 처리 메서드 | 성공 후 상태 |
+| --- | --- | --- | --- |
+| `STARTED` | 시작할지 여부 | `_handle_start_confirmation` | `START_ACCEPTED` |
+| `START_ACCEPTED` | 코레일 휴대전화번호 | `_handle_phone_input` | `ID_INPUT_SUCCESS` |
+| `ID_INPUT_SUCCESS` | 코레일 비밀번호 | `_handle_password_input` | `PW_INPUT_SUCCESS` |
+| `PW_INPUT_SUCCESS` | 출발일 | `_handle_date_input` | `DATE_INPUT_SUCCESS` |
+| `DATE_INPUT_SUCCESS` | 출발역 | `_handle_src_station_input` | `SRC_LOCATE_INPUT_SUCCESS` |
+| `SRC_LOCATE_INPUT_SUCCESS` | 도착역 | `_handle_dst_station_input` | `DST_LOCATE_INPUT_SUCCESS` |
+| `DST_LOCATE_INPUT_SUCCESS` | 검색할 출발 시각 | `_handle_dep_time_input` | `DEP_TIME_INPUT_SUCCESS` |
+| `DEP_TIME_INPUT_SUCCESS` | 검색 종료 시각 | `_handle_max_dep_time_input` | `MAX_DEP_TIME_INPUT_SUCCESS` |
+| `MAX_DEP_TIME_INPUT_SUCCESS` | 열차 종류 | `_handle_train_type_input` | `TRAIN_TYPE_INPUT_SUCCESS` |
+| `TRAIN_TYPE_INPUT_SUCCESS` | 일반실·특실 우선순위 | `_handle_special_option_input` | `SPECIAL_INPUT_SUCCESS` |
+| `SPECIAL_INPUT_SUCCESS` | 승객 수 | `_handle_passenger_count_input` | `PASSENGER_COUNT_INPUT_SUCCESS` 또는 `SEAT_STRATEGY_INPUT_SUCCESS` |
+| `PASSENGER_COUNT_INPUT_SUCCESS` | 좌석 배치 | `_handle_seat_strategy_input` | `SEAT_STRATEGY_INPUT_SUCCESS` |
+| `SEAT_STRATEGY_INPUT_SUCCESS` | 감시할 열차 | `_handle_train_selection_input` | `TRAIN_SELECT_INPUT_SUCCESS` |
+| `TRAIN_SELECT_INPUT_SUCCESS` | 최종 동작 | `_handle_final_confirmation` | `FINDING_TICKET`, `SCHEDULE_INPUT_PENDING` 또는 취소 |
+| `SCHEDULE_INPUT_PENDING` | 검색 시작 시각 | `_handle_schedule_input` | 예약 저장 후 대화 종료 |
+| `FINDING_TICKET` | 검색 중 | `_handle_already_processing` | 상태 유지 |
 
-## 상세 플로우
+`INIT`은 진행 중인 대화가 없는 초기값입니다.
 
-### 1단계: 시작 확인 (STARTED)
-**입력**:
-- "Y" 또는 "예" → 정상 진행
-- `ADMIN_MAGIC_STRING` 값은 이 단계가 아니라 라우터에서 먼저 처리됩니다(개발자 모드 전환).
+## 단계별 입력과 분기
 
-**응답**:
-- 정상: REQUEST_PHONE (전화번호 입력 요청)
-- 개발자 방이면서 USERID/USERPW가 모두 설정된 경우: 2·3단계를 건너뛰고 바로 로그인 →
-  LOGIN_SUCCESS_PRECONFIGURED (날짜 입력 단계로). 로그인에 실패하면
-  PRECONFIGURED_LOGIN_FAILED를 보내고 2단계(전화번호 입력)로 되돌아갑니다.
-- 관리자: LOGIN_SUCCESS (자동 로그인 후 날짜 입력 단계로)
+### 1. 시작과 로그인
 
----
+- `/start`는 세션을 `STARTED`로 만들고 시작 확인 버튼을 보냅니다.
+- 처음 쓰는 일반 사용자는 안내에 동의한 뒤 휴대전화번호와 비밀번호를 입력합니다.
+  전화번호는 하이픈 유무를 모두 허용하고, 비밀번호는 코레일 로그인으로 검증합니다.
+- 로그인이 성공하면 계정을 암호화해 별도 온보딩 레코드로 보관합니다. 다음
+  `/start`부터는 저장된 계정으로 다시 로그인한 뒤 날짜 질문으로 바로 갑니다.
+- 개발자 방에 `USERID`와 `USERPW`가 모두 설정돼 있으면 두 입력을 건너뛰고 해당
+  계정으로 로그인합니다. 실패하면 일반 전화번호 입력으로 돌아갑니다.
+- 저장 계정의 로그인이 실패하면 보관 값을 삭제하고 재등록을 안내합니다.
 
-### 2단계: 전화번호 입력 (START_ACCEPTED)
-> 개발자 방이면서 USERID/USERPW가 설정된 경우 이 단계는 실행되지 않습니다 (로그인 실패 시 예외).
+접근 승인 여부는 로그인 입력 단계가 아니라 실제 검색 프로세스를 시작하기 직전에
+확인합니다. 체험 한도가 남아 있으면 검색이 실제로 기동된 뒤 한 번 차감합니다.
 
-**입력**: `010-1234-5678` 또는 `01012345678` (하이픈 선택)
+### 2. 날짜·구간·시간대
 
-**검증**:
-- 전화번호 형식 (010-xxxx-xxxx)
-- ALLOW_LIST 확인 (허용된 사용자인지)
+- 출발일은 `YYYYMMDD` 형식이며 오늘부터 최대 1년 안이어야 합니다. 버튼은
+  오늘부터 9일치를 제공합니다. 실제 발매 가능 기간은 코레일 정책이 더 짧을 수
+  있습니다.
+- 역 이름은 `역` 접미사를 빼고 입력합니다. 알려진 코레일 역인지 검증하며 출발역과
+  도착역은 같을 수 없습니다.
+- 검색 시작·종료 시각은 `HHMM`입니다. 종료 시각의 `2400`은 제한 없음을 뜻합니다.
+  종료 시각은 시작 시각보다 뒤여야 합니다.
 
-**응답**: REQUEST_PASSWORD (비밀번호 입력 요청)
+### 3. 열차·좌석·인원
 
----
+- 열차 종류 `1`은 KTX 계열, `2`는 코레일의 모든 열차입니다.
+- 좌석 옵션은 일반실 우선, 일반실만, 특실 우선, 특실만 중 하나입니다.
+- 승객 수는 1~9명입니다.
+- 1명이면 좌석 배치를 `consecutive`로 정하고 배치 질문을 건너뜁니다.
+- 2명 이상이면 연속 좌석(`consecutive`) 또는 랜덤 배치(`random`)를 고릅니다.
 
-### 3단계: 비밀번호 입력 (ID_INPUT_SUCCESS)
-> 개발자 방이면서 USERID/USERPW가 설정된 경우 이 단계는 실행되지 않습니다 (로그인 실패 시 예외).
+### 4. 감시할 열차
 
-**입력**: 코레일 비밀번호
+입력한 날짜·구간·시간대로 현재 열차 목록을 조회합니다. 최대 30개까지 보여주며,
+각 행을 반복해서 눌러 여러 열차를 선택하거나 해제할 수 있습니다.
 
-**검증**:
-- 코레일 API 로그인 시도
-- 실패 시: 재입력 요청 (상태 유지)
+- `101 105` 또는 `101,105`처럼 열차번호를 직접 입력할 수도 있습니다.
+- 선택을 완료하면 고른 번호만 감시합니다.
+- `시간대 전체 감시` 또는 직접 입력 `전체`/`0`은 특정 열차로 좁히지 않습니다.
+- 새로고침은 여석과 목록을 다시 읽되 아직 운행하는 열차의 선택은 보존합니다.
+- 목록 조회에 실패했거나 결과가 없으면 대화를 막지 않고 시간대 전체 감시로
+  최종 확인 화면에 진입합니다.
 
-**응답**: LOGIN_SUCCESS (로그인 성공 + 출발일 입력 요청)
+### 5. 최종 확인
 
----
+요약에는 날짜, 구간, 시간대, 열차·좌석 조건, 인원, 좌석 배치와 감시 범위가
+표시됩니다. 여기서 다음 중 하나를 고릅니다.
 
-### 4단계: 출발일 입력 (PW_INPUT_SUCCESS)
-**입력**: `20260408` (8자리 숫자)
+- **지금 검색 시작**: 접근 권한과 서버 동시 검색 상한을 확인하고 자식 프로세스를
+  띄웁니다. 기동에 성공해야 `FINDING_TICKET`이 되고 체험 횟수가 차감됩니다.
+- **시작 시각 예약**: `SCHEDULE_INPUT_PENDING`으로 이동합니다.
+- **즐겨찾기에 저장**: 현재 답을 저장하되 최종 확인 질문은 그대로 유지합니다.
+- **뒤로**: 열차 선택 화면으로 돌아갑니다.
+- **취소**: 세션을 초기화합니다.
 
-**검증**:
-- 8자리 숫자
-- 유효한 날짜
-- 과거 날짜 아닌지
+### 6. 검색 시작 시각 예약
 
-**응답**:
-- Messages.REQUEST_DATE
-- "✅ 출발일 입력 완료" + 출발역 입력 요청
-- 역 목록 URL 제공
+버튼의 절대 시각 외에 다음 입력을 허용합니다.
 
----
+- `0700`: 다음 07:00
+- `0801 0700`: 올해 8월 1일 07:00
+- `20260801 0700`: 2026년 8월 1일 07:00
 
-### 5단계: 출발역 입력 (DATE_INPUT_SUCCESS)
-**입력**: `광주송정` (역 이름, "역" 제외)
+시각은 현재보다 뒤, 열차 출발보다 앞이어야 하며
+`SCHEDULE_MAX_AHEAD_SECONDS` 안이어야 합니다. 예약이 저장되면 현재 대화는
+종료되고 실제 검색은 스케줄러가 시작합니다. 앱이 예정 시각에 잠시 꺼져 있었으면
+`SCHEDULE_GRACE_SECONDS` 안에서만 뒤늦게 시작합니다.
 
-**검증**:
-- "역" 포함 여부 (포함하면 에러)
-- 최소 2글자 이상
+## 보조 흐름
 
-**응답**:
-- Messages.REQUEST_SRC_STATION
-- "✅ 출발역 입력 완료" + 도착역 입력 요청
+### 온보딩과 계정 교체
 
----
+- `/onboarding`과 별칭 `/init`은 코레일 계정 등록을 시작합니다.
+- 이미 등록된 계정이 있으면 `ONBOARDING_OVERWRITE_PENDING`에서 교체 여부를 먼저
+  묻습니다. 교체를 승인하면 기존 등록을 삭제한 뒤 새 전화번호를 받습니다.
+- `/logout`, 봇 차단·대화방 삭제(`my_chat_member`),
+  `CREDENTIAL_TTL_SECONDS` 만료 시 등록 계정이 삭제됩니다.
 
-### 6단계: 도착역 입력 (SRC_LOCATE_INPUT_SUCCESS)
-**입력**: `대전` (역 이름, "역" 제외)
+### 개발자 모드와 관리자 명령
 
-**검증**: 출발역과 동일
-
-**응답**:
-- 인라인 메시지
-- "✅ 도착역 입력 완료" + 검색 시작 시각 입력 요청
-- 형식: HHMM (예: 1305)
-
----
-
-### 7단계: 검색 시작 시각 입력 (DST_LOCATE_INPUT_SUCCESS)
-**입력**: `1200` (4자리 시간, 0-23시 기준)
-
-**검증**:
-- 4자리 숫자
-- 시간: 0-23
-- 분: 0-59
-
-**응답**:
-- "검색 시작 시각 완료" + 최대 시각 입력 요청
-- 2400 입력 가능 (제한 없음)
-
----
-
-### 8단계: 검색 최대 시각 입력 (DEP_TIME_INPUT_SUCCESS)
-**입력**: `2400` 또는 4자리 시간
-
-**특수 처리**: `2400`은 제한 없음을 의미 (권장)
-
-**응답**:
-- "기준 시각 완료" + 열차 타입 선택 요청
-- 1: KTX만
-- 2: 모든 열차
-
----
-
-### 9단계: 열차 타입 선택 (MAX_DEP_TIME_INPUT_SUCCESS)
-**입력**: `1` 또는 `2`
-
-**저장**:
-- 1 → trainType: "TrainType.KTX", trainTypeShow: "KTX"
-- 2 → trainType: "TrainType.ALL", trainTypeShow: "ALL"
-
-**응답**:
-- "열차 타입 완료" + 특실 옵션 선택 요청
-- 1: 일반실 우선
-- 2: 일반실만
-- 3: 특실 우선
-- 4: 특실만
-
----
-
-### 10단계: 특실 옵션 선택 (TRAIN_TYPE_INPUT_SUCCESS)
-**입력**: `1`, `2`, `3`, 또는 `4`
-
-**저장**:
-- 1 → ReserveOption.GENERAL_FIRST
-- 2 → ReserveOption.GENERAL_ONLY
-- 3 → ReserveOption.SPECIAL_FIRST
-- 4 → ReserveOption.SPECIAL_ONLY
-
-**응답**:
-- "특실 타입 완료" + 탑승 인원수 입력 요청
-- 1~9명 입력 가능
-
----
-
-### 11단계: 탑승 인원수 입력 (SPECIAL_INPUT_SUCCESS)
-**입력**: `1`~`9`
-
-**검증**:
-- 숫자인지
-- 1~9 범위인지
-
-**응답**:
-- 1명: 자동으로 좌석 배치 'consecutive' 설정 후 최종 확인으로
-- 2명 이상: 좌석 배치 방식 선택 요청
-  - 1: 연속 좌석 (권장)
-  - 2: 랜덤 배치
-
----
-
-### 12단계: 좌석 배치 방식 선택 (PASSENGER_COUNT_INPUT_SUCCESS)
-**입력**: `1` 또는 `2` (2명 이상일 때만)
-
-**저장**:
-- 1 → seatStrategy: "consecutive", seatStrategyShow: "연속 좌석"
-- 2 → seatStrategy: "random", seatStrategyShow: "랜덤 배치"
-
-**응답**: 최종 확인 화면
-
----
-
-### 13단계: 최종 확인 (SEAT_STRATEGY_INPUT_SUCCESS)
-**화면**: 입력한 모든 정보 요약
-- 출발일
-- 출발역
-- 도착역
-- 검색시작시각
-- 검색최대시각
-- 열차타입
-- 특실여부
-- 탑승인원
-- 좌석배치
-
-**입력**:
-- "Y" 또는 "예" → 예약 시작
-- "N" 또는 "아니오" → 작업 취소
-
-**응답**: RESERVATION_STARTED (예약 프로세스 시작)
-
----
-
-## 특수 케이스
-
-### 로그인 실패 처리
-- 비밀번호 입력 실패 시 상태를 유지하고 재입력 요청
-- 사용자가 "Y" 입력 시 처음부터 다시 시작
-- 사용자가 "N" 입력 시 취소
-- 그 외 입력: 비밀번호 재시도
-
-### 개발자 모드 (`ADMIN_MAGIC_STRING`)
-- 대화의 어느 단계에서든 이 문자열을 보내면 그 채팅방이 개발자 모드가 됩니다.
-  명령 라우팅보다 먼저 검사하므로 화면에 뜬 질문의 답으로 해석되지 않습니다.
-- 개발자 방은 체험 횟수 제한이 없고, 관리자 명령을 비밀번호 없이 쓰며,
-  새 승인 요청 알림을 받습니다. `USERID`/`USERPW` 가 있으면 그 계정으로
-  로그인합니다 - 이 설정이 적용되는 곳은 개발자 방뿐입니다.
-- 이미 개발자 모드인 방에 있던 운영자들에게 전환 사실이 통보됩니다.
-  틀린 시도를 셀 수 없는 구조라, 성공을 숨길 수 없게 만드는 것이 방어입니다.
-- 해제: `/devoff`
-- 미설정 시 기능 자체가 비활성입니다.
-
-### 계정 등록 (온보딩)
-- 최초 1회 `/start` 또는 `/onboarding` 으로 코레일 계정을 등록하면 암호화되어
-  보관되고, 그 뒤 `/start` 는 로그인 단계를 건너뛰고 날짜 선택으로 갑니다.
-- 저장된 비밀번호는 매번 코레일에 검증합니다. 실패하면 등록을 지우고
-  재등록을 안내합니다(대개 사용자가 코레일에서 비밀번호를 바꾼 경우).
-- 이미 등록된 상태에서 `/onboarding` 을 다시 하면 덮어쓸지 먼저 확인합니다
-  (`ONBOARDING_OVERWRITE_PENDING`).
-- 삭제 경로: `/logout`, 봇 차단·대화방 삭제(`my_chat_member`), TTL 만료.
+- `ADMIN_MAGIC_STRING`은 명령과 대화 상태보다 먼저 검사합니다. 일치하면 그 방을
+  개발자 방으로 만들고 기존 개발자 방에 전환 사실을 알립니다.
+- 개발자 방은 체험 제한을 받지 않고 관리자 명령을 비밀번호 없이 실행하며,
+  `USERID`/`USERPW`가 있으면 그 계정을 사용합니다.
+- `/devoff`로 해제합니다. `ADMIN_MAGIC_STRING`이 비어 있으면 이 흐름은 없습니다.
 
 ### 사용 승인
-- 검색을 시작하려는 시점에 접근 권한을 판정합니다. 전화번호 입력 단계에서는
-  막지 않습니다 - 비밀번호를 다 친 뒤에 거절하는 셈이 되기 때문입니다.
-- 체험 횟수(`TRIAL_SEARCH_LIMIT`, 기본 3)를 다 쓰면 승인 요청 버튼이 뜹니다.
-- 운영자는 `/approve` 로 요청 목록을 보고 버튼으로 승인·거절하며,
-  `/users` 로 승인된 사용자를 관리합니다.
 
-### 1명 예약 시
-- 좌석 배치 선택 단계 자동 건너뛰기
-- 자동으로 'consecutive' 설정
+- 체험 횟수를 모두 쓴 사용자는 최종 시작 시 승인 요청 버튼을 받습니다.
+- 요청은 코레일 전화번호의 해시로 식별하므로 Telegram 방을 바꿔도 체험 횟수가
+  초기화되지 않습니다.
+- 운영자는 `/approve`로 승인·거절하고 `/users`로 승인 취소를 처리합니다.
+- 서버 전체 검색 수가 `MAX_CONCURRENT_SEARCHES`에 도달하면 승인 여부와 무관하게
+  새 검색을 시작하지 않습니다.
 
----
+### 뒤로 가기와 오래된 버튼
 
-## 로직 헷갈림 포인트 분석
+- 비밀번호 질문을 제외하면 `◀️ 뒤로` 버튼과 직접 입력 `뒤로`가 모두 동작합니다.
+  비밀번호 단계에서는 입력 문자열을 명령으로 오인하지 않도록 버튼만 받습니다.
+- 1명 예약에서 열차 선택 화면 뒤로 가면 생략했던 좌석 배치 질문도 건너뜁니다.
+- `update_processor.py`는 버튼에 담긴 단계와 현재 상태를 대조합니다. 이미 지나간
+  질문이나 아직 오지 않은 질문의 버튼은 대화 입력으로 전달하지 않습니다.
+- 취소 버튼은 어느 단계에서든 `/cancel`과 같은 경로로 처리됩니다.
 
-### 🔴 문제점 1: 메서드명과 실제 동작 불일치
+## 상태 번호 호환성
 
-**현재 상황**:
-```python
-def request_departure_station():
-    """Request departure station after date input"""
-    return Messages.REQUEST_DATE  # "출발일 입력 완료" 메시지
-```
-
-**헷갈리는 이유**:
-- 메서드명: `request_departure_station` (출발역을 요청한다)
-- 실제 동작: `REQUEST_DATE` 반환 (출발일 입력 완료 메시지)
-- **메서드명이 "무엇을 요청하는지"가 아니라 "언제 호출되는지"를 나타내야 함**
-
-**개선 제안**:
-```python
-# 옵션 1: 메서드명을 반환 메시지에 맞추기
-def confirm_date_request_departure_station():
-    return Messages.REQUEST_DATE
-
-# 옵션 2: 상수명을 단계별로 명확히 하기
-REQUEST_AFTER_DATE_INPUT = "출발일 입력 완료 + 출발역 요청"
-REQUEST_AFTER_SRC_STATION_INPUT = "출발역 입력 완료 + 도착역 요청"
-```
-
-### 🔴 문제점 2: Progress 상태명이 "입력 성공"으로 끝남
-
-**현재 상황**:
-```python
-UserProgress.DATE_INPUT_SUCCESS  # 날짜 입력 성공
-# → 다음 단계에서 출발역 입력을 받음
-```
-
-**헷갈리는 이유**:
-- 상태명: `DATE_INPUT_SUCCESS` (날짜 입력 성공)
-- 실제 의미: "날짜 입력이 완료되어 **출발역을 기다리는 중**"
-- 상태명만 보면 "다음에 무엇을 받아야 하는지" 불명확
-
-**개선 제안**:
-```python
-# 옵션 1: "WAITING_FOR" 패턴
-UserProgress.WAITING_FOR_SRC_STATION
-UserProgress.WAITING_FOR_DST_STATION
-
-# 옵션 2: "NEED" 패턴
-UserProgress.NEED_SRC_STATION_INPUT
-UserProgress.NEED_DST_STATION_INPUT
-```
-
-### 🔴 문제점 3: 메시지 상수가 "확인 + 요청"을 동시에 포함
-
-**현재 상황**:
-```python
-REQUEST_DATE = """✅ 출발일 입력 완료
-
-🚉 출발역을 입력해주세요.
-"""
-```
-
-**헷갈리는 이유**:
-- 하나의 메시지가 "완료 확인"과 "다음 요청"을 동시에 함
-- 메시지 이름 `REQUEST_DATE`는 날짜를 요청하는 것 같지만, 실제로는 날짜 완료 확인 + 출발역 요청
-
-**개선 제안**:
-```python
-# 명확한 이름
-CONFIRM_DATE_AND_REQUEST_SRC = "출발일 입력 완료 + 출발역 요청"
-CONFIRM_SRC_AND_REQUEST_DST = "출발역 입력 완료 + 도착역 요청"
-```
-
----
-
-## 개선 제안 요약
-
-### ✅ 현재 작동하는 매핑 (수정 완료)
-```python
-# conversation_handler.py
-_handle_date_input → request_departure_station() → REQUEST_DATE
-_handle_src_station_input → request_arrival_station() → REQUEST_SRC_STATION
-```
-
-### 🎯 근본적인 리팩토링 방향
-
-1. **메시지 상수명을 단계별로 명확하게**
-   ```python
-   AFTER_DATE_INPUT = "✅ 출발일 입력 완료 + 출발역 요청"
-   AFTER_SRC_INPUT = "✅ 출발역 입력 완료 + 도착역 요청"
-   AFTER_DST_INPUT = "✅ 도착역 입력 완료 + 시간 요청"
-   ```
-
-2. **Progress 상태를 "다음 입력 대기" 패턴으로**
-   ```python
-   AWAITING_PHONE_INPUT
-   AWAITING_PASSWORD_INPUT
-   AWAITING_DATE_INPUT
-   AWAITING_SRC_STATION_INPUT
-   ```
-
-3. **메서드명을 "확인 + 요청" 패턴으로**
-   ```python
-   def confirm_date_and_request_src_station()
-   def confirm_src_and_request_dst_station()
-   ```
-
----
-
-## 결론
-
-**현재 상태**: ✅ 기능은 정상 작동 (메시지 매핑 수정 완료)
-
-**헷갈리는 이유**:
-1. 메서드명이 실제 반환 메시지와 불일치
-2. Progress 상태명이 "완료"를 나타내지만 실제로는 "대기 중"
-3. 메시지 상수가 "확인 + 요청"을 동시에 포함
-
-**리팩토링 필요성**:
-- 긴급하지 않음 (기능 정상 작동)
-- 코드 가독성과 유지보수성 향상을 위해 추후 개선 권장
-- 기존 코드를 건드릴 때 breaking change 발생 가능성 있음
+`TRAIN_SELECT_INPUT_SUCCESS`, `SCHEDULE_INPUT_PENDING`,
+`ONBOARDING_OVERWRITE_PENDING`의 숫자가 대화 순서와 달리 뒤쪽에 붙은 것은 의도된
+동작입니다. 진행 상태가 Redis에 정수로 저장되므로 기존 숫자를 재배치하면 배포
+사이에 살아남은 세션이 전혀 다른 질문으로 이동합니다. 새 상태를 추가할 때도 기존
+값은 유지해야 합니다.

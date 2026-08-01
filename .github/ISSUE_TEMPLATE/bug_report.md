@@ -52,7 +52,7 @@ assignees: ''
 - [ ] `SESSION_SECRET` 을 설정했다
 - [ ] `RESUME_ON_RESTART` 가 켜져 있다 (기본 true)
 - [ ] `USERID` / `USERPW` 를 설정했다
-- [ ] `ALLOW_LIST` 를 설정했다
+- [ ] `PREAPPROVED_USERS` 또는 이전 이름 `ALLOW_LIST` 를 설정했다
 - [ ] `ADMIN_PASSWORD` 를 설정했다
 
 ## 로그 발췌

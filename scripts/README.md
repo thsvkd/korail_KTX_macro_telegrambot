@@ -26,7 +26,7 @@ scripts/run.sh                   # 봇 실행
 | `status.sh` | `[--log N]` | 프로세스·포트·Redis·검색 상태 보고 |
 | | `logs [N] [-f]` | 로컬 데몬 로그 출력 |
 | | `redis [--keys\|COMMAND ...]` | 실행 중인 Redis 조회 및 CLI 접속 |
-| `test.sh` | `[pytest 인자...]` | 테스트 실행 |
+| `test.sh` | `[pytest 인자...]` | 테스트 실행 (`tests/unit`만 지정하면 Docker 불필요) |
 | `deploy.sh` | `build [tag]` | Docker 이미지 빌드 |
 | | `up [service] [--pull] [--foreground]` | Compose 스택 기동 |
 | | `down [--volumes]` | Compose 스택 정지 |
@@ -44,6 +44,8 @@ scripts/run.sh                   # 봇 실행
 - `ADMIN_PASSWORD`는 코레일 비밀번호와 다르게 설정해야 합니다.
 - Compose의 Redis는 호스트에 포트를 열지 않습니다. 호스트에서 직접 실행하는
   `run.sh`는 `run.sh redis`가 띄우는 127.0.0.1 전용 Redis를 사용합니다.
+- Compose의 앱 HTTP 포트도 호스트에 열지 않습니다. Telegram 업데이트는 long
+  polling으로 받고 HTTP는 검색 자식 프로세스의 내부 콜백에만 씁니다.
 - `test.sh tests/unit`은 Docker가 필요 없지만 통합·E2E 테스트는 testcontainers로
   Redis를 띄우므로 Docker가 필요합니다.
 - 인터프리터와 의존성은 `uv` 및 `uv.lock`으로 관리합니다.

@@ -52,10 +52,10 @@ Linux 에서 `docker` 명령에 권한 오류가 나면 사용자를 `docker` �
 ## 테스트 실행
 
 ```bash
-# 전체 (682개, Docker 데몬 필요)
+# 전체 (1,455개, Docker 데몬 필요)
 make test
 
-# 단위 테스트만 (538개, Docker 불필요)
+# 단위 테스트만 (1,224개, Docker 불필요)
 make test-unit
 
 # 부분 실행 — scripts/test.sh 는 인자를 pytest 로 그대로 넘깁니다
@@ -95,10 +95,10 @@ make typecheck  # mypy
 
 솔직하게 적어둡니다. CI 의 Type check 단계는 `continue-on-error: true` 라서
 mypy 가 실패해도 CI 는 초록색입니다. 현재 클린 체크아웃에서
-`make typecheck` 를 돌리면 **12개 파일에서 55개 오류**가 나옵니다(대부분
+`make typecheck` 를 돌리면 **12개 파일에서 56개 오류**가 나옵니다(대부분
 `str | None` 이 `int` 파라미터로 들어가는 유형). 오류는
 `handlers/conversation_handler.py`와 `api/reservation_callback.py`에 몰려
-있고 나머지 25개 소스 파일은 이미 깨끗합니다.
+있고 나머지 31개 소스 파일은 이미 깨끗합니다(2026-08-01, 총 43개 파일 검사).
 
 즉, `make typecheck` 에서 오류가 보인다고 해서 당신이 깬 것이 아닙니다. 대신
 **당신이 건드린 파일에서 오류 수가 늘지 않았는지**는 확인해 주세요. 새로 만드는

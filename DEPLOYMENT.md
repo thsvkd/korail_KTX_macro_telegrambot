@@ -1,382 +1,234 @@
-# 🚀 Deployment Guide
+# 배포 안내
 
-## 서버 초기 설정 (최초 1회만)
+기본 배포 방식은 이 저장소에서 이미지를 직접 빌드해 Docker Compose로 앱과 Redis를
+함께 띄우는 것입니다. 공용 레지스트리 이미지는 제공하지 않습니다. 코레일
+자격증명을 다루는 서비스이므로 직접 빌드했거나 직접 발행한 이미지만 사용하십시오.
 
-### 1. Docker 및 Docker Compose 설치
+## 서버 준비
+
+필요한 것은 Git, Docker Engine, Docker Compose V2입니다. Linux에서 Docker 공식
+설치 스크립트를 쓰는 예시는 다음과 같습니다.
 
 ```bash
-# Docker 설치
 curl -fsSL https://get.docker.com -o get-docker.sh
 sudo sh get-docker.sh
-
-# Docker Compose 설치 (V2)
 sudo apt-get update
 sudo apt-get install docker-compose-plugin
+sudo usermod -aG docker "$USER"
+```
 
-# 사용자를 docker 그룹에 추가 (재로그인 필요)
-sudo usermod -aG docker $USER
+그룹 변경은 다시 로그인한 뒤 적용됩니다. 이후 저장소를 복제합니다.
 
-# 확인
+```bash
+git clone https://github.com/thsvkd/korail_KTX_macro_telegrambot.git
+cd korail_KTX_macro_telegrambot
 docker --version
 docker compose version
 ```
 
-### 2. 작업 디렉토리 생성
+## 최초 설정과 기동
+
+`setup.sh --no-deps`는 `.env.example`을 `.env`로 복사하고 필요한 시크릿을
+생성합니다. 서버에 uv를 설치하지 않았다면 아래처럼 `.env`를 직접 만들고
+`setup.sh secrets --print`의 출력만 다른 환경에서 생성해 옮겨도 됩니다.
 
 ```bash
-mkdir -p ~/korail_bot
-cd ~/korail_bot
-```
+./scripts/setup.sh --no-deps
 
-### 3. docker-compose.yml 복사
-
-GitHub Actions가 자동으로 복사하지만, 수동으로도 가능합니다:
-
-```bash
-# 로컬에서 서버로 복사
-scp docker-compose.yml user@server:/home/user/korail_bot/
-
-# 또는 서버에서 직접 다운로드
-wget https://raw.githubusercontent.com/thsvkd/korail_KTX_macro_telegrambot/master/docker-compose.yml
-```
-
-### 4. .env 파일 생성
-
-```bash
-cd ~/korail_bot
-
-# 시크릿 생성 (로컬 저장소에서 실행 후 값을 복사)
-./scripts/setup.sh secrets --print
-
-# .env 파일 생성
-cat > .env << 'EOF'
-BOTTOKEN=your_telegram_bot_token
-
-# 코레일 로그인 정보 암호화 키
-SESSION_SECRET=generated_value
-# Redis AUTH - docker compose 가 --requirepass 로 기동합니다
-REDIS_PASSWORD=generated_value
-# 관리자 명령 비밀번호 - 코레일 비밀번호와 반드시 다르게
-ADMIN_PASSWORD=generated_value
-
-# 관리자 편의 로그인 (선택). ADMIN_MAGIC_STRING 이 비어 있으면 비활성화
-USERID=your_korail_id
-USERPW=your_korail_password
-ADMIN_MAGIC_STRING=
-
-ALLOW_LIST=010-1234-5678
-REDIS_HOST=redis
-REDIS_PORT=6379
-REDIS_DB=0
-FLASK_DEBUG=False
-EOF
-
-# 권한 설정 (보안)
+# .env에서 최소한 BOTTOKEN을 실제 값으로 바꿉니다.
+# SESSION_SECRET, ADMIN_PASSWORD, REDIS_PASSWORD는 setup.sh가 생성합니다.
 chmod 600 .env
+
+# 배포 전에 플레이스홀더·빈 시크릿·디버그 설정을 검사합니다.
+./scripts/setup.sh check
+
+# 기본 이미지 태그 korailbot:local로 빌드하고 스택을 띄웁니다.
+./scripts/deploy.sh build
+./scripts/deploy.sh up
 ```
 
-### 5. Telegram 수신 확인
+Compose는 다음 경계를 유지합니다.
 
-Telegram 업데이트는 long polling으로 받으므로 도메인, HTTPS 인증서, webhook
-등록이 필요하지 않습니다. 컨테이너 로그에서 `Telegram poller started`를
-확인하면 됩니다.
+- 앱 컨테이너 이름은 `korail_bot`, Redis는 `korail_redis`입니다.
+- Redis는 `REDIS_PASSWORD`를 요구하고 Docker 네트워크 안에만 `6379`를
+  노출합니다.
+- 앱 HTTP 서버도 호스트 포트에 공개하지 않습니다. Telegram 업데이트는 long
+  polling으로 받고, HTTP는 같은 앱 컨테이너의 검색 자식 프로세스가 내부 콜백을
+  보낼 때만 사용합니다.
+- 앱·Redis 컨테이너는 `restart: unless-stopped`로 다시 기동되고, Redis 데이터는
+  별도 볼륨에 보존됩니다.
 
----
+따라서 도메인, TLS 인증서, Telegram webhook, 공유기 포트포워딩과 앱·Redis용
+방화벽 허용 규칙이 필요하지 않습니다.
 
-## 🔄 배포 (자동)
+## 운영 명령
 
-코드를 master 브랜치에 push하면 **GitHub Actions가 자동으로 배포**합니다:
-
-```bash
-git push origin master
-```
-
-배포 과정:
-1. ✅ Docker 이미지 빌드
-2. ✅ DockerHub에 푸시
-3. ✅ 서버에 docker-compose.yml 복사
-4. ✅ 서버에 .env 파일 생성
-5. ✅ 최신 이미지 다운로드
-6. ✅ docker compose up -d 실행
-
----
-
-## 🛠 수동 배포 (필요시)
-
-### 서버에서 직접 실행
+가능하면 raw `docker compose`보다 저장소 스크립트를 사용하십시오. `.env` 검사와
+안전 확인이 포함돼 있습니다.
 
 ```bash
-cd ~/korail_bot
+# 상태와 로그
+docker compose ps
+./scripts/deploy.sh logs                 # 최근 100줄부터 계속 보기
+./scripts/deploy.sh logs app --tail 50 --no-follow
+./scripts/deploy.sh logs redis --no-follow
 
-# 최신 소스로 이미지 재빌드 (기본 태그 korailbot:local)
+# Redis 상태와 데이터 규모
+./scripts/status.sh redis PING
+./scripts/status.sh redis INFO memory
+./scripts/status.sh redis --keys
+
+# 재기동
+./scripts/deploy.sh down
+./scripts/deploy.sh up
+
+# 이미지 재빌드 후 앱 교체
 git pull
 ./scripts/deploy.sh build
+./scripts/deploy.sh up
+```
 
-# 컨테이너 재시작
-docker compose down
-docker compose up -d
+`scripts/status.sh`의 기본 보고서는 호스트에서 직접 실행한 봇 프로세스를 위한
+것입니다. Compose 배포의 프로세스 상태는 `docker compose ps`, 로그는
+`scripts/deploy.sh logs`로 확인합니다. `scripts/status.sh redis ...`는 로컬
+개발용과 Compose Redis를 모두 찾아 인증까지 처리합니다.
 
-# 상태 확인
+## 데이터 보존과 백업
+
+일반적인 `down`과 재기동은 `redis_data` 볼륨을 보존합니다.
+
+```bash
+# RDB 스냅샷 생성
+./scripts/status.sh redis BGSAVE
+
+# 호스트로 복사
+docker cp korail_redis:/data/dump.rdb ./dump.rdb
+```
+
+다음 명령은 복구하기 어려운 데이터를 지웁니다. 등록 계정, 진행·예약 검색,
+결제 상태와 승인 정보가 함께 사라집니다.
+
+```bash
+# Redis DB 전체 삭제
+./scripts/status.sh redis FLUSHDB
+
+# 컨테이너와 Redis 볼륨 삭제 — 스크립트가 yes 확인을 요구합니다.
+./scripts/deploy.sh down --volumes
+```
+
+실행 전에 백업과 정확한 대상 서버를 다시 확인하십시오.
+
+## 직접 발행한 이미지 사용
+
+레지스트리에 직접 이미지를 발행하려면 네임스페이스가 있는 태그를 사용합니다.
+
+```bash
+docker login
+./scripts/deploy.sh push your-name/korailbot:latest
+```
+
+`push`는 빌드와 푸시 전에 `yes` 확인을 요구합니다. 서버의 `.env`에는 같은 태그를
+지정합니다.
+
+```dotenv
+IMAGE_NAME=your-name/korailbot:latest
+```
+
+그 뒤 다음처럼 받아서 기동할 수 있습니다.
+
+```bash
+./scripts/deploy.sh up --pull
+```
+
+## GitHub Actions 자동 배포
+
+`.github/workflows/cicd.yml`은 먼저 lint, 단위 테스트, 통합·E2E 테스트와 mypy를
+실행합니다. mypy는 아직 `continue-on-error`이지만 나머지 검사가 실패하면 이미지를
+발행하지 않습니다.
+
+자동 발행·배포 job은 다음 조건을 모두 만족할 때만 실행됩니다.
+
+- `pull_request`가 아닐 것
+- `master` 브랜치일 것
+- 저장소가 `thsvkd/korail_KTX_macro_telegrambot`일 것
+- Repository variable `IMAGE_NAME`이 설정돼 있을 것
+
+`DEPLOY_HOST`가 비어 있으면 amd64·arm64 이미지만 빌드해 푸시하고 서버 배포 단계는
+건너뜁니다. 값이 있으면 Compose 파일과 `.env`를 서버에 배치하고 새 이미지를
+기동합니다.
+
+### Repository variables
+
+| 이름 | 용도 |
+| --- | --- |
+| `IMAGE_NAME` | 빌드·푸시할 이미지 태그. 자동 발행을 켜는 필수 opt-in |
+| `DEPLOY_HOST` | SSH 배포 대상. 비우면 이미지 발행까지만 수행 |
+
+### Repository secrets
+
+| 이름 | 용도 |
+| --- | --- |
+| `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | 레지스트리 로그인 |
+| `SSH_USERNAME`, `SSH_PASSWORD` | 서버 복사·기동. `DEPLOY_HOST` 사용 시 필요 |
+| `TELEGRAM_BOTTOKEN` | Telegram 봇 토큰 |
+| `SESSION_SECRET` | 코레일 자격증명 암호화 키 재료 |
+| `REDIS_PASSWORD` | Redis AUTH |
+| `ADMIN_COMMAND_PASSWORD` | 관리자 명령 비밀번호 |
+| `ALLOW_LIST` | 미리 승인할 전화번호 목록 |
+| `ADMIN_USERID`, `ADMIN_PASSWD` | 개발자 방 고정 코레일 계정(선택) |
+| `ADMIN_MAGIC_STRING` | 개발자 모드 전환 문자열(선택) |
+
+Fork에서는 저장소 이름 가드 때문에 배포 job이 실행되지 않습니다. 자기 저장소에서
+자동 배포하려면 workflow의 `github.repository` 조건을 자기 저장소로 바꾸고 필요한
+변수·시크릿을 직접 구성해야 합니다.
+
+## 점검과 문제 해결
+
+### 앱이 재시작을 반복할 때
+
+```bash
 docker compose ps
-docker compose logs -f
-```
-
----
-
-## 📊 모니터링
-
-### 서비스 상태 확인
-
-```bash
-cd ~/korail_bot
-
-# 컨테이너 상태
-docker compose ps
-
-# 실시간 로그
-docker compose logs -f
-
-# 앱 로그만
-docker compose logs -f app
-
-# Redis 로그만
-docker compose logs -f redis
-
-# 최근 50줄
-docker compose logs --tail=50
-```
-
-### Redis 데이터 확인
-
-```bash
-# Redis CLI 접속
-docker exec -it korail_redis redis-cli
-
-# 명령어
-> PING                          # 연결 테스트
-> DBSIZE                        # 총 키 개수
-> KEYS *                        # 모든 키 보기
-> GET user_session:123456       # 특정 데이터 보기
-> INFO memory                   # 메모리 사용량
-> EXIT
-```
-
-### 헬스체크
-
-```bash
-# 앱 헬스체크
-curl http://localhost:8000/
-
-# Redis 헬스체크
-docker exec korail_redis redis-cli PING
-```
-
----
-
-## 🔧 관리 명령어
-
-### 서비스 제어
-
-```bash
-# 시작
-docker compose up -d
-
-# 중지
-docker compose down
-
-# 재시작
-docker compose restart
-
-# 앱만 재시작
-docker compose restart app
-
-# Redis만 재시작
-docker compose restart redis
-```
-
-### 데이터 관리
-
-```bash
-# Redis 데이터 백업 (RDB 파일)
-docker exec korail_redis redis-cli BGSAVE
-docker cp korail_redis:/data/dump.rdb ./backup-$(date +%Y%m%d).rdb
-
-# 모든 데이터 삭제 (주의!)
-docker exec korail_redis redis-cli FLUSHDB
-
-# 컨테이너 및 볼륨 완전 삭제 (주의!)
-docker compose down -v
-```
-
-### 이미지 업데이트
-
-```bash
-# 최신 소스로 이미지 재빌드
-git pull
-./scripts/deploy.sh build
-
-# 기존 컨테이너 삭제 후 재시작
-docker compose up -d --force-recreate
-```
-
----
-
-## 🐛 트러블슈팅
-
-### 앱이 시작 안됨
-
-```bash
-# 로그 확인
-docker compose logs app
-
-# Redis 연결 확인
-docker exec korail_redis redis-cli PING
-
-# 환경 변수 확인
+./scripts/deploy.sh logs app --tail 100 --no-follow
 docker compose config
-
-# 포트 충돌 확인
-sudo netstat -tlnp | grep 8000
-```
-
-### Redis 메모리 부족
-
-```bash
-# 메모리 사용량 확인
-docker exec korail_redis redis-cli INFO memory
-
-# 불필요한 키 삭제
-docker exec korail_redis redis-cli FLUSHDB
-
-# Redis 재시작
-docker compose restart redis
-```
-
-### 컨테이너가 계속 재시작됨
-
-```bash
-# 상세 로그 확인
-docker compose logs --tail=100 app
-
-# 컨테이너 상태 확인
-docker inspect korail_bot
-
-# 환경 변수 문제일 가능성
-cat .env
-```
-
----
-
-## 🔐 보안 권장사항
-
-### .env 파일 보호
-
-```bash
-# 파일 권한 제한
-chmod 600 .env
-
-# 소유자 확인
-ls -la .env
-```
-
-### Redis 비밀번호 (필수)
-
-`docker-compose.yml` 은 Redis 를 `--requirepass` 로 기동하고 호스트에
-포트를 노출하지 않습니다. `.env` 에 `REDIS_PASSWORD` 가 없으면 compose 가
-기동을 거부합니다.
-
-```bash
-# 값 생성
-./scripts/setup.sh secrets
-```
-
-### 설정 점검
-
-배포 전후로 실행하세요. 시크릿 누락, 디버그 모드, Redis 노출, `.env` 커밋
-여부를 검사합니다.
-
-```bash
 ./scripts/setup.sh check
 ```
 
-### GitHub Actions Secrets
+흔한 원인은 비어 있거나 플레이스홀더인 `BOTTOKEN`, `SESSION_SECRET`,
+`REDIS_PASSWORD`, 잘못된 Redis 연결 정보입니다.
 
-자동 배포를 쓴다면 저장소에 다음 값이 있어야 합니다.
+### Telegram 409가 보일 때
 
-| Secret | 설명 |
-| --- | --- |
-| `TELEGRAM_BOTTOKEN` | 봇 토큰 |
-| `SESSION_SECRET` | 자격증명 암호화 키 |
-| `ADMIN_COMMAND_PASSWORD` | 관리자 명령 비밀번호 (코레일 비밀번호와 별개) |
-| `REDIS_PASSWORD` | Redis AUTH |
-| `ADMIN_USERID` / `ADMIN_PASSWD` | 관리자 편의 로그인용 코레일 계정 (선택) |
-| `ADMIN_MAGIC_STRING` | 편의 로그인 트리거 (선택, 없으면 비활성화) |
-| `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` | 이미지 푸시 |
-| `SSH_USERNAME` / `SSH_PASSWORD` | 배포 서버 접속 |
-
-### 방화벽 설정
+같은 `BOTTOKEN`을 쓰는 봇 인스턴스가 둘 이상 long polling 중입니다. 다른 서버,
+로컬 데몬, 이전 컨테이너를 확인하고 하나만 남기십시오.
 
 ```bash
-# 앱만 허용, Redis 는 컨테이너 네트워크 내부에서만 접근
-sudo ufw allow 8000/tcp     # 앱만 허용
-sudo ufw deny 6379/tcp      # Redis는 차단
+docker compose ps
+./scripts/run.sh --stop
 ```
 
----
+앱은 시작할 때 예전에 등록된 webhook을 자동으로 지우므로 webhook 삭제 작업은
+따로 필요하지 않습니다.
 
-## 📈 성능 튜닝
-
-### Redis 설정 조정
-
-docker-compose.yml에서 수정:
-
-```yaml
-redis:
-  command: >
-    redis-server
-    --maxmemory 1gb              # 메모리 제한 증가
-    --maxmemory-policy allkeys-lru
-    --save 300 10                # 5분마다 10개 이상 변경시 저장
-```
-
-### 로그 로테이션
+### Redis가 응답하지 않을 때
 
 ```bash
-# Docker 로그 크기 제한
-cat > /etc/docker/daemon.json << 'EOF'
-{
-  "log-driver": "json-file",
-  "log-opts": {
-    "max-size": "10m",
-    "max-file": "3"
-  }
-}
-EOF
-
-sudo systemctl restart docker
+docker compose ps redis
+./scripts/deploy.sh logs redis --tail 100 --no-follow
+./scripts/status.sh redis PING
 ```
 
----
+직접 `redis-cli`를 쓸 경우 인증이 필요합니다. 비밀번호가 프로세스 인자나 셸
+기록에 남지 않도록 가능하면 `scripts/status.sh redis`를 사용하십시오.
 
-## 📞 Support
+### 배포 후 최소 확인
 
-문제 발생 시:
-1. 로그 확인: `docker compose logs -f`
-2. Redis 상태: `./scripts/status.sh redis PING` (compose 의 Redis 는 `--requirepass`
-   로 뜨므로 인증 없이 `redis-cli PING` 을 보내면 실패합니다)
-3. 제보: [GitHub Issues](https://github.com/thsvkd/korail_KTX_macro_telegrambot/issues)
-   에 올려주세요. 무엇을 붙이고 무엇을 지워야 하는지는
-   [CONTRIBUTING.md](CONTRIBUTING.md) 의 '버그 제보' 절에 있습니다. 보안
-   문제라면 [SECURITY.md](SECURITY.md) 의 비공개 신고 경로를 이용하십시오.
-4. 문서 참조: [README.md](README.md), [scripts/README.md](scripts/README.md)
+```bash
+docker compose ps
+./scripts/deploy.sh logs app --tail 50 --no-follow
+./scripts/status.sh redis PING
+```
 
----
-
-## 🔄 업데이트 체크리스트
-
-새 버전 배포 시:
-- [ ] GitHub에 push (자동 배포)
-- [ ] 서버에서 로그 확인
-- [ ] 헬스체크 실행
-- [ ] Redis 데이터 확인
-- [ ] 테스트 예약 실행
+로그에서 `Telegram poller started`를 확인한 뒤 테스트 계정으로 `/start`,
+`/status`, `/cancel`을 확인합니다. 로그를 이슈나 CI에 붙일 때는 실제 전화번호와
+Telegram `chat_id`를 반드시 가리십시오. 보안 문제는 공개 이슈가 아니라
+[SECURITY.md](SECURITY.md)의 비공개 신고 경로를 사용합니다.

@@ -480,7 +480,8 @@ class BackgroundReservationProcess:
 
 ⚠️ 중요: {settings.PAYMENT_TIMEOUT_MINUTES}분내에 사이트에서 결제를 완료하지 않으면 예약이 취소됩니다!
 
-💡 결제 완료 후 아무 메시지나 입력하시면 리마인더 알림이 중단됩니다.
+💡 결제하시면 봇이 직접 확인해서 알려드립니다. 따로 답장하실 필요 없습니다.
+🔕 재촉 알림만 끄시려면 /notify_off
 🔗 결제 링크: {self.payment_url}
 """
 
@@ -509,7 +510,8 @@ class BackgroundReservationProcess:
 
 ⚠️ 중요: {settings.PAYMENT_TIMEOUT_MINUTES}분내에 사이트에서 결제를 완료하지 않으면 예약이 취소됩니다!
 
-💡 결제 완료 후 아무 메시지나 입력하시면 리마인더 알림이 중단됩니다.
+💡 결제하시면 봇이 직접 확인해서 알려드립니다. 따로 답장하실 필요 없습니다.
+🔕 재촉 알림만 끄시려면 /notify_off
 🔗 결제 링크: {self.payment_url}
 """
 
@@ -1197,9 +1199,11 @@ class BackgroundReservationProcess:
 ⏰ 예약 후 {settings.PAYMENT_TIMEOUT_MINUTES}분 이내 결제하세요!
 🔗 결제: {self.payment_url}
 
-💡 결제 후 아무 메시지나 보내면 다음 좌석 예약이 시작됩니다.
+💡 결제가 확인되면 다음 좌석 예약이 자동으로 시작됩니다.
+🔕 재촉 알림만 끄시려면 /notify_off
 
-⚠️ 10분 동안 메시지가 없으면 자동으로 다음 좌석 예약을 진행합니다.
+⚠️ 결제가 확인되지 않아도 10분 뒤에는 다음 좌석 예약을 진행합니다.
+   지금 바로 넘어가려면 아무 메시지나 보내주세요.
 """
 
     def _build_final_random_message(self, all_reservations: list, total_seats: int) -> str:

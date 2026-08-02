@@ -8,6 +8,7 @@ from korail_bot.models.favourite import MAX_NAME_LENGTH
 from korail_bot.services import (
     AccessService,
     MessageTemplates,
+    MultiReservationReminderService,
     PaymentReminderService,
     PendingPaymentService,
     ReservationService,
@@ -58,6 +59,9 @@ class CommandHandler:
         # Everything /status has to say about a seat that is already booked,
         # and the only way to give one back short of the railway's own site.
         self.pending_payments = PendingPaymentService(storage, telegram_service)
+        # The other half of the payment reminders: the multi-seat ones are run
+        # by their own service, and /notify_off has to reach both.
+        self.multi_reminder = MultiReservationReminderService(storage, telegram_service)
 
     def handle_start(self, chat_id: int) -> None:
         """
@@ -876,6 +880,41 @@ class CommandHandler:
             reply_markup=keyboards.payment_pending_keyboard(),
         )
 
+    def handle_notify_off(self, chat_id: int) -> None:
+        """
+        Handle /notify_off: stop the payment reminders, and only that.
+
+        Offered in the message that announces a booking, where it is the
+        answer to "stop buzzing me". It replaces reading any message at all as
+        "I have paid", which stopped the reminders by recording a payment
+        nobody had checked - so the user who typed something lost the seat
+        quietly and the user who paid in silence was nagged to the deadline.
+
+        Nothing here claims the payment happened or did not. The railway is
+        still asked, and whatever it answers is still reported.
+
+        Args:
+            chat_id: Telegram chat ID
+        """
+        logger.info(f"Handling /notify_off for chat_id={chat_id}")
+        from korail_bot.telegramBot.messages import Messages
+
+        silenced = self.payment_reminder.silence(chat_id)
+
+        multi = self.storage.get_multi_reservation_status(chat_id)
+        if multi and multi.should_show_reminder():
+            self.multi_reminder.stop_reminders(chat_id, manual=True)
+            silenced = True
+
+        if silenced:
+            self.telegram.send_message(chat_id, Messages.NOTIFY_OFF_DONE)
+            return
+
+        # Nothing was buzzing. Said plainly, with the other thing that could
+        # have been meant - /notify controls the reports a running search
+        # sends, which is a different noise from a different part of the bot.
+        self.telegram.send_message(chat_id, Messages.NOTIFY_OFF_NOTHING)
+
     def handle_payment_callback(self, chat_id: int, value: str) -> None:
         """
         Act on what the user chose to do about a reservation awaiting payment.
@@ -1101,6 +1140,8 @@ class CommandHandler:
             self.handle_status(chat_id)
         elif command == "/notify":
             self.handle_notify(chat_id, args)
+        elif command == "/notify_off":
+            self.handle_notify_off(chat_id)
         elif command in ("/fav", "/favorites", "/favourites"):
             self.handle_favourites(chat_id)
         elif command == "/help":

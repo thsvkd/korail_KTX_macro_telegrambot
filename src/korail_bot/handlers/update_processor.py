@@ -116,31 +116,15 @@ class TelegramUpdateProcessor:
 
             logger.debug(f"chat_id={chat_id}, in_progress={in_progress}, progress={progress_num}")
 
-            # Check for payment reminder active state (single reservation)
-            payment_status = self.storage.get_payment_status(chat_id)
-            if payment_status and payment_status.reminder_active and not payment_status.completed:
-                # User sent any non-command message during payment reminder
-                if text and not text.startswith("/"):
-                    self.payment_reminder.confirm_payment(chat_id)
-                    return
-
-            # Check for multi-reservation reminder active state (no current_seat_index set)
-            # This handles the case when ALL seats are reserved but waiting for final payment
-            multi_status = self.storage.get_multi_reservation_status(chat_id)
-            if multi_status and multi_status.should_show_reminder():
-                # Check if we're NOT in middle of random seating (no current_seat_index)
-                current_seat = self.storage.get_current_seat_index(chat_id)
-                if current_seat is None:
-                    # All seats reserved, just waiting for payment confirmation
-                    if text and not text.startswith("/"):
-                        # Mark all as paid and stop reminders
-                        self.multi_reminder.mark_all_paid(chat_id)
-
-                        # Send confirmation
-                        self.telegram.send_message(
-                            chat_id, "✅ 결제 완료 확인!\n\n모든 좌석의 결제 알림이 중단되었습니다."
-                        )
-                        return
+            # A message sent while a payment reminder is running is just a
+            # message. It used to be read as "I have paid": the reminders
+            # stopped and the booking was recorded as settled, so someone who
+            # typed anything at all lost the seat quietly, and someone who
+            # paid without saying so was nagged to the deadline.
+            #
+            # The payment is watched now, and the answer comes from the
+            # railway. Turning the reminders off is /notify_off, which says
+            # what it does and claims nothing.
 
             # Handle /cancel command first (works in any state)
             if text == "/cancel":
@@ -153,25 +137,25 @@ class TelegramUpdateProcessor:
                 self.command_handler.route_command(chat_id, text)
                 return
 
-            # Check if random seating in progress (waiting for payment confirmation)
+            # A random-seating run books one seat at a time and waits before
+            # taking the next. The wait ends on its own - the payment is
+            # verified against the railway now, and the run goes on the moment
+            # it is - so this is the "don't wait for me, carry on" override
+            # rather than the only way forward it used to be.
+            #
+            # It says nothing about the payment. The seat is recorded as paid
+            # for when the railway says so, and not before.
             current_seat = self.storage.get_current_seat_index(chat_id)
-            if current_seat is not None:  # Random seating in progress
-                # ANY message confirms payment and proceeds to next seat
-                logger.info(
-                    f"Payment confirmed for seat {current_seat} by user message, chat_id={chat_id}"
-                )
-
-                # Mark payment ready for background process
+            if current_seat is not None:
+                logger.info(f"Told to carry on past seat {current_seat} for chat_id={chat_id}")
                 self.storage.mark_payment_ready(chat_id, current_seat)
 
-                # DON'T stop reminders - they should continue running for remaining seats
-                # The reminder service will automatically update when new seats are added
-                logger.info("Payment confirmed, reminders will continue for remaining seats")
-
-                # Send confirmation
+                # The reminders keep running: the seats already taken still
+                # have to be paid for, and more are about to be added.
                 self.telegram.send_message(
                     chat_id,
-                    f"✅ {current_seat + 1}번째 좌석 결제 확인!\n\n다음 좌석 예약을 시작합니다...",
+                    f"▶️ {current_seat + 1}번째 좌석은 넘어가고 다음 좌석 예약을 시작합니다.\n\n"
+                    f"결제 여부는 계속 확인해서 알려드립니다.",
                 )
 
                 return

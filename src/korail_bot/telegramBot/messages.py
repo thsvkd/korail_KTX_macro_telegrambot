@@ -28,6 +28,7 @@ class Messages:
         {"command": "fav", "description": "⭐ 즐겨찾기"},
         {"command": "status", "description": "📊 예약 상태 확인"},
         {"command": "notify", "description": "🔔 진행 상황 알림 설정"},
+        {"command": "notify_off", "description": "🔕 결제 알림 끄기"},
         {"command": "onboarding", "description": "🔑 코레일 계정 등록"},
         {"command": "logout", "description": "🗑️ 등록된 계정 지우기"},
         {"command": "cancel", "description": "🚫 진행 중인 예약 취소"},
@@ -298,9 +299,10 @@ class Messages:
 ℹ️ 정보 확인
   /status - 예약 상태 확인
   /notify - 진행 상황 알림 설정 (기본 꺼짐)
+  /notify_off - 결제 알림 끄기
   /help - 도움말 보기
 
-💡 결제 알림은 예약 성공 후 아무 메시지나 입력하면 중단됩니다.
+💡 결제하시면 봇이 직접 확인해서 알려드립니다. 재촉 알림만 끄려면 /notify_off.
 """
 
     HELP_ADMIN_SECTION = """
@@ -1053,11 +1055,18 @@ class Messages:
 
 남은 미결제 좌석: {remaining}개"""
 
-    PAYMENT_REMINDER_STOPPED = """✅ 결제 리마인더가 중단되었습니다.
+    # /notify_off 의 답. "결제했다"고 말하지 않는 것이 요점이다 — 알림만
+    # 끄고, 결제 여부는 계속 철도사에 물어 확인되는 대로 알린다.
+    NOTIFY_OFF_DONE = """🔕 결제 알림을 껐습니다.
 
-결제를 완료하셨다면 즐거운 여행 되세요! 🚄
-아직 결제하지 않으셨다면 서둘러 결제를 완료해주세요.
-"""
+결제 여부는 계속 확인합니다. 결제가 확인되면 알려드리고,
+기한이 지나도록 결제되지 않으면 그것도 알려드립니다.
+
+🎫 예약 상태는 /status 로 언제든 확인할 수 있습니다."""
+
+    NOTIFY_OFF_NOTHING = """끌 결제 알림이 없습니다.
+
+검색 진행 상황 알림을 끄시려면 /notify 를 사용해주세요."""
 
     PAYMENT_REMINDER_TIMEOUT = """⏰ 결제 리마인더 종료
 
@@ -1254,7 +1263,7 @@ class Messages:
 예약 취소까지 남은 시간: {time_text}
 
 서둘러 결제를 완료해주세요!
-💡 결제 완료 후 아무 메시지나 입력하면 알림이 중단됩니다.
+💡 결제하시면 자동으로 확인해 알려드립니다. 알림만 끄려면 /notify_off
 """
 
 

@@ -45,36 +45,45 @@ class TestPaymentReminderService:
         assert status.reminder_active is True
         assert status.created_at is not None
 
-    def test_confirm_payment_marks_completed(self):
-        """Test confirming payment marks status as completed."""
+    def test_silencing_stops_the_reminders_without_claiming_a_payment(self):
+        """
+        The whole point of /notify_off. Any message used to stop the reminders
+        by recording a payment nobody had checked, so someone who typed
+        anything at all was told the matter was settled and lost the seat.
+        """
         chat_id = 12345
+        self.storage.save_payment_status(
+            PaymentStatus(chat_id=chat_id, completed=False, reminder_active=True)
+        )
 
-        # Create payment status
-        status = PaymentStatus(chat_id=chat_id, completed=False, reminder_active=True)
-        self.storage.save_payment_status(status)
+        assert self.service.silence(chat_id) is True
 
-        # Confirm payment
-        self.service.confirm_payment(chat_id)
+        stored = self.storage.get_payment_status(chat_id)
+        assert stored.reminder_active is False
+        assert stored.completed is False
+        assert stored.cancelled is False
 
-        # Check status updated
-        updated_status = self.storage.get_payment_status(chat_id)
-        assert updated_status.completed is True
-        assert updated_status.reminder_active is False
-
-        # Check confirmation message sent
-        self.telegram.send_message.assert_called_once()
-        call_args = self.telegram.send_message.call_args
-        assert "완료" in call_args[0][1] or "확인" in call_args[0][1]
-
-    def test_confirm_payment_no_status(self):
-        """Test confirming payment when no status exists."""
+    def test_silencing_is_what_the_loop_reads_to_stop(self):
         chat_id = 12345
+        self.storage.save_payment_status(
+            PaymentStatus(chat_id=chat_id, completed=False, reminder_active=True)
+        )
 
-        # Should handle gracefully
-        self.service.confirm_payment(chat_id)
+        self.service.silence(chat_id)
 
-        # Should send message
-        self.telegram.send_message.assert_called_once()
+        assert self.service.is_silenced(chat_id) is True
+
+    def test_there_is_nothing_to_silence_without_a_payment(self):
+        assert self.service.silence(12345) is False
+
+    def test_silencing_twice_reports_that_it_was_already_off(self):
+        chat_id = 12345
+        self.storage.save_payment_status(
+            PaymentStatus(chat_id=chat_id, completed=False, reminder_active=True)
+        )
+        self.service.silence(chat_id)
+
+        assert self.service.silence(chat_id) is False
 
     @patch("threading.Thread")
     def test_reminder_thread_started(self, mock_thread):

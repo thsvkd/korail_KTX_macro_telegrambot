@@ -195,7 +195,8 @@ class MultiReservationReminderService:
         )
 
         if pending_count > 0:
-            lines.append("\n💡 결제 후 아무 메시지나 입력하면 알림이 중단됩니다.")
+            lines.append("\n💡 결제하시면 자동으로 확인해 알려드립니다.")
+            lines.append("🔕 알림만 끄려면 /notify_off")
             lines.append(f"🔗 결제: {settings.KORAIL_PAYMENT_URL}")
 
         return "\n".join(lines)
@@ -222,25 +223,8 @@ class MultiReservationReminderService:
 
         return False
 
-    def mark_all_paid(self, chat_id: int) -> bool:
-        """
-        Mark all reservations as paid (used when user confirms payment completion).
-
-        Args:
-            chat_id: User's chat ID
-
-        Returns:
-            True if successful
-        """
-        status = self.storage.get_multi_reservation_status(chat_id)
-        if not status:
-            return False
-
-        for reservation in status.reservations:
-            if reservation.status == ReservationPaymentStatus.PENDING:
-                reservation.status = ReservationPaymentStatus.PAID
-
-        status.manually_stopped = True
-        self.storage.save_multi_reservation_status(status)
-        logger.info(f"Marked all reservations as paid for chat_id={chat_id}")
-        return True
+    # Marking the whole booking paid on the user's say-so used to live here,
+    # called when they sent any message at all. It is gone: a seat is recorded
+    # as paid for when the railway says it was, and until then the reminders
+    # are something the user turns off (/notify_off) rather than something
+    # they dismiss by claiming to have paid.

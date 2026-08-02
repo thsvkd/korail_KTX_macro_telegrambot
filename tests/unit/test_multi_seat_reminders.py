@@ -316,32 +316,10 @@ class TestMarkingSeatsPaid(ReminderFixture):
 
         assert self.service.mark_seat_paid(CHAT_ID, 1) is False
 
-    def test_the_lot_can_be_marked_at_once(self):
-        """What the user pressing "결제 완료" means."""
-        status = self.having(booking(seat(1), seat(2)))
-
-        assert self.service.mark_all_paid(CHAT_ID) is True
-        assert all(r.status == ReservationPaymentStatus.PAID for r in status.reservations)
-
-    def test_marking_the_lot_stops_the_reminders(self):
-        status = self.having(booking(seat(1)))
-
-        self.service.mark_all_paid(CHAT_ID)
-
-        assert status.manually_stopped is True
-
-    def test_a_seat_that_already_expired_is_not_marked_as_paid(self):
-        """It was not paid for. Saying so would be the reminder lying."""
-        status = self.having(booking(seat(1, status=ReservationPaymentStatus.EXPIRED)))
-
-        self.service.mark_all_paid(CHAT_ID)
-
-        assert status.reservations[0].status == ReservationPaymentStatus.EXPIRED
-
-    def test_marking_a_booking_that_is_gone_is_reported(self):
-        self.having(None)
-
-        assert self.service.mark_all_paid(CHAT_ID) is False
+    # 예약 전체를 한꺼번에 결제됨으로 표시하던 것은 사라졌다. 사용자가
+    # 아무 메시지나 보낸 것을 결제로 읽던 자리라, 판정을 철도사에 맡기면서
+    # 함께 없앴다. 알림을 끄는 것은 이제 /notify_off 이고, 그것은 결제에
+    # 대해 아무 말도 하지 않는다.
 
 
 class TestTheBookingItself:

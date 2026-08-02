@@ -92,6 +92,13 @@ class PaymentReminderService:
                     self.deactivate_reminders(chat_id)
                     return
 
+                # Or the user simply asked for quiet. Read out of Redis rather
+                # than held here, because /notify_off is served by the update
+                # handler and this loop is a thread it cannot reach into.
+                if self.is_silenced(chat_id):
+                    logger.info(f"Reminders were turned off for chat_id={chat_id}")
+                    return
+
                 # Calculate remaining time
                 remaining_seconds = total_seconds - elapsed
 
@@ -137,44 +144,42 @@ class PaymentReminderService:
             logger.error(f"Error checking payment status for chat_id={chat_id}: {e}")
             return False
 
-    def confirm_payment(self, chat_id: int) -> None:
-        """
-        Mark payment as confirmed for a chat ID, and say so.
+    def is_silenced(self, chat_id: int) -> bool:
+        """Whether the user has asked for the reminders to stop."""
+        payment_status = self.storage.get_payment_status(chat_id)
+        return bool(payment_status and not payment_status.reminder_active)
 
-        The acknowledgement is sent from here rather than from the reminder
-        loop. The update handler consumes the message that triggers this and
-        returns, so acknowledging in the loop left the user with no reply for
-        up to interval_seconds - and with no reply at all when no loop was
-        running, which is the case for every payment window that outlived a
-        restart, since the loop lives in a daemon thread and the status lives
-        in Redis.
+    def silence(self, chat_id: int) -> bool:
+        """
+        Stop reminding, without claiming anything about the payment.
+
+        This is the whole difference from what used to happen here. Any
+        message at all was read as "I have paid": the reminders stopped and
+        the record was marked settled, so someone who typed "잠깐만" lost the
+        seat quietly and someone who paid without saying so was nagged to the
+        deadline. Turning the reminders off is now just that - the payment is
+        still watched, and whatever it turns out to be is still reported.
 
         Args:
             chat_id: Telegram chat ID
+
+        Returns:
+            True when there were reminders to stop
         """
         payment_status = self.storage.get_payment_status(chat_id)
-        if payment_status:
-            payment_status.completed = True
-            payment_status.reminder_active = False
-            self.storage.save_payment_status(payment_status)
-            logger.info(f"Payment confirmed for chat_id={chat_id}")
-        else:
-            # Create new status if not exists
-            payment_status = PaymentStatus(chat_id=chat_id, completed=True, reminder_active=False)
-            self.storage.save_payment_status(payment_status)
+        if not payment_status or not payment_status.reminder_active:
+            return False
 
-        self._send_completion_message(chat_id)
+        payment_status.reminder_active = False
+        self.storage.save_payment_status(payment_status)
+        logger.info(f"Payment reminders silenced for chat_id={chat_id}")
+        return True
 
     def _send_reminder(self, chat_id: int, minutes: int, seconds: int) -> None:
         """Send a payment reminder message."""
         message = MessageTemplates.payment_reminder(minutes, seconds)
         self.telegram.send_message(chat_id, message)
         logger.debug(f"Sent payment reminder to chat_id={chat_id}, remaining={minutes}m {seconds}s")
-
-    def _send_completion_message(self, chat_id: int) -> None:
-        """Send reminder stopped message (user sent a message)."""
-        self.telegram.send_message(chat_id, Messages.PAYMENT_REMINDER_STOPPED)
-        logger.info(f"Sent reminder stopped message to chat_id={chat_id}")
 
     def _send_timeout_message(self, chat_id: int) -> None:
         """Send reminder timeout message (10 minutes elapsed)."""

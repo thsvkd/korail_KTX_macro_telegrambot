@@ -34,6 +34,24 @@ def _env_ratio(name: str, default: float) -> float:
     return min(max(value, 0.0), 1.0)
 
 
+def _env_int_at_least(name: str, default: int, minimum: int) -> int:
+    """Read a whole number, refusing to go below a floor.
+
+    A too-small interval is not a preference to be honoured: it is a phone
+    buzzing so often that the message it carries stops being read. Anything
+    unusable - blank, not a number - falls back on the default rather than
+    stopping the bot from starting over a typo in a tuning knob.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(value, minimum)
+
+
 def _internal_callback_token() -> str:
     """
     Token shared between the Flask app and its background reservation processes.
@@ -132,10 +150,20 @@ class Settings:
 
     # Payment Reminder Configuration
     PAYMENT_TIMEOUT_MINUTES: int = int(os.environ.get("PAYMENT_TIMEOUT_MINUTES", "10"))
-    # One reminder a minute. At the old ten seconds a ten-minute payment
-    # window meant sixty messages, which is a phone buzzing continuously
-    # while someone is trying to type their card number into another app.
-    PAYMENT_REMINDER_INTERVAL_SECONDS: int = int(os.environ.get("PAYMENT_REMINDER_INTERVAL", "60"))
+    # How often the "you have not paid yet" message repeats.
+    #
+    # Half a minute: twenty messages across a ten-minute window. A minute was
+    # quiet enough to miss when the deadline is what matters, and the older
+    # ten seconds meant sixty buzzes at someone typing a card number into
+    # another app.
+    #
+    # The floor is what keeps a well-meant "make it more urgent" from turning
+    # the reminder into the thing being ignored. Below it the value is raised
+    # rather than refused: a badly tuned knob should not stop the bot.
+    PAYMENT_REMINDER_MIN_INTERVAL_SECONDS: int = 10
+    PAYMENT_REMINDER_INTERVAL_SECONDS: int = _env_int_at_least(
+        "PAYMENT_REMINDER_INTERVAL", 30, PAYMENT_REMINDER_MIN_INTERVAL_SECONDS
+    )
     # How often a watcher asks the railway whether the reservation is still
     # unpaid. One listing request each time - the same cadence a search runs
     # at, and for the same reason: the answer is only useful while it is

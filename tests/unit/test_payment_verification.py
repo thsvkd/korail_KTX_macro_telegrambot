@@ -16,6 +16,7 @@ ask". Reading a failed request as a completed payment would put the guess
 straight back, with more confidence behind it.
 """
 
+import os
 from datetime import datetime, timedelta
 from itertools import repeat
 from unittest.mock import Mock, patch
@@ -286,14 +287,40 @@ class TestPaymentDeadline:
 class TestReminderPacing:
     """How often the user's phone goes off while they are paying."""
 
-    def test_one_reminder_a_minute(self):
+    def test_two_reminders_a_minute(self):
         """
-        Ten seconds meant sixty messages in a ten-minute window, arriving
-        while the user is trying to type a card number into another app.
+        Twenty messages across a ten-minute window: often enough that the
+        deadline is not missed, far from the sixty that ten seconds meant.
         """
         from korail_bot.config.settings import Settings
 
-        assert Settings.PAYMENT_REMINDER_INTERVAL_SECONDS == 60
+        assert Settings.PAYMENT_REMINDER_INTERVAL_SECONDS == 30
+
+    def test_the_operator_may_ask_for_ten_seconds(self):
+        """The floor is a bound on the setting, not a refusal to be tuned."""
+        from korail_bot.config.settings import _env_int_at_least
+
+        with patch.dict(os.environ, {"PAYMENT_REMINDER_INTERVAL": "10"}):
+            assert _env_int_at_least("PAYMENT_REMINDER_INTERVAL", 30, 10) == 10
+
+    def test_asking_for_less_than_ten_seconds_gets_ten(self):
+        """
+        A reminder every second is not more urgent, it is unreadable. The
+        value is raised rather than refused: a mistuned knob must not stop
+        the bot from starting.
+        """
+        from korail_bot.config.settings import _env_int_at_least
+
+        with patch.dict(os.environ, {"PAYMENT_REMINDER_INTERVAL": "1"}):
+            assert _env_int_at_least("PAYMENT_REMINDER_INTERVAL", 30, 10) == 10
+
+    def test_something_unreadable_falls_back_on_the_default(self):
+        from korail_bot.config.settings import _env_int_at_least
+
+        with patch.dict(os.environ, {"PAYMENT_REMINDER_INTERVAL": ""}):
+            assert _env_int_at_least("PAYMENT_REMINDER_INTERVAL", 30, 10) == 30
+        with patch.dict(os.environ, {"PAYMENT_REMINDER_INTERVAL": "곧바로"}):
+            assert _env_int_at_least("PAYMENT_REMINDER_INTERVAL", 30, 10) == 30
 
     def test_the_loop_stops_at_the_deadline_rather_than_past_it(self):
         """

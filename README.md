@@ -493,7 +493,7 @@ waitress 이고, 폴러가 중복 기동되지 않도록 의도적으로 단일 
 | `PROGRESS_REPORT_MAX_MINUTES` | ❌ | 가장 긴 보고 간격 (기본 180분) |
 | `PROGRESS_REPORT_DEFAULT_MINUTES` | ❌ | `/notify on` 이 켜는 간격 (기본 5분) |
 | `PAYMENT_TIMEOUT_MINUTES` | ❌ | 예약 뒤 결제 대기 시간 (기본 10분) |
-| `PAYMENT_REMINDER_INTERVAL` | ❌ | 미결제 알림 간격 (기본 60초) |
+| `PAYMENT_REMINDER_INTERVAL` | ❌ | 미결제 알림 간격 (기본 30초, 최소 10초). 더 짧게 적으면 10초로 올려서 씁니다 |
 | `PAYMENT_VERIFY_INTERVAL` | ❌ | 결제 여부 확인 간격 (기본 3초) |
 | `PAYMENT_WATCH_LEASE` | ❌ | 결제 감시 선점 유지 시간 (기본 확인 간격의 4배) |
 | `PROCESS_START_GRACE_SECONDS` | ❌ | 새로 띄운 검색 프로세스의 생존을 확인하기까지 기다리는 시간 (기본 1.0) |

@@ -111,6 +111,7 @@ logger.info(f"Payment timeout: {settings.PAYMENT_TIMEOUT_MINUTES}min")
 logger.info(f"Reminder interval: {settings.PAYMENT_REMINDER_INTERVAL_SECONDS}s")
 logger.info(f"Payment verify interval: {settings.PAYMENT_VERIFY_INTERVAL_SECONDS}s")
 logger.info("Public Telegram endpoint: disabled")
+logger.info(f"Telegram Mini App: {'enabled' if settings.mini_app_enabled() else 'disabled'}")
 logger.info(f"Admin commands: {'enabled' if settings.ADMIN_PASSWORD else 'disabled'}")
 logger.info(f"Developer mode: {'enabled' if settings.ADMIN_MAGIC_STRING else 'disabled'}")
 logger.info(

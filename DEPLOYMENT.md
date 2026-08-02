@@ -70,6 +70,32 @@ docker compose version
 `deploy.sh down --volumes`는 운영 Redis 볼륨을 삭제합니다. 모든 세션, 등록 계정,
 예약 검색 상태가 사라지므로 초기화가 명확히 필요한 경우에만 사용하십시오.
 
+## Telegram Mini App 배포
+
+`webapp/`은 빌드 과정이 없는 정적 페이지입니다. `master`의 해당 파일이 바뀌면
+`.github/workflows/pages.yml`이 GitHub Pages에 배포합니다. 저장소에서 처음 한
+번은 **Settings → Pages → Source → GitHub Actions**를 선택해야 합니다. 이 fork의
+기본 주소는 다음과 같습니다.
+
+```text
+https://thsvkd.github.io/korail_KTX_macro_telegrambot/
+```
+
+페이지가 실제로 열리는지 확인한 뒤 호스트의 `.env`에 아래 값을 추가합니다.
+
+```bash
+MINI_APP_URL=https://thsvkd.github.io/korail_KTX_macro_telegrambot/
+```
+
+봇을 재시작하면 `/start`의 답장 키보드가 이 HTTPS 페이지를 엽니다. Telegram
+결과는 기존 long polling으로 들어오므로 `FLASK_HOST`를 외부에 열거나 webhook,
+도메인, TLS 인증서를 앱 서버에 추가할 필요가 없습니다. 주소가 비어 있거나
+HTTPS가 아니면 시작 로그에 비활성/경고가 남고 기존 채팅 예약만 동작합니다.
+
+정적 화면은 철도 계정과 결제 정보를 받지 않으며 공개 API를 호출하지 않습니다.
+GitHub Pages가 아닌 호스팅을 쓸 때도 `webapp/` 파일을 그대로 HTTPS로 제공하고
+그 주소만 `MINI_APP_URL`에 넣으십시오.
+
 ## 배포 전 테스트 봇
 
 BotFather에서 운영 봇과 다른 테스트 봇을 만든 뒤 격리된 `.env.test`를

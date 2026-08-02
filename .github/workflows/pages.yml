@@ -1,0 +1,40 @@
+name: Mini App Pages
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "webapp/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: github.repository == 'thsvkd/korail_KTX_macro_telegrambot'
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Upload Mini App
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: webapp
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

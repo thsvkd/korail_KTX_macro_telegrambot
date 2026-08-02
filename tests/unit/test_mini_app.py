@@ -2,12 +2,13 @@
 
 import json
 from datetime import datetime, timedelta
+from pathlib import Path
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from korail_bot.config.settings import settings
+from korail_bot.config.settings import Settings, settings
 from korail_bot.handlers import TelegramUpdateProcessor
 from korail_bot.handlers.conversation_handler import ConversationHandler
 from korail_bot.models import OnboardedAccount, Operator, UserProgress, UserSession
@@ -24,6 +25,7 @@ from korail_bot.telegramBot import keyboards
 CHAT_ID = 180018
 PHONE = "010-1234-5678"
 PASSWORD = "railway-password"
+WEBAPP = Path(__file__).parents[2] / "webapp"
 
 
 def future_date(days: int = 1) -> str:
@@ -116,6 +118,31 @@ class TestMiniAppKeyboard:
         }
         assert keyboard["keyboard"][1][0]["text"] == keyboards.MINI_APP_CHAT_FALLBACK
         assert "inline_keyboard" not in keyboard
+
+
+class TestMiniAppConfiguration:
+    @pytest.mark.parametrize(
+        ("url", "enabled"),
+        [
+            ("https://example.test/app", True),
+            ("http://example.test/app", False),
+            ("/relative", False),
+            (None, False),
+        ],
+    )
+    def test_only_absolute_https_urls_enable_the_app(self, url, enabled):
+        with patch.object(Settings, "MINI_APP_URL", url):
+            assert settings.mini_app_enabled() is enabled
+
+    def test_the_static_page_has_no_credential_or_payment_inputs(self):
+        page = (WEBAPP / "index.html").read_text()
+        lower = page.lower()
+
+        assert 'type="password"' not in lower
+        assert 'name="phone"' not in lower
+        assert 'name="password"' not in lower
+        assert 'name="payment"' not in lower
+        assert "connect-src 'none'" in page
 
 
 class MiniAppConversationFixture:

@@ -85,6 +85,9 @@ class CommandHandler:
             if self.conversation.offer_draft(chat_id, session):
                 return
 
+            if self.conversation.offer_mini_app(chat_id, session):
+                return
+
             self.conversation.begin_flow(chat_id, session)
             return
 
@@ -98,6 +101,16 @@ class CommandHandler:
             MessageTemplates.welcome_message(skip_login_prompts=True),
             reply_markup=keyboards.start_confirm_keyboard(),
         )
+
+    def handle_chat_start(self, chat_id: int) -> None:
+        """Start the original chat flow from the Mini App fallback button."""
+        if not self.conversation:
+            self.handle_start(chat_id)
+            return
+        session = self.storage.get_user_session(chat_id) or UserSession(chat_id=chat_id)
+        if self.conversation.offer_draft(chat_id, session):
+            return
+        self.conversation.begin_flow(chat_id, session)
 
     def handle_onboarding(self, chat_id: int) -> None:
         """

@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' https://telegram.org; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>취소표 감시 설정</title>
+    <link rel="stylesheet" href="app.css" />
+    <script src="https://telegram.org/js/telegram-web-app.js" defer></script>
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <main class="screen">
+      <header>
+        <p class="eyebrow">KTX WATCH</p>
+        <h1>취소표 감시 설정</h1>
+        <p class="intro">여행 조건을 한 번에 고르고, 열차 선택과 시작 확인은 채팅에서 이어갑니다.</p>
+      </header>
+
+      <form id="reservation-form" novalidate>
+        <fieldset class="operator-picker" id="operator-picker">
+          <legend>철도</legend>
+          <label data-operator="korail">
+            <input type="radio" name="operator" value="korail" checked />
+            <span>코레일</span>
+          </label>
+          <label data-operator="srt">
+            <input type="radio" name="operator" value="srt" />
+            <span>SRT</span>
+          </label>
+        </fieldset>
+
+        <section class="card route-card" aria-labelledby="route-title">
+          <div class="section-heading">
+            <div><span class="step">01</span><h2 id="route-title">구간</h2></div>
+            <button id="swap-stations" class="text-button" type="button">서로 바꾸기</button>
+          </div>
+          <div class="route-fields">
+            <label class="field">
+              <span>출발역</span>
+              <input id="src-station" name="src_station" list="station-options" autocomplete="off" placeholder="서울" maxlength="10" required />
+            </label>
+            <span class="route-arrow" aria-hidden="true">→</span>
+            <label class="field">
+              <span>도착역</span>
+              <input id="dst-station" name="dst_station" list="station-options" autocomplete="off" placeholder="부산" maxlength="10" required />
+            </label>
+          </div>
+          <datalist id="station-options"></datalist>
+          <div class="quick-stations" id="quick-stations" aria-label="주요 역 빠른 선택"></div>
+        </section>
+
+        <section class="card" aria-labelledby="time-title">
+          <div class="section-heading"><div><span class="step">02</span><h2 id="time-title">날짜와 시간</h2></div></div>
+          <label class="field full">
+            <span>출발 날짜</span>
+            <input id="dep-date" name="dep_date" type="date" required />
+          </label>
+          <div class="two-columns time-fields">
+            <label class="field">
+              <span>검색 시작</span>
+              <input name="dep_time" type="time" value="07:00" required />
+            </label>
+            <label class="field" id="end-time-field">
+              <span>검색 종료</span>
+              <input id="max-dep-time" name="max_dep_time" type="time" value="12:00" required />
+            </label>
+          </div>
+          <label class="check-row">
+            <input id="unlimited-time" type="checkbox" />
+            <span><strong>종료 시각 제한 없음</strong><small>출발 날짜의 마지막 열차까지 감시</small></span>
+          </label>
+        </section>
+
+        <section class="card" aria-labelledby="seat-title">
+          <div class="section-heading"><div><span class="step">03</span><h2 id="seat-title">열차와 좌석</h2></div></div>
+
+          <fieldset class="choice-group" id="train-type-group">
+            <legend>열차 종류</legend>
+            <label><input type="radio" name="train_type" value="1" checked /><span>KTX 계열만<small>빠른 열차만</small></span></label>
+            <label><input type="radio" name="train_type" value="2" /><span>모든 열차<small>무궁화호 포함</small></span></label>
+          </fieldset>
+
+          <fieldset class="choice-group seat-options">
+            <legend>좌석 종류</legend>
+            <label><input type="radio" name="seat_option" value="1" checked /><span>일반실 우선</span></label>
+            <label><input type="radio" name="seat_option" value="2" /><span>일반실만</span></label>
+            <label><input type="radio" name="seat_option" value="3" /><span>특실 우선</span></label>
+            <label><input type="radio" name="seat_option" value="4" /><span>특실만</span></label>
+          </fieldset>
+
+          <div class="passenger-row">
+            <div><span class="field-label">탑승 인원</span><small>성인 기준, 최대 9명</small></div>
+            <div class="stepper">
+              <button id="passenger-minus" type="button" aria-label="인원 줄이기">−</button>
+              <output id="passenger-output" for="passenger-minus passenger-plus">1명</output>
+              <input id="passenger-count" name="passenger_count" type="hidden" value="1" />
+              <button id="passenger-plus" type="button" aria-label="인원 늘리기">＋</button>
+            </div>
+          </div>
+
+          <fieldset class="choice-group" id="seat-strategy-group" hidden>
+            <legend>좌석 배치</legend>
+            <label><input type="radio" name="seat_strategy" value="1" checked /><span>연속 좌석<small>붙어 있는 자리만</small></span></label>
+            <label><input type="radio" name="seat_strategy" value="2" /><span>랜덤 배치<small>떨어져도 예약</small></span></label>
+          </fieldset>
+        </section>
+
+        <aside class="notice">
+          <strong>결제는 자동으로 하지 않습니다.</strong>
+          <span>좌석을 잡으면 채팅으로 알려드리며, 철도사에서 직접 결제합니다.</span>
+        </aside>
+
+        <p id="form-error" class="error" role="alert" aria-live="assertive"></p>
+        <pre id="browser-preview" class="browser-preview" hidden></pre>
+        <button id="submit-button" class="submit-button" type="submit">이 조건으로 열차 보기</button>
+      </form>
+    </main>
+  </body>
+</html>

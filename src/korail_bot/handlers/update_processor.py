@@ -92,10 +92,25 @@ class TelegramUpdateProcessor:
             # Extract message
             try:
                 message = update["message"]
-                text = message["text"].strip()
                 chat_id = int(message["chat"]["id"])
             except (KeyError, ValueError) as e:
                 logger.error(f"Invalid message format: {e}")
+                return
+
+            # A Keyboard Button Mini App returns a service message rather
+            # than text. Its data is client-controlled and is therefore
+            # parsed and validated at the conversation boundary before any
+            # session or search is changed.
+            web_app_data = message.get("web_app_data")
+            if isinstance(web_app_data, dict):
+                logger.info(f"Received Mini App submission from chat_id={chat_id}")
+                self.conversation_handler.handle_mini_app_data(chat_id, web_app_data.get("data"))
+                return
+
+            try:
+                text = message["text"].strip()
+            except (KeyError, AttributeError):
+                logger.error("Invalid message format: text is missing")
                 return
 
             logger.info(f"Received message from chat_id={chat_id}: {text}")
@@ -107,6 +122,10 @@ class TelegramUpdateProcessor:
             # answer means "this chat is mine", not an answer to the question
             # on screen.
             if self.command_handler.claim_developer_mode(chat_id, text):
+                return
+
+            if text == keyboards.MINI_APP_CHAT_FALLBACK:
+                self.command_handler.handle_chat_start(chat_id)
                 return
 
             # Get user session to check progress

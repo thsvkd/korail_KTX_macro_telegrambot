@@ -1,6 +1,7 @@
 """Conversation flow handler for reservation process."""
 
 from datetime import datetime, timedelta
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from korail2 import ReserveOption
 
@@ -17,6 +18,8 @@ from korail_bot.services import (
     AccessService,
     KorailService,
     MessageTemplates,
+    MiniAppDataError,
+    MiniAppSubmission,
     ReservationService,
     SrtService,
     TelegramService,
@@ -614,6 +617,111 @@ class ConversationHandler:
             MessageTemplates.welcome_message(skip_login_prompts=True),
             reply_markup=keyboards.start_confirm_keyboard(),
         )
+
+    def offer_mini_app(self, chat_id: int, session: UserSession) -> bool:
+        """Offer the one-screen reservation form when this chat can use it.
+
+        The page never asks for railway credentials. It is therefore offered
+        only when at least one account is already registered, or when this is
+        a developer chat allowed to use a configured fixed account. The URL
+        tells the static page which railway choices are usable; no identity or
+        secret is placed in it.
+        """
+        if not settings.mini_app_enabled():
+            return False
+
+        available = set(self.storage.get_onboarded_operators(chat_id))
+        for operator in Operator:
+            if self.uses_server_account(chat_id, operator):
+                available.add(operator)
+        if not available:
+            return False
+
+        parsed = urlsplit(settings.MINI_APP_URL or "")
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        query["operators"] = ",".join(
+            str(operator) for operator in Operator if operator in available
+        )
+        url = urlunsplit(parsed._replace(query=urlencode(query)))
+
+        session.reset()
+        self.storage.save_user_session(session)
+        self.telegram.send_message(
+            chat_id,
+            MessageTemplates.MINI_APP_OFFER,
+            reply_markup=keyboards.mini_app_keyboard(url),
+        )
+        return True
+
+    def handle_mini_app_data(self, chat_id: int, raw: object) -> None:
+        """Turn one validated Mini App submission into the train-picking step."""
+        try:
+            submission = MiniAppSubmission.parse(raw)
+        except MiniAppDataError as exc:
+            self.telegram.send_message(
+                chat_id,
+                MessageTemplates.MINI_APP_INVALID.format(error=exc),
+                reply_markup=keyboards.remove_reply_keyboard(),
+            )
+            return
+
+        session = self.storage.get_user_session(chat_id) or UserSession(chat_id=chat_id)
+        if session.last_action == UserProgress.FINDING_TICKET:
+            self.telegram.send_message(
+                chat_id,
+                MessageTemplates.MINI_APP_SEARCH_RUNNING,
+                reply_markup=keyboards.remove_reply_keyboard(),
+            )
+            return
+
+        session.reset()
+        session.in_progress = True
+        session.train_info = {"operator": str(submission.operator)}
+        self.storage.save_user_session(session)
+
+        if self.uses_server_account(chat_id, submission.operator):
+            if not self._login_with_environment_credentials(chat_id, session):
+                session.reset()
+                self.storage.save_user_session(session)
+                self.telegram.send_message(
+                    chat_id,
+                    MessageTemplates.PRECONFIGURED_LOGIN_FAILED.format(
+                        operator=submission.operator.display_name
+                    ),
+                    reply_markup=keyboards.remove_reply_keyboard(),
+                )
+                return
+        elif not self.resume_with_registered_account(chat_id, session, announce=False):
+            session.reset()
+            self.storage.save_user_session(session)
+            self.telegram.send_message(
+                chat_id,
+                MessageTemplates.MINI_APP_ACCOUNT_REQUIRED.format(
+                    operator=submission.operator.display_name
+                ),
+                reply_markup=keyboards.remove_reply_keyboard(),
+            )
+            return
+
+        # A stale registered login has already been removed and the user has
+        # been sent to onboarding by resume_with_registered_account().
+        if session.last_action != UserProgress.PW_INPUT_SUCCESS:
+            self.telegram.send_message(
+                chat_id,
+                MessageTemplates.MINI_APP_LOGIN_EXPIRED,
+                reply_markup=keyboards.remove_reply_keyboard(),
+            )
+            return
+
+        session.train_info = submission.as_train_info()
+        session.last_action = UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+        self.storage.save_user_session(session)
+        self.telegram.send_message(
+            chat_id,
+            MessageTemplates.MINI_APP_RECEIVED,
+            reply_markup=keyboards.remove_reply_keyboard(),
+        )
+        self._show_train_selection(chat_id, session)
 
     def _uses_any_server_account(self, chat_id: int) -> bool:
         """Whether this developer chat has a fixed login for either railway."""

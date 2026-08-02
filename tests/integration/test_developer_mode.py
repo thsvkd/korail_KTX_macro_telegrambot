@@ -19,19 +19,10 @@ import pytest
 from korail_bot.config.settings import Settings, settings
 from korail_bot.handlers.update_processor import TelegramUpdateProcessor
 from korail_bot.services import PaymentReminderService, ReservationService, TelegramService
-from korail_bot.storage import RedisStorage
 
 MAGIC = "a-long-enough-magic-string"
 CHAT_ID = 4242
 OTHER_OPERATOR = 777
-
-
-@pytest.fixture
-def storage():
-    storage = RedisStorage()
-    storage.redis.flushdb()
-    yield storage
-    storage.redis.flushdb()
 
 
 @pytest.fixture

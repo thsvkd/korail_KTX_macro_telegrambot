@@ -8,28 +8,17 @@ setting at all. These run against Redis because that is where the distinction
 actually lives.
 """
 
-import pytest
-
 from korail_bot.models import UserProgress, UserSession
-from korail_bot.storage import RedisStorage
 
 CHAT_ID = 4242
-
-
-@pytest.fixture
-def storage():
-    storage = RedisStorage()
-    storage.redis.flushdb()
-    yield storage
-    storage.redis.flushdb()
 
 
 class TestTheSetting:
     """Reading back what was written."""
 
-    def test_a_chat_that_never_asked_gets_nothing(self):
+    def test_a_chat_that_never_asked_gets_nothing(self, storage):
         """Silence is the default, so the absent key has to read as off."""
-        assert RedisStorage().get_progress_report_minutes(999999) == 0
+        assert storage.get_progress_report_minutes(999999) == 0
 
     def test_an_interval_survives_the_round_trip(self, storage):
         storage.set_progress_report_minutes(CHAT_ID, 15)

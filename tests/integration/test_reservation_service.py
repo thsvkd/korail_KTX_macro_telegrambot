@@ -39,6 +39,7 @@ class TestReservationService:
                 # nothing left to clean up here.
                 pass
         self.storage.redis.flushdb()
+        self.storage.close()
 
     @patch("subprocess.Popen")
     def test_start_reservation_process_success(self, mock_popen):

@@ -37,6 +37,7 @@ class TestFullReservationFlow:
     def teardown_method(self):
         """Clean up after each test."""
         self.storage.redis.flushdb()
+        self.storage.close()
 
     @patch("korail_bot.services.korail_service.KorailService.login")
     def test_complete_single_reservation_happy_path(self, mock_login):
@@ -393,6 +394,7 @@ class TestFullSrtReservationFlow:
     def teardown_method(self):
         """Clean up after each test."""
         self.storage.redis.flushdb()
+        self.storage.close()
 
     def say(self, *messages):
         """Answer the conversation, one message per argument."""

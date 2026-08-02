@@ -49,6 +49,7 @@ class TestScheduledSearchRoundTrip:
 
     def teardown_method(self):
         self.storage.redis.flushdb()
+        self.storage.close()
 
     def test_every_field_survives(self):
         original = search()
@@ -118,6 +119,7 @@ class TestExpiry:
 
     def teardown_method(self):
         self.storage.redis.flushdb()
+        self.storage.close()
 
     def test_it_outlives_its_own_start_time(self):
         """
@@ -166,6 +168,7 @@ class TestSharedSearchParamSerialisation:
 
     def teardown_method(self):
         self.storage.redis.flushdb()
+        self.storage.close()
 
     def test_a_running_reservation_keeps_every_field(self):
         from korail_bot.models import RunningReservation

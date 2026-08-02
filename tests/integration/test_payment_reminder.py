@@ -27,6 +27,7 @@ class TestPaymentReminderService:
     def teardown_method(self):
         """Clean up after each test."""
         self.storage.redis.flushdb()
+        self.storage.close()
 
     def test_start_reminders_creates_payment_status(self):
         """Test starting reminders creates payment status."""
@@ -157,6 +158,7 @@ class TestPaymentReminderTiming:
     def teardown_method(self):
         """Clean up after each test."""
         self.storage.redis.flushdb()
+        self.storage.close()
 
     def test_timeout_detection_after_10_minutes(self):
         """Test timeout is detected after 10 minutes."""

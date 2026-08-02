@@ -34,6 +34,7 @@ class TestReservationCallback:
 
     def teardown_method(self):
         self.storage.redis.flushdb()
+        self.storage.close()
 
     def callback(self, **query):
         return self.client.get(

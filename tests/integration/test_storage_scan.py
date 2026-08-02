@@ -10,8 +10,6 @@ silently return a subset.
 Every case here therefore writes more records than the batch size (100).
 """
 
-import pytest
-
 from korail_bot.models import (
     PaymentStatus,
     RunningReservation,
@@ -19,18 +17,9 @@ from korail_bot.models import (
     UserProgress,
     UserSession,
 )
-from korail_bot.storage import RedisStorage
 
 # Larger than the SCAN batch size, so the cursor has to come back for more.
 COUNT = 250
-
-
-@pytest.fixture
-def storage():
-    s = RedisStorage()
-    s.redis.flushdb()
-    yield s
-    s.redis.flushdb()
 
 
 def _params():

@@ -19,7 +19,6 @@ import pytest
 from korail_bot.config.settings import settings
 from korail_bot.models import DeathCause, TrainSearchParams
 from korail_bot.services import ReservationService, SearchWatchdogService, TelegramService
-from korail_bot.storage import RedisStorage
 from korail_bot.telegramBot import keyboards
 from tests.fixtures.processes import make_alive
 
@@ -44,14 +43,6 @@ def search_params():
         passenger_count=2,
         seat_strategy="consecutive",
     )
-
-
-@pytest.fixture
-def storage():
-    storage = RedisStorage()
-    storage.redis.flushdb()
-    yield storage
-    storage.redis.flushdb()
 
 
 @pytest.fixture

@@ -22,7 +22,6 @@ from korail_bot.models import (
     UserProgress,
     UserSession,
 )
-from korail_bot.storage import RedisStorage
 
 CHAT_ID = 987654
 
@@ -112,13 +111,6 @@ CASES = [
         60,
     ),
 ]
-
-
-@pytest.fixture
-def storage():
-    s = RedisStorage()
-    yield s
-    s.redis.flushdb()
 
 
 @pytest.mark.parametrize(

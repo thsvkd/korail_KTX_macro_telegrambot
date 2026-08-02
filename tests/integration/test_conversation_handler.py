@@ -27,6 +27,7 @@ class TestConversationHandler:
     def teardown_method(self):
         """Clean up after each test."""
         self.storage.redis.flushdb()
+        self.storage.close()
 
     def test_start_confirmation_yes(self):
         """Test start confirmation with 'Y'."""

@@ -25,7 +25,6 @@ from korail_bot.services import (
     ReservationService,
     TelegramService,
 )
-from korail_bot.storage import RedisStorage
 from korail_bot.telegramBot import keyboards
 from korail_bot.utils.crypto import identity_hash
 
@@ -33,14 +32,6 @@ CHAT_ID = 90210
 OPERATOR_CHAT = 5150
 PHONE = "010-1234-5678"
 OTHER_PHONE = "010-9999-8888"
-
-
-@pytest.fixture
-def storage():
-    storage = RedisStorage()
-    storage.redis.flushdb()
-    yield storage
-    storage.redis.flushdb()
 
 
 @pytest.fixture

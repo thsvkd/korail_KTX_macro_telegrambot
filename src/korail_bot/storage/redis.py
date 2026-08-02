@@ -61,6 +61,18 @@ class RedisStorage(StorageInterface):
             logger.error(f"Redis connection failed: {e}")
             raise
 
+    def close(self) -> None:
+        """
+        Hand back the connection pool's sockets.
+
+        The bot builds one storage per process and keeps it for as long as the
+        process lives, so nothing in production has to call this. Tests build
+        one per test, and a client nobody closes keeps its socket until the
+        garbage collector reaches it - at a moment nobody chose, in whatever
+        test happens to be running then.
+        """
+        self.redis.close()
+
     @staticmethod
     def _text(value) -> str | None:
         """

@@ -7,6 +7,10 @@ tests/integration and tests/e2e talk to a real Redis, which testcontainers
 starts for them and which therefore needs a Docker daemon. tests/unit does
 not touch Redis at all, so a run restricted to that directory skips the
 container entirely and needs no Docker.
+
+The `storage` fixture below is the way to reach that Redis. A test that
+builds its own RedisStorage owns closing it, and the check in
+pytest_sessionfinish says so out loud when one is left open.
 """
 
 import os
@@ -80,6 +84,67 @@ def pytest_configure(config):
     os.environ["REDIS_PORT"] = str(_redis_container.get_exposed_port(6379))
 
 
+def _connections_owned_by_the_process():
+    """
+    Redis connections that belong to the process rather than to a test.
+
+    A module-level singleton opens its connection once, when its module is
+    imported, and holds it until the interpreter exits - so it is never
+    finalised while tests are running, and it is not what the check below is
+    looking for.
+    """
+    import sys
+
+    module = sys.modules.get("korail_bot.utils.station_codes")
+    client = getattr(getattr(module, "_station_manager", None), "_redis_client", None)
+    pool = getattr(client, "connection_pool", None)
+    if pool is None:
+        return set()
+    held = list(pool._available_connections) + list(pool._in_use_connections)
+    return {id(connection) for connection in held}
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """
+    Fail the run if a test left a Redis connection open.
+
+    Not tidiness. An unclosed client keeps its socket until the garbage
+    collector reaches it, and a socket collected with its file descriptor
+    still open raises ResourceWarning - which filterwarnings turns into an
+    error, inside a __del__, where it becomes an unraisable exception that
+    pytest reports against whichever test happened to be running. The run
+    fails on a test that did nothing wrong, and only sometimes, because it
+    depends on when a collection happens to fall.
+
+    So it is caught here instead, where the culprit is still nearby and the
+    answer is always the same: close the storage in the teardown that opened
+    it, or take it from the `storage` fixture, which does.
+    """
+    if _redis_container is None or exitstatus != 0:
+        return
+
+    import gc
+
+    import redis
+
+    gc.collect()
+    theirs = _connections_owned_by_the_process()
+    leaked = [
+        connection
+        for connection in gc.get_objects()
+        if isinstance(connection, redis.connection.AbstractConnection)
+        and connection._sock is not None
+        and id(connection) not in theirs
+    ]
+    if leaked:
+        session.exitstatus = 1
+        print(
+            f"\nERROR: {len(leaked)} Redis connection(s) still open at the end of the run.\n"
+            "       A test built a storage and never closed it; see tests/conftest.py.\n"
+            + "".join(f"       {connection!r}\n" for connection in leaked[:5])
+        )
+
+
 def pytest_unconfigure(config):
     """Clean up the Redis container after all tests."""
     global _redis_container
@@ -92,3 +157,25 @@ def pytest_unconfigure(config):
 def redis_container():
     """The running Redis container, or None when the run skipped it."""
     return _redis_container
+
+
+@pytest.fixture
+def storage():
+    """
+    A storage on the throwaway Redis, handed over empty and left empty.
+
+    Lives here rather than in each test module so that the closing at the end
+    happens once and always - see pytest_sessionfinish above for what a
+    forgotten one costs.
+
+    Imported inside the function rather than at the top of the file because importing
+    korail_bot reads the settings, and pytest_configure above has to have
+    written the environment first.
+    """
+    from korail_bot.storage import RedisStorage
+
+    storage = RedisStorage()
+    storage.redis.flushdb()
+    yield storage
+    storage.redis.flushdb()
+    storage.close()

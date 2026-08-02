@@ -23,19 +23,10 @@ from korail_bot.handlers.conversation_handler import ConversationHandler
 from korail_bot.handlers.update_processor import TelegramUpdateProcessor
 from korail_bot.models import OnboardedAccount, UserProgress, UserSession
 from korail_bot.services import PaymentReminderService, ReservationService, TelegramService
-from korail_bot.storage import RedisStorage
 
 CHAT_ID = 774411
 PHONE = "010-1234-5678"
 PASSWORD = "korail-password"
-
-
-@pytest.fixture
-def storage():
-    storage = RedisStorage()
-    storage.redis.flushdb()
-    yield storage
-    storage.redis.flushdb()
 
 
 @pytest.fixture

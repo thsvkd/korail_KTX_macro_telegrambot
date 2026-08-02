@@ -21,20 +21,11 @@ from SRT import SeatType
 from korail_bot.handlers import ConversationHandler
 from korail_bot.models import OnboardedAccount, Operator, UserProgress, UserSession
 from korail_bot.services import ReservationService, TelegramService
-from korail_bot.storage import RedisStorage
 
 CHAT_ID = 12345
 # Inside the window the date step will accept, rather than a far-future date
 # that is refused for reasons that have nothing to do with these tests.
 FUTURE_DATE = (datetime.now() + timedelta(days=7)).strftime("%Y%m%d")
-
-
-@pytest.fixture
-def storage():
-    s = RedisStorage()
-    s.redis.flushdb()
-    yield s
-    s.redis.flushdb()
 
 
 @pytest.fixture

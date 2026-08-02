@@ -10,18 +10,7 @@ hand and check what comes back out.
 
 import json
 
-import pytest
-
 from korail_bot.models import FavouriteSearch, Operator, RunningReservation, TrainSearchParams
-from korail_bot.storage import RedisStorage
-
-
-@pytest.fixture
-def storage():
-    s = RedisStorage()
-    s.redis.flushdb()
-    yield s
-    s.redis.flushdb()
 
 
 def a_search(**overrides) -> TrainSearchParams:

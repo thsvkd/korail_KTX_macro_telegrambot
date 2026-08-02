@@ -26,19 +26,10 @@ from korail_bot.models import (
 )
 from korail_bot.services import PaymentReminderService, ReservationService, TelegramService
 from korail_bot.services.korail_service import KorailService
-from korail_bot.storage import RedisStorage
 from korail_bot.telegramBot import keyboards
 
 CHAT_ID = 55
 MESSAGE_ID = 10
-
-
-@pytest.fixture
-def storage():
-    storage = RedisStorage()
-    storage.redis.flushdb()
-    yield storage
-    storage.redis.flushdb()
 
 
 @pytest.fixture

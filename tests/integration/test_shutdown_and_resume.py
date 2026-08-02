@@ -16,7 +16,6 @@ import pytest
 from korail_bot.config.settings import settings
 from korail_bot.models import TrainSearchParams
 from korail_bot.services import ReservationService, TelegramService
-from korail_bot.storage import RedisStorage
 from tests.fixtures.processes import make_alive
 
 FIRST_RUN = "run-before-the-restart"
@@ -41,13 +40,6 @@ def search_params():
         passenger_count=1,
         seat_strategy="consecutive",
     )
-
-
-@pytest.fixture
-def storage():
-    storage = RedisStorage()
-    yield storage
-    storage.redis.flushdb()
 
 
 def _service(storage):

@@ -50,6 +50,9 @@ uv run --frozen pytest --collect-only -q
 
 - 단위 테스트는 Redis와 Docker에 접속하지 않습니다.
 - 통합 테스트의 Redis는 실행마다 새 컨테이너입니다.
+- Redis에는 `tests/conftest.py`의 `storage` 픽스처로 접근합니다. 직접
+  `RedisStorage()`를 만든 테스트는 teardown에서 `close()`까지 책임집니다.
+  닫지 않은 연결은 실행 끝에서 검출되어 실행을 실패시킵니다.
 - HTTP 테스트는 Telegram 공개 webhook이 아니라 내부
   `/reservation-callback` 엔드포인트를 검증합니다.
 - 철도 클라이언트는 mock/fake로 대체하므로 실제 예약을 만들지 않습니다.

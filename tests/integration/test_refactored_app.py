@@ -29,6 +29,7 @@ class TestRefactoredArchitecture:
         """Clean up after each test."""
         # Flush Redis database after each test
         self.storage.redis.flushdb()
+        self.storage.close()
 
     def test_storage_user_session(self):
         """Test storage can save and retrieve user sessions."""

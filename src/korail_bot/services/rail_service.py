@@ -261,6 +261,41 @@ class RailService(ABC):
             logger.debug("🔄 Session due for a refresh, re-logging in")
             self._relogin()
 
+    def ensure_logged_in(self) -> None:
+        """
+        Get the session back before asking for trains again.
+
+        A refresh that failed leaves the service logged out and otherwise
+        unchanged, and nothing about that state stops the loop from going
+        round again. What used to happen next was that search_trains found
+        no session and raised ValueError - which the loop does not catch,
+        because it means "this was called wrong", not "this attempt failed".
+        It travelled all the way out to the process, where the handler for
+        bad input told the user to check their station names. A session the
+        operator dropped is not a typo in a station name, and the search
+        ended on that advice.
+
+        So the recovery happens here instead, in front of every search, and a
+        failed one is reported as what it is: an attempt that did not come
+        off. The loop then backs off and tries again - which is right,
+        because a login that fails now is usually a login that works in a
+        minute - and if it stays broken, the run of failures reaches the
+        threshold and the user hears that the operator is not answering.
+
+        Raises:
+            SearchUnavailableError: When the session could not be recovered
+        """
+        if self._logged_in:
+            return
+
+        logger.warning(f"{self.operator_name} session is gone - logging in again before searching")
+        if not self._relogin():
+            raise SearchUnavailableError(
+                f"{self.operator_name} session expired and could not be re-established"
+            )
+
+        logger.info(f"✅ {self.operator_name} session recovered, resuming the search")
+
     @staticmethod
     def _spread(seconds: float, ratio: float) -> float:
         """
@@ -543,6 +578,7 @@ class RailService(ABC):
 
             # Search for trains
             try:
+                self.ensure_logged_in()
                 trains = self.search_trains(
                     dep_date,
                     src_locate,
@@ -633,6 +669,7 @@ class RailService(ABC):
 
             # Search for trains (search for single passenger each time)
             try:
+                self.ensure_logged_in()
                 trains = self.search_trains(
                     dep_date,
                     src_locate,

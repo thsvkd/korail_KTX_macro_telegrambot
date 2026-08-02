@@ -264,3 +264,122 @@ def test_the_loop_recovers_when_korail_comes_back():
     # The streak was cleared by the first answer, so the search is back at its
     # normal rate rather than still doubling.
     assert service._failure_streak == 0
+
+
+# ------------------------------------------------------- a session that lapsed
+#
+# The scheduled refresh re-authenticates every half hour or so. When one of
+# those failed it left the service logged out and said nothing more about it,
+# and the next pass of the loop reached search_trains with no session. That
+# raised ValueError - the "you called this wrong" error - which the loop does
+# not catch, so it travelled out to the process, where the handler for bad
+# input told the user to check their station names and the search ended there.
+#
+# Nothing about it was true. The stations were fine; the session had lapsed.
+# So these cover the recovery happening in front of the search, and a failed
+# recovery being reported as the retryable thing it is.
+
+
+def _lapse_on_search(service):
+    """Answer one search, and lapse the session the way a failed refresh does."""
+
+    def answer_then_lapse(*_args, **_kwargs):
+        service._logged_in = False
+        raise NoResultsError()
+
+    service._korail_instance.search_train.side_effect = answer_then_lapse
+
+
+def test_a_live_session_is_left_alone():
+    service = make_service()
+    service._relogin = Mock()
+
+    service.ensure_logged_in()
+
+    service._relogin.assert_not_called()
+
+
+def test_a_lapsed_session_is_recovered_before_searching():
+    service = make_service()
+    service._logged_in = False
+    service._relogin = Mock(return_value=True)
+
+    service.ensure_logged_in()
+
+    service._relogin.assert_called_once()
+
+
+def test_a_failed_recovery_is_a_search_failure_not_a_usage_error():
+    """
+    The distinction the bug turned on.
+
+    SearchUnavailableError is caught by the loop and backed off; ValueError is
+    not caught by anything until it reaches the handler for malformed input.
+    """
+    service = make_service()
+    service._logged_in = False
+    service._relogin = Mock(return_value=False)
+
+    with pytest.raises(SearchUnavailableError):
+        service.ensure_logged_in()
+
+
+def test_the_loop_survives_a_session_it_cannot_get_back():
+    """
+    The regression itself: a lapsed session must not end the search.
+
+    Before this the second pass raised ValueError out of the loop, and the
+    user was told their station names were wrong.
+    """
+    told = Mock()
+    service = make_service(on_status=told, threshold=3)
+    service._relogin = Mock(return_value=False)
+    _lapse_on_search(service)
+
+    with patch(SEARCH) as sleep:
+        result = service.search_and_reserve_loop(
+            dep_date="20991231",
+            src_locate="서울",
+            dst_locate="부산",
+            max_attempts=4,
+        )
+
+    assert result is None  # ran out of attempts, did not crash
+    # One search got through before the session lapsed; the rest never got
+    # past the recovery, which is the point - no request is sent without one.
+    assert service._korail_instance.search_train.call_count == 1
+    assert service._relogin.call_count == 3
+    # Backed off rather than retrying the login at the full search rate.
+    assert [call.args[0] for call in sleep.call_args_list] == [1.0, 1.0, 2.0, 4.0]
+    # And the user heard about it, in the words for an operator not answering.
+    told.assert_called_once()
+    assert "코레일 응답" in told.call_args[0][0]
+
+
+def test_the_loop_resumes_once_the_session_comes_back():
+    service = make_service(threshold=10)
+    _lapse_on_search(service)
+
+    tries = {"n": 0}
+
+    def relogin():
+        tries["n"] += 1
+        if tries["n"] < 2:
+            return False
+        service._logged_in = True
+        return True
+
+    service._relogin = relogin
+
+    with patch(SEARCH):
+        service.search_and_reserve_loop(
+            dep_date="20991231",
+            src_locate="서울",
+            dst_locate="부산",
+            max_attempts=4,
+        )
+
+    # Searching again after the session came back, and no longer counting
+    # the outage against the backoff.
+    assert service._korail_instance.search_train.call_count == 3
+    assert service._failure_streak == 0

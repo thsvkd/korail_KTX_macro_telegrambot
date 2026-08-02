@@ -1037,6 +1037,7 @@ class BackgroundReservationProcess:
 
             # Search for trains (single passenger)
             try:
+                self.rail.ensure_logged_in()
                 trains = self.rail.search_trains(
                     dep_date=self.dep_date,
                     src_locate=self.src_locate,

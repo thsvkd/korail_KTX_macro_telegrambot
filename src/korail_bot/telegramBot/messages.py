@@ -54,6 +54,29 @@ class Messages:
     DEVELOPER_COMMANDS: ClassVar[list[dict[str, str]]] = PUBLIC_COMMANDS + ADMIN_COMMANDS
 
     # ========== 시작 및 안내 메시지 ==========
+    MINI_APP_OFFER = """🚄 새 예약을 한 화면에서 설정할 수 있습니다.
+
+날짜·구간·시간·좌석을 고른 뒤, 채팅에서 감시할 열차와 시작 여부만 확인합니다.
+계정 정보와 결제 정보는 예약 화면에 입력하지 않습니다.
+
+아래 버튼으로 열거나, 예전 방식이 편하면 채팅으로 진행하세요."""
+
+    MINI_APP_RECEIVED = "✅ 예약 조건을 받았습니다. 감시할 열차를 확인합니다."
+    MINI_APP_INVALID = """⚠️ 예약 화면에서 받은 정보를 사용할 수 없습니다.
+
+{error}
+
+/start 로 예약 화면을 다시 열거나 채팅으로 진행해주세요."""
+    MINI_APP_ACCOUNT_REQUIRED = """🔑 {operator} 계정이 등록되어 있지 않습니다.
+
+/onboarding 으로 계정을 먼저 등록한 뒤 /start 로 다시 시도해주세요."""
+    MINI_APP_LOGIN_EXPIRED = """🔑 등록된 계정으로 로그인할 수 없어 예약 조건을 적용하지 못했습니다.
+
+안내에 따라 계정을 다시 등록한 뒤 /start 로 시도해주세요."""
+    MINI_APP_SEARCH_RUNNING = """🔍 이미 취소표를 찾고 있어 새 예약 조건은 적용하지 않았습니다.
+
+/status 로 현재 검색을 확인하거나 /cancel 로 취소한 뒤 다시 시작해주세요."""
+
     WELCOME = """🚄 코레일 예매 봇을 이용해 주셔서 감사합니다.
 
 본 프로그램은 매진 열차 자동 예약을 위한 서비스입니다.

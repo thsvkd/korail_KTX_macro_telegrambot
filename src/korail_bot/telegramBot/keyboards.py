@@ -15,6 +15,9 @@ from datetime import datetime, timedelta
 
 from korail_bot.models import KORAIL_MAJOR_STATIONS, Operator, UserProgress
 
+MINI_APP_OPEN = "🚄 예약 화면 열기"
+MINI_APP_CHAT_FALLBACK = "💬 채팅으로 예약"
+
 # Telegram rejects callback_data over 64 bytes, measured after UTF-8 encoding
 # - so a Korean station name costs three bytes a character. Nothing built here
 # comes close, and a test holds that line.
@@ -211,6 +214,30 @@ def _rows(buttons: list[dict], per_row: int) -> list[list[dict]]:
 def _keyboard(*rows: list[dict]) -> InlineKeyboard:
     """Wrap rows in the reply_markup shape the Bot API wants."""
     return {"inline_keyboard": [row for row in rows if row]}
+
+
+def mini_app_keyboard(url: str) -> dict:
+    """Open the static reservation Mini App, with the chat flow one tap away.
+
+    ``web_app`` is supported only on a reply-keyboard button when the page
+    uses ``Telegram.WebApp.sendData``. Telegram then returns the submitted
+    string as an update to this private chat; the bot still validates every
+    field because the client controls that string.
+    """
+    return {
+        "keyboard": [
+            [{"text": MINI_APP_OPEN, "web_app": {"url": url}}],
+            [{"text": MINI_APP_CHAT_FALLBACK}],
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True,
+        "input_field_placeholder": "예약 화면을 열거나 채팅으로 진행하세요",
+    }
+
+
+def remove_reply_keyboard() -> dict:
+    """Put the ordinary Telegram input bar back after the Mini App closes."""
+    return {"remove_keyboard": True}
 
 
 def cancel_only_keyboard() -> InlineKeyboard:

@@ -7,6 +7,7 @@ and provides type-safe access to settings throughout the application.
 
 import os
 import secrets
+from urllib.parse import urlsplit
 
 
 def _digits(value: str) -> str:
@@ -76,6 +77,10 @@ class Settings:
     # timeout, otherwise every idle poll would look like a network failure.
     TELEGRAM_POLL_TIMEOUT: int = 30
     TELEGRAM_POLL_REQUEST_TIMEOUT: int = 35
+    # Optional Telegram Mini App used to collect travel preferences in one
+    # screen. It is a static page: credentials never enter it, and its result
+    # returns through Telegram's ordinary long-poll update channel.
+    MINI_APP_URL: str | None = (os.environ.get("MINI_APP_URL") or "").strip() or None
 
     # Korail Configuration
     # Credentials kept on the server. When both are set the bot logs in with
@@ -443,7 +448,21 @@ class Settings:
                 "code execution. Never enable this on a reachable host."
             )
 
+        if cls.MINI_APP_URL and not cls.mini_app_enabled():
+            messages.append(
+                "MINI_APP_URL is ignored because Telegram Mini Apps require an "
+                "absolute HTTPS URL. The chat reservation flow remains available."
+            )
+
         return messages
+
+    @classmethod
+    def mini_app_enabled(cls) -> bool:
+        """Whether a usable public URL was configured for the Mini App."""
+        if not cls.MINI_APP_URL:
+            return False
+        parsed = urlsplit(cls.MINI_APP_URL)
+        return parsed.scheme == "https" and bool(parsed.netloc)
 
     @classmethod
     def has_preconfigured_korail_credentials(cls) -> bool:

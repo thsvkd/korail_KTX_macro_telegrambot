@@ -1,0 +1,177 @@
+"""Boundary between the untrusted Telegram Mini App payload and a search."""
+
+import json
+from dataclasses import dataclass
+
+from korail_bot.models import Operator
+from korail_bot.utils.validators import InputValidator
+
+MAX_WEB_APP_DATA_BYTES = 4096
+SCHEMA_VERSION = 1
+ACTION = "prepare_search"
+
+
+class MiniAppDataError(ValueError):
+    """A Mini App submission that cannot safely become a reservation draft."""
+
+
+@dataclass(frozen=True)
+class MiniAppSubmission:
+    """Validated travel preferences submitted by the static Mini App."""
+
+    operator: Operator
+    dep_date: str
+    src_station: str
+    dst_station: str
+    dep_time: str
+    max_dep_time: str
+    train_type: str
+    seat_option: str
+    passenger_count: int
+    seat_strategy: str
+
+    @classmethod
+    def parse(cls, raw: object) -> "MiniAppSubmission":
+        """Parse and validate client-controlled JSON from ``web_app_data``."""
+        if not isinstance(raw, str) or not raw:
+            raise MiniAppDataError("예약 정보가 비어 있습니다. 다시 열어 입력해주세요.")
+        if len(raw.encode("utf-8")) > MAX_WEB_APP_DATA_BYTES:
+            raise MiniAppDataError("예약 정보가 너무 큽니다. 다시 열어 입력해주세요.")
+
+        try:
+            payload = json.loads(raw)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise MiniAppDataError("예약 정보를 읽을 수 없습니다. 다시 열어 입력해주세요.") from exc
+
+        if not isinstance(payload, dict):
+            raise MiniAppDataError("예약 정보 형식이 올바르지 않습니다.")
+        if payload.get("v") != SCHEMA_VERSION or payload.get("action") != ACTION:
+            raise MiniAppDataError("지원하지 않는 예약 화면입니다. /start 로 다시 열어주세요.")
+
+        operator = Operator.from_answer(cls._text(payload, "operator"))
+        if operator is None:
+            raise MiniAppDataError("철도를 다시 선택해주세요.")
+
+        dep_date = cls._validated(payload, "dep_date", InputValidator.validate_date, "출발 날짜")
+        src_station = cls._validated_station(payload, "src_station", operator, "출발역")
+        dst_station = cls._validated_station(payload, "dst_station", operator, "도착역")
+        if src_station == dst_station:
+            raise MiniAppDataError("출발역과 도착역은 달라야 합니다.")
+
+        dep_time = cls._validated(
+            payload, "dep_time", InputValidator.validate_time, "검색 시작 시각"
+        )
+        max_dep_time = cls._text(payload, "max_dep_time")
+        if max_dep_time != "2400":
+            valid, error = InputValidator.validate_time(max_dep_time)
+            if not valid:
+                raise MiniAppDataError(error or "검색 종료 시각을 다시 선택해주세요.")
+            if max_dep_time <= dep_time:
+                raise MiniAppDataError("검색 종료 시각은 시작 시각보다 늦어야 합니다.")
+
+        train_type = cls._text(payload, "train_type")
+        if operator is Operator.KORAIL:
+            valid, error = InputValidator.validate_train_type_choice(train_type)
+            if not valid:
+                raise MiniAppDataError(error or "열차 종류를 다시 선택해주세요.")
+        else:
+            train_type = "1"
+
+        seat_option = cls._validated(
+            payload,
+            "seat_option",
+            InputValidator.validate_special_option_choice,
+            "좌석 종류",
+        )
+        passenger = cls._validated(
+            payload,
+            "passenger_count",
+            InputValidator.validate_passenger_count,
+            "탑승 인원",
+        )
+        seat_strategy = cls._text(payload, "seat_strategy")
+        if int(passenger) == 1:
+            seat_strategy = "1"
+        else:
+            valid, error = InputValidator.validate_seat_strategy_choice(seat_strategy)
+            if not valid:
+                raise MiniAppDataError(error or "좌석 배치 방식을 다시 선택해주세요.")
+
+        return cls(
+            operator=operator,
+            dep_date=dep_date,
+            src_station=src_station,
+            dst_station=dst_station,
+            dep_time=dep_time,
+            max_dep_time=max_dep_time,
+            train_type=train_type,
+            seat_option=seat_option,
+            passenger_count=int(passenger),
+            seat_strategy=seat_strategy,
+        )
+
+    @staticmethod
+    def _text(payload: dict, key: str) -> str:
+        value = payload.get(key)
+        if not isinstance(value, (str, int)) or isinstance(value, bool):
+            return ""
+        return str(value).strip()
+
+    @classmethod
+    def _validated(cls, payload: dict, key: str, validator, label: str) -> str:
+        value = cls._text(payload, key)
+        valid, error = validator(value)
+        if not valid:
+            raise MiniAppDataError(error or f"{label}을(를) 다시 선택해주세요.")
+        return value
+
+    @classmethod
+    def _validated_station(cls, payload: dict, key: str, operator: Operator, label: str) -> str:
+        value = cls._text(payload, key)
+        valid, error = InputValidator.validate_station_name(value, operator)
+        if not valid:
+            raise MiniAppDataError(error or f"{label}을(를) 다시 선택해주세요.")
+        return value
+
+    def as_train_info(self) -> dict:
+        """Convert the submission to the legacy conversation's stored shape."""
+        if self.operator is Operator.SRT:
+            train_type = "SRT"
+            train_type_display = "SRT"
+        elif self.train_type == "1":
+            train_type = "TrainType.KTX"
+            train_type_display = "KTX 계열만"
+        else:
+            train_type = "TrainType.ALL"
+            train_type_display = "모든 열차 (무궁화호 포함)"
+
+        options = {
+            "1": ("ReserveOption.GENERAL_FIRST", "GENERAL_FIRST"),
+            "2": ("ReserveOption.GENERAL_ONLY", "GENERAL_ONLY"),
+            "3": ("ReserveOption.SPECIAL_FIRST", "SPECIAL_FIRST"),
+            "4": ("ReserveOption.SPECIAL_ONLY", "SPECIAL_ONLY"),
+        }
+        option, option_display = options[self.seat_option]
+        strategy = "consecutive" if self.seat_strategy == "1" else "random"
+        strategy_display = (
+            "1명"
+            if self.passenger_count == 1
+            else ("연속 좌석" if strategy == "consecutive" else "랜덤 배치")
+        )
+
+        return {
+            "operator": str(self.operator),
+            "depDate": self.dep_date,
+            "srcLocate": self.src_station,
+            "dstLocate": self.dst_station,
+            "depTime": f"{self.dep_time}00",
+            "maxDepTime": self.max_dep_time,
+            "trainType": train_type,
+            "trainTypeShow": train_type_display,
+            "specialInfo": option,
+            "specialInfoShow": option_display,
+            "passengerCount": self.passenger_count,
+            "seatStrategy": strategy,
+            "seatStrategyShow": strategy_display,
+            "selectedTrains": [],
+        }

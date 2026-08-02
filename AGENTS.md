@@ -72,15 +72,25 @@ ps aux | grep telebotBackProcess | grep -v grep
 
 ### 태그
 
-`v4.2.1` 이 이 저장소의 **유일한 태그**입니다. 4.0.0~4.2.0 에는 태그가 없고
-`chore(release):` 커밋으로만 표시돼 있습니다. 버전 이력을 찾을 때는:
+4.0.0~4.2.0 에는 태그가 없고 `chore(release):` 커밋으로만 표시돼 있습니다.
+그 시절의 버전 이력을 찾을 때는:
 
 ```bash
 git log --oneline --grep='chore(release)'
 ```
 
-앞으로 태그를 계속 달지, 과거에 소급할지는 **아직 정해지지 않았습니다.**
-임의로 정하지 말고 물어보십시오.
+**v4.2.2 부터는 릴리스마다 태그를 달고 GitHub 릴리스를 만듭니다.** 태그는
+`chore(release):` 커밋에 달고, 릴리스 본문은 `release_notes.py` 의 그
+버전 엔트리를 그대로 씁니다 — 사용자가 채팅에서 받는 글과 저장소에 남는
+글이 다를 이유가 없습니다.
+
+```bash
+git tag -a v4.2.2 -m 'v4.2.2' && git push origin master --follow-tags
+gh release create v4.2.2 --title 'v4.2.2' --notes-file <(...)
+```
+
+4.0.0~4.2.0 에 소급해서 다는 것은 **아직 정해지지 않았습니다.** 그 버전들의
+이력은 위의 `git log --grep` 으로 찾습니다.
 
 ## 검증
 

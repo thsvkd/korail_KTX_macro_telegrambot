@@ -152,3 +152,7 @@ class UserProgress:
     # stored in Redis, and renumbering would move every session that outlived
     # a deploy to a different question than the one it was answering.
     OPERATOR_INPUT_PENDING = 18
+    # Waiting on whether to pick a half-finished booking back up. /start used
+    # to walk over one without saying so, which cost the user every answer
+    # they had already given.
+    RESUME_DRAFT_PENDING = 19

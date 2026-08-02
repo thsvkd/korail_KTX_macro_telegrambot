@@ -50,7 +50,7 @@ class TestTheQuestionExplainsItself:
         Someone who came back here is reconsidering this exact choice. A
         shorter prompt is fine; a silent one is not.
         """
-        assert "무궁화호" in Messages.BACK_TO_TRAIN_TYPE
+        assert "무궁화호" in Messages.ASK_AGAIN_TRAIN_TYPE
 
 
 class TestTheButtonSaysItToo:

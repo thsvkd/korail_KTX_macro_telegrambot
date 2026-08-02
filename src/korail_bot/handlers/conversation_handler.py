@@ -122,6 +122,8 @@ class ConversationHandler:
             self._handle_schedule_input(chat_id, text, session)
         elif progress == UserProgress.ONBOARDING_OVERWRITE_PENDING:
             self._handle_onboarding_overwrite(chat_id, text, session)
+        elif progress == UserProgress.RESUME_DRAFT_PENDING:
+            self._handle_resume_draft(chat_id, text, session)
         else:
             logger.error(f"Unknown progress state: {progress}")
             self.telegram.send_message(
@@ -397,7 +399,9 @@ class ConversationHandler:
         except Exception as e:
             logger.error(f"Could not register the account for chat_id={chat_id}: {e}")
 
-    def resume_with_registered_account(self, chat_id: int, session: UserSession) -> bool:
+    def resume_with_registered_account(
+        self, chat_id: int, session: UserSession, announce: bool = True
+    ) -> bool:
         """
         Log in with the account this chat registered earlier.
 
@@ -408,8 +412,19 @@ class ConversationHandler:
 
         Which railway comes off the session, which was asked before this.
 
+        Args:
+            chat_id: Telegram chat ID
+            announce: Whether to greet the user and put the date question up.
+                False for callers that have their own next question to ask -
+                picking a half-finished booking back up asks the one it left
+                off at, and a greeting followed by the wrong question reads as
+                the resume having failed.
+
         Returns:
-            True when the session is logged in and ready for the date step
+            True when there was a registration to try. The login may still
+            have been refused, in which case the user has been sent to
+            register again and the session is no longer at PW_INPUT_SUCCESS -
+            which is how a caller tells the two apart.
         """
         operator = self.session_operator(session)
         account = self.storage.get_onboarded_account(chat_id, operator)
@@ -439,12 +454,251 @@ class ConversationHandler:
         self.storage.save_user_session(session)
 
         logger.info(f"Logged in with the registered account for chat_id={chat_id}")
+        if announce:
+            self.telegram.send_message(
+                chat_id,
+                MessageTemplates.WELCOME_RETURNING.format(korailId=mask_phone(account.korail_id)),
+                reply_markup=keyboards.date_keyboard(),
+            )
+        return True
+
+    # ==================== Picking a half-finished booking back up ====================
+    #
+    # The flow asks a dozen questions, and people wander off in the middle of
+    # it - a call, a stop, a phone put down. The answers are on the session and
+    # last a day, but /start used to write over them without a word, so coming
+    # back meant answering the lot again.
+    #
+    # Nothing new is stored for this. What is stored is exactly what the flow
+    # already keeps; the change is that /start asks about it instead of
+    # discarding it.
+
+    #: Progress states worth offering back. Everything before the date is left
+    #: out on purpose: a session that has only chosen a railway and logged in
+    #: would be offered a resume that lands on the very question /start asks
+    #: anyway, which is a question about nothing.
+    #:
+    #: FINDING_TICKET is absent for a different reason - a search is running,
+    #: and that is not a draft but a thing in progress.
+    DRAFT_STATES = frozenset(
+        {
+            UserProgress.DATE_INPUT_SUCCESS,
+            UserProgress.SRC_LOCATE_INPUT_SUCCESS,
+            UserProgress.DST_LOCATE_INPUT_SUCCESS,
+            UserProgress.DEP_TIME_INPUT_SUCCESS,
+            UserProgress.MAX_DEP_TIME_INPUT_SUCCESS,
+            UserProgress.TRAIN_TYPE_INPUT_SUCCESS,
+            UserProgress.SPECIAL_INPUT_SUCCESS,
+            UserProgress.PASSENGER_COUNT_INPUT_SUCCESS,
+            UserProgress.SEAT_STRATEGY_INPUT_SUCCESS,
+            UserProgress.TRAIN_SELECT_INPUT_SUCCESS,
+            UserProgress.SCHEDULE_INPUT_PENDING,
+        }
+    )
+
+    #: What the draft was about to ask. Named for the question in front of the
+    #: state rather than the answer behind it, because that is what the user is
+    #: being offered a way back to.
+    DRAFT_QUESTIONS = {  # noqa: RUF012 - a constant table, not per-instance state
+        UserProgress.DATE_INPUT_SUCCESS: "출발역",
+        UserProgress.SRC_LOCATE_INPUT_SUCCESS: "도착역",
+        UserProgress.DST_LOCATE_INPUT_SUCCESS: "검색 시작 시각",
+        UserProgress.DEP_TIME_INPUT_SUCCESS: "검색 종료 시각",
+        UserProgress.MAX_DEP_TIME_INPUT_SUCCESS: "열차 종류",
+        UserProgress.TRAIN_TYPE_INPUT_SUCCESS: "좌석 종류",
+        UserProgress.SPECIAL_INPUT_SUCCESS: "탑승 인원",
+        UserProgress.PASSENGER_COUNT_INPUT_SUCCESS: "좌석 배치 방식",
+        UserProgress.SEAT_STRATEGY_INPUT_SUCCESS: "감시할 열차 선택",
+        UserProgress.TRAIN_SELECT_INPUT_SUCCESS: "최종 확인",
+        UserProgress.SCHEDULE_INPUT_PENDING: "검색 시작 시각 예약",
+    }
+
+    #: Where the draft is parked while the user decides. Kept on train_info
+    #: rather than in a key of its own so that one write stores the question
+    #: and the answers together - and so /cancel, which resets the session,
+    #: throws both away at once.
+    DRAFT_PROGRESS_KEY = "draftProgress"
+
+    def offer_draft(self, chat_id: int, session: UserSession) -> bool:
+        """
+        Ask whether to carry on with a booking that was left half-finished.
+
+        Args:
+            chat_id: Telegram chat ID
+            session: The session as it stands, before /start touches it
+
+        Returns:
+            True when the question was put, in which case the caller has
+            nothing further to do until it is answered
+        """
+        from korail_bot.telegramBot.messages import Messages
+
+        progress = session.last_action
+        if progress == UserProgress.RESUME_DRAFT_PENDING:
+            # /start again while the question is on screen. Answering it with
+            # the draft would be the one reading where pressing /start twice
+            # destroys what pressing it once offered to keep.
+            progress = session.train_info.get(self.DRAFT_PROGRESS_KEY)
+
+        if progress not in self.DRAFT_STATES:
+            return False
+
+        info = session.train_info
+        if not info.get("depDate"):
+            # A state says which question is on screen, not that it was
+            # answered. Without a date there is nothing to carry over.
+            return False
+
+        info[self.DRAFT_PROGRESS_KEY] = progress
+        session.in_progress = True
+        session.last_action = UserProgress.RESUME_DRAFT_PENDING
+        self.storage.save_user_session(session)
+
+        dep_time = info.get("depTime") or ""
+        logger.info(f"Offering to resume a draft at progress {progress} for chat_id={chat_id}")
         self.telegram.send_message(
             chat_id,
-            MessageTemplates.WELCOME_RETURNING.format(korailId=mask_phone(account.korail_id)),
-            reply_markup=keyboards.date_keyboard(),
+            Messages.RESUME_DRAFT.format(
+                srcLocate=info.get("srcLocate", "미정"),
+                dstLocate=info.get("dstLocate", "미정"),
+                depDate=info.get("depDate", "미정"),
+                depTime=dep_time[:4] if dep_time else "미정",
+                maxDepTime=info.get("maxDepTime", "미정"),
+                passengerCount=info.get("passengerCount", 1),
+                question=self.DRAFT_QUESTIONS.get(progress, "다음 단계"),
+            ),
+            reply_markup=keyboards.resume_draft_keyboard(),
         )
         return True
+
+    def begin_flow(self, chat_id: int, session: UserSession) -> None:
+        """
+        Put the first question of a fresh booking on screen.
+
+        Everything the session was holding goes: this is what "start over"
+        means, and a leftover answer from an abandoned flow - a favourite's
+        shortcut flag, a list of ticked trains - would otherwise steer the new
+        one somewhere the user never asked to go.
+
+        Args:
+            chat_id: Telegram chat ID
+            session: The session to start over on
+        """
+        session.reset()
+        session.in_progress = True
+        session.last_action = UserProgress.STARTED
+        self.storage.save_user_session(session)
+
+        # An account registered earlier means the two login questions have
+        # already been answered, so this goes straight to picking a date.
+        #
+        # Fixed credentials only apply in a developer chat. They exist so the
+        # bot can be pointed at test accounts, not so that everyone who finds
+        # it books with the operator's railway accounts.
+        if not self._uses_any_server_account(chat_id):
+            if self.resume_with_registered_account(chat_id, session):
+                return
+
+            # Nothing registered: say what registering is before asking for a
+            # Korail password. The generic welcome does not mention that the
+            # login is kept, and that is the part a user should agree to.
+            self.telegram.send_message(
+                chat_id,
+                MessageTemplates.ONBOARDING_INTRO,
+                reply_markup=keyboards.onboarding_start_keyboard(),
+            )
+            return
+
+        self.telegram.send_message(
+            chat_id,
+            MessageTemplates.welcome_message(skip_login_prompts=True),
+            reply_markup=keyboards.start_confirm_keyboard(),
+        )
+
+    def _uses_any_server_account(self, chat_id: int) -> bool:
+        """Whether this developer chat has a fixed login for either railway."""
+        return self.storage.is_developer(chat_id) and settings.has_any_preconfigured_credentials()
+
+    def _handle_resume_draft(self, chat_id: int, text: str, session: UserSession) -> None:
+        """Handle the answer to 'you left a booking half-finished'."""
+        is_yes, error = InputValidator.validate_yes_no(text)
+
+        if is_yes is True:
+            self._resume_draft(chat_id, session)
+        elif is_yes is False:
+            self.begin_flow(chat_id, session)
+        else:
+            self.telegram.send_message(
+                chat_id, error, reply_markup=keyboards.resume_draft_keyboard()
+            )
+
+    def _resume_draft(self, chat_id: int, session: UserSession) -> None:
+        """Put the draft's own question back up, logged in and ready to answer."""
+        from korail_bot.telegramBot.messages import Messages
+
+        progress = session.train_info.pop(self.DRAFT_PROGRESS_KEY, None)
+        if progress not in self.DRAFT_STATES:
+            # Nothing to go back to - the draft was cleared while the question
+            # sat on screen, by /cancel or by a search starting elsewhere.
+            logger.info(f"The draft for chat_id={chat_id} was gone by the time it was accepted")
+            self.begin_flow(chat_id, session)
+            return
+
+        if not self._draft_login(chat_id, session):
+            return
+
+        session.last_action = progress
+        self.storage.save_user_session(session)
+        logger.info(f"Resumed the draft at progress {progress} for chat_id={chat_id}")
+
+        if progress == UserProgress.SCHEDULE_INPUT_PENDING:
+            # Its own prompt, which also sets the progress it is asked at -
+            # already where it needs to be, and setting it twice is harmless.
+            self._show_schedule_prompt(chat_id, session)
+            return
+
+        self._reask(chat_id, session, progress, prefix=Messages.RESUME_PREFIX)
+
+    def _draft_login(self, chat_id: int, session: UserSession) -> bool:
+        """
+        Make sure the resumed draft has a login behind it.
+
+        The password normally rides along on the session and nothing has to be
+        done. It is gone when the encryption key was rotated under the record,
+        and a draft carried to the summary without one would fail at the last
+        step - after the user answered every remaining question.
+
+        Returns:
+            True when the flow may carry on. False when the user has been told
+            why it cannot and put somewhere they can act.
+        """
+        from korail_bot.telegramBot.messages import Messages
+
+        credentials = session.credentials
+        if credentials and credentials.korail_id and credentials.korail_pw:
+            return True
+
+        if self._uses_any_server_account(chat_id):
+            if self._login_with_environment_credentials(chat_id, session):
+                return True
+            self.telegram.send_message(
+                chat_id,
+                Messages.PRECONFIGURED_LOGIN_FAILED.format(
+                    operator=self.session_operator(session).display_name
+                ),
+            )
+            return False
+
+        if not self.resume_with_registered_account(chat_id, session, announce=False):
+            logger.info(f"Cannot resume the draft for chat_id={chat_id}: nothing registered")
+            self.telegram.send_message(chat_id, Messages.RESUME_DRAFT_NO_ACCOUNT)
+            self.begin_flow(chat_id, session)
+            return False
+
+        # A registration that no longer logs in has been dropped and the user
+        # sent to register again, which is a better answer than the question
+        # they were about to be re-asked.
+        return session.last_action == UserProgress.PW_INPUT_SUCCESS
 
     def start_from_favourite(self, chat_id: int, favourite) -> None:
         """
@@ -948,8 +1202,16 @@ class ConversationHandler:
 
         return TrainType.KTX if "KTX" in train_type_str.upper() else TrainType.ALL
 
-    def _show_train_selection(self, chat_id: int, session: UserSession) -> None:
-        """Fetch the trains for the window and offer them for ticking."""
+    def _show_train_selection(self, chat_id: int, session: UserSession, prefix: str = "") -> None:
+        """
+        Fetch the trains for the window and offer them for ticking.
+
+        Args:
+            chat_id: Telegram chat ID
+            session: The session whose answers decide which trains to list
+            prefix: A line above the list saying why it is on screen. Empty
+                for the ordinary path, where the list needs no explaining.
+        """
         options = self._fetch_train_options(chat_id, session)
 
         from korail_bot.telegramBot.messages import Messages
@@ -990,7 +1252,7 @@ class ConversationHandler:
 
         message_id = self.telegram.send_and_get_id(
             chat_id,
-            self._train_selection_text(session, len(options), truncated),
+            prefix + self._train_selection_text(session, len(options), truncated),
             reply_markup=keyboards.train_select_keyboard(options, selected),
         )
 
@@ -1125,7 +1387,9 @@ class ConversationHandler:
             return "시간대 전체"
         return f"지정 열차 {len(selected)}개 ({', '.join(selected)}번)"
 
-    def _show_final_confirmation(self, chat_id: int, session: UserSession) -> None:
+    def _show_final_confirmation(
+        self, chat_id: int, session: UserSession, prefix: str = ""
+    ) -> None:
         """
         Show final confirmation summary.
 
@@ -1154,7 +1418,9 @@ class ConversationHandler:
             seatStrategy=info.get("seatStrategyShow", "1명"),
             trainWatch=self._describe_watch(session),
         )
-        self.telegram.send_message(chat_id, summary, reply_markup=keyboards.confirm_keyboard())
+        self.telegram.send_message(
+            chat_id, prefix + summary, reply_markup=keyboards.confirm_keyboard()
+        )
 
     # ==================== Going back a step ====================
     #
@@ -1250,78 +1516,91 @@ class ConversationHandler:
         self.storage.save_user_session(session)
         self._reask(chat_id, session, target)
 
-    def _reask(self, chat_id: int, session: UserSession, progress: int) -> None:
+    def _reask(
+        self, chat_id: int, session: UserSession, progress: int, prefix: str | None = None
+    ) -> None:
         """
         Ask the question belonging to a progress state.
 
-        Only ever called on the way back, so it says so. The prompts the flow
-        uses going forward all open with "✅ … 입력 완료", which is the wrong
-        thing to tell someone who just threw that answer away.
+        Never called on the way forward, so the prompts say "다시". The ones
+        the flow uses going forward all open with "✅ … 입력 완료", which is
+        the wrong thing to tell someone who just threw that answer away.
+
+        Args:
+            chat_id: Telegram chat ID
+            session: The session, for the answers the prompts read back
+            progress: The state whose question to put up
+            prefix: The line saying why it is up again. None means the
+                back-button one, which is what most callers mean - and which
+                the two screens below leave off, because a screen that says
+                what it is has no need of it.
         """
         from korail_bot.telegramBot.messages import Messages
 
         # These two build their message out of every answer so far and know
         # how to send it, so going back to them is just drawing them again.
         if progress == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS:
-            self._show_train_selection(chat_id, session)
+            self._show_train_selection(chat_id, session, prefix=prefix or "")
             return
         if progress == UserProgress.TRAIN_SELECT_INPUT_SUCCESS:
-            self._show_final_confirmation(chat_id, session)
+            self._show_final_confirmation(chat_id, session, prefix=prefix or "")
             return
+
+        prefix = Messages.BACK_PREFIX if prefix is None else prefix
 
         info = session.train_info
         operator = self.session_operator(session)
         prompts = {
             UserProgress.OPERATOR_INPUT_PENDING: (
-                Messages.BACK_TO_OPERATOR,
+                Messages.ASK_AGAIN_OPERATOR,
                 keyboards.operator_keyboard(),
             ),
             UserProgress.START_ACCEPTED: (
-                Messages.BACK_TO_PHONE,
+                Messages.ASK_AGAIN_PHONE,
                 keyboards.cancel_only_keyboard(),
             ),
             UserProgress.PW_INPUT_SUCCESS: (
-                Messages.BACK_TO_DATE,
+                Messages.ASK_AGAIN_DATE,
                 keyboards.date_keyboard(),
             ),
             UserProgress.DATE_INPUT_SUCCESS: (
-                Messages.BACK_TO_SRC_STATION,
+                Messages.ASK_AGAIN_SRC_STATION,
                 keyboards.station_keyboard(keyboards.STEP_SRC_STATION, operator=operator),
             ),
             UserProgress.SRC_LOCATE_INPUT_SUCCESS: (
-                Messages.BACK_TO_DST_STATION,
+                Messages.ASK_AGAIN_DST_STATION,
                 keyboards.station_keyboard(
                     keyboards.STEP_DST_STATION, exclude=info.get("srcLocate"), operator=operator
                 ),
             ),
             UserProgress.DST_LOCATE_INPUT_SUCCESS: (
-                Messages.BACK_TO_DEP_TIME,
+                Messages.ASK_AGAIN_DEP_TIME,
                 keyboards.time_keyboard(keyboards.STEP_DEP_TIME),
             ),
             UserProgress.DEP_TIME_INPUT_SUCCESS: (
-                Messages.BACK_TO_MAX_DEP_TIME,
+                Messages.ASK_AGAIN_MAX_DEP_TIME,
                 keyboards.time_keyboard(keyboards.STEP_MAX_DEP_TIME, include_unlimited=True),
             ),
             UserProgress.MAX_DEP_TIME_INPUT_SUCCESS: (
-                Messages.BACK_TO_TRAIN_TYPE,
+                Messages.ASK_AGAIN_TRAIN_TYPE,
                 keyboards.train_type_keyboard(),
             ),
             UserProgress.TRAIN_TYPE_INPUT_SUCCESS: (
-                Messages.BACK_TO_SEAT_OPTION,
+                Messages.ASK_AGAIN_SEAT_OPTION,
                 keyboards.seat_option_keyboard(),
             ),
             UserProgress.SPECIAL_INPUT_SUCCESS: (
-                Messages.BACK_TO_PASSENGER_COUNT,
+                Messages.ASK_AGAIN_PASSENGER_COUNT,
                 keyboards.passenger_count_keyboard(),
             ),
             UserProgress.PASSENGER_COUNT_INPUT_SUCCESS: (
-                Messages.BACK_TO_SEAT_STRATEGY.format(count=info.get("passengerCount", 1)),
+                Messages.ASK_AGAIN_SEAT_STRATEGY.format(count=info.get("passengerCount", 1)),
                 keyboards.seat_strategy_keyboard(),
             ),
         }
 
         text, keyboard = prompts[progress]
-        self.telegram.send_message(chat_id, text, reply_markup=keyboard)
+        self.telegram.send_message(chat_id, prefix + text, reply_markup=keyboard)
 
     def _close_train_list(self, chat_id: int, session: UserSession) -> None:
         """

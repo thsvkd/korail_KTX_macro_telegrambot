@@ -60,6 +60,10 @@ STEP_NOTIFY = "nf"
 # Saved searches. Like the settings above, reached by a command at any time
 # rather than by walking the conversation to it.
 STEP_FAV = "fv"
+# Whether to pick a half-finished booking back up. A step of the conversation
+# - it is asked by /start and answered straight away - so it carries a
+# progress state like the rest of them.
+STEP_RESUME = "rs"
 
 # Answers to STEP_CONFIRM that are neither yes nor no.
 CONFIRM_SCHEDULE = "*schedule"
@@ -125,6 +129,7 @@ STEP_PROGRESS = {
     STEP_CONFIRM: UserProgress.TRAIN_SELECT_INPUT_SUCCESS,
     STEP_SCHEDULE: UserProgress.SCHEDULE_INPUT_PENDING,
     STEP_ONBOARD_OVERWRITE: UserProgress.ONBOARDING_OVERWRITE_PENDING,
+    STEP_RESUME: UserProgress.RESUME_DRAFT_PENDING,
 }
 
 # Steps whose question survives being answered.
@@ -463,6 +468,19 @@ def onboarding_overwrite_keyboard() -> InlineKeyboard:
     return _keyboard(
         [_button("🔄 다시 등록", STEP_ONBOARD_OVERWRITE, "Y")],
         [_button("❌ 그대로 두기", STEP_ONBOARD_OVERWRITE, "N")],
+    )
+
+
+def resume_draft_keyboard() -> InlineKeyboard:
+    """
+    Whether to pick a half-finished booking back up.
+
+    "Continue" leads, because it is what the answers already given are worth:
+    starting over is always available and costs nothing but the questions.
+    """
+    return _keyboard(
+        [_button("▶️ 이어서 진행", STEP_RESUME, "Y")],
+        [_button("🆕 처음부터 다시", STEP_RESUME, "N")],
     )
 
 

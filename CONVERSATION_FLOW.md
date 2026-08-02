@@ -10,6 +10,7 @@
 
 | 현재 상태 | 기다리는 입력 | 처리 메서드 | 성공 후 상태 |
 | --- | --- | --- | --- |
+| `RESUME_DRAFT_PENDING` | 하다 만 예약을 이어받을지 | `_handle_resume_draft` | 중단했던 상태 또는 `STARTED` |
 | `STARTED` | 시작할지 여부 | `_handle_start_confirmation` | `OPERATOR_INPUT_PENDING` |
 | `OPERATOR_INPUT_PENDING` | 철도 사업자 | `_handle_operator_input` | `START_ACCEPTED` 또는 `PW_INPUT_SUCCESS` |
 | `START_ACCEPTED` | 선택한 철도 계정 | `_handle_phone_input` | `ID_INPUT_SUCCESS` |
@@ -34,7 +35,9 @@
 
 ### 1. 시작과 로그인
 
-- `/start`는 세션을 `STARTED`로 만들고 시작 확인 버튼을 보냅니다.
+- `/start`는 먼저 하다 만 예약이 있는지 봅니다. 있으면 아래 "하다 만 예약
+  이어받기"로 가고, 없을 때만 세션을 `STARTED`로 만들고 시작 확인 버튼을
+  보냅니다.
 - 안내에 동의하면 코레일 또는 SRT를 먼저 선택합니다. 계정과 운행역이 서로
   다르므로 철도 선택은 로그인보다 앞섭니다.
 - 처음 쓰는 일반 사용자는 선택한 철도의 회원번호와 비밀번호를 입력합니다.
@@ -121,6 +124,22 @@
 
 ## 보조 흐름
 
+### 하다 만 예약 이어받기
+
+질문이 열 개가 넘는 흐름이라 도중에 자리를 뜨는 일이 흔합니다. 답은 세션에
+그대로 남아 `SESSION_TTL_SECONDS` 동안 살아 있지만, 예전에는 `/start`가 그
+위를 아무 말 없이 덮었습니다.
+
+- 출발일까지 답한 세션이 `DATE_INPUT_SUCCESS`~`SCHEDULE_INPUT_PENDING` 사이에
+  멈춰 있으면 `/start`는 `RESUME_DRAFT_PENDING`으로 가서 이어받을지 묻습니다.
+  검색 중(`FINDING_TICKET`)이나 계정 등록 중은 하다 만 예약이 아닙니다.
+- **이어서 진행**: 멈췄던 상태로 되돌리고 그때 기다리던 질문을 다시 묻습니다.
+  세션에 비밀번호가 남아 있지 않으면 등록된 계정으로 다시 로그인하며, 로그인할
+  것이 없으면 그 사실을 알리고 처음부터 시작합니다.
+- **처음부터 다시**: 지금까지의 답을 모두 버리고 새 예약을 시작합니다.
+- 질문이 떠 있는 동안 `/start`를 다시 눌러도 답은 사라지지 않고 같은 질문이
+  다시 뜹니다. `/cancel`은 예전처럼 세션과 함께 지웁니다.
+
 ### 온보딩과 계정 교체
 
 - `/onboarding`과 별칭 `/init`은 코레일 계정 등록을 시작합니다.
@@ -158,7 +177,8 @@
 ## 상태 번호 호환성
 
 `TRAIN_SELECT_INPUT_SUCCESS`, `SCHEDULE_INPUT_PENDING`,
-`ONBOARDING_OVERWRITE_PENDING`의 숫자가 대화 순서와 달리 뒤쪽에 붙은 것은 의도된
+`ONBOARDING_OVERWRITE_PENDING`, `OPERATOR_INPUT_PENDING`,
+`RESUME_DRAFT_PENDING`의 숫자가 대화 순서와 달리 뒤쪽에 붙은 것은 의도된
 동작입니다. 진행 상태가 Redis에 정수로 저장되므로 기존 숫자를 재배치하면 배포
 사이에 살아남은 세션이 전혀 다른 질문으로 이동합니다. 새 상태를 추가할 때도 기존
 값은 유지해야 합니다.

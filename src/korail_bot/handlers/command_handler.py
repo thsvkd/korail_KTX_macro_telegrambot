@@ -3,7 +3,7 @@
 import hmac
 
 from korail_bot.config.settings import settings
-from korail_bot.models import Operator, UserProgress, UserSession
+from korail_bot.models import UserProgress, UserSession
 from korail_bot.models.favourite import MAX_NAME_LENGTH
 from korail_bot.services import (
     AccessService,
@@ -70,32 +70,21 @@ class CommandHandler:
             session = UserSession(chat_id=chat_id, in_progress=False, last_action=UserProgress.INIT)
             self.storage.save_user_session(session)
 
-        # Update session state
+        if self.conversation:
+            # A booking left half-finished is offered back before anything is
+            # written over it. Starting over stays one press away; losing a
+            # dozen answers without being asked does not.
+            if self.conversation.offer_draft(chat_id, session):
+                return
+
+            self.conversation.begin_flow(chat_id, session)
+            return
+
+        # No conversation handler wired up - nothing can log in, so the
+        # welcome is all there is to send.
         session.in_progress = True
         session.last_action = UserProgress.STARTED
         self.storage.save_user_session(session)
-
-        # An account registered earlier means the two login questions have
-        # already been answered, so /start goes straight to picking a date.
-        #
-        # Fixed credentials only apply in a developer chat. They exist so the
-        # bot can be pointed at test accounts, not so that everyone who finds
-        # it books with the operator's railway accounts.
-        if self.conversation and not self._uses_any_server_account(chat_id):
-            if self.conversation.resume_with_registered_account(chat_id, session):
-                return
-
-            # Nothing registered: say what registering is before asking for a
-            # Korail password. The generic welcome does not mention that the
-            # login is kept, and that is the part a user should agree to.
-            self.telegram.send_message(
-                chat_id,
-                MessageTemplates.ONBOARDING_INTRO,
-                reply_markup=keyboards.onboarding_start_keyboard(),
-            )
-            return
-
-        # Send welcome message
         self.telegram.send_message(
             chat_id,
             MessageTemplates.welcome_message(skip_login_prompts=True),
@@ -161,18 +150,6 @@ class CommandHandler:
             self.storage.save_user_session(session)
 
         self.telegram.send_message(chat_id, MessageTemplates.LOGOUT_DONE)
-
-    def _uses_server_account(self, chat_id: int, operator: Operator = Operator.KORAIL) -> bool:
-        """Whether this chat uses the fixed login for one railway."""
-        if self.conversation:
-            return self.conversation.uses_server_account(chat_id, operator)
-        return settings.has_preconfigured_credentials(operator) and self.storage.is_developer(
-            chat_id
-        )
-
-    def _uses_any_server_account(self, chat_id: int) -> bool:
-        """Whether this developer chat has a fixed login for either railway."""
-        return self.storage.is_developer(chat_id) and settings.has_any_preconfigured_credentials()
 
     # ==================== Developer mode ====================
 

@@ -207,16 +207,19 @@ if [[ -f "$ENV_FILE" ]]; then
 
     # The sample list locks the owner out of their own bot with a confusing
     # "권한이 없습니다", which is not obviously a config problem.
-    allow_list="$(env_value ALLOW_LIST)"
+    # ALLOW_LIST was what this used to be called, and the app still reads it,
+    # so an .env that predates the rename must not read as unconfigured.
+    allow_list="$(env_value PREAPPROVED_USERS)"
+    [[ -z "$allow_list" ]] && allow_list="$(env_value ALLOW_LIST)"
     trial_limit="$(env_value TRIAL_SEARCH_LIMIT)"
     if [[ -z "$allow_list" && "$TEST_RUNTIME" -eq 1 && "$trial_limit" == "0" ]]; then
         pass_check "TRIAL_SEARCH_LIMIT=0 - non-developers cannot start test searches"
     elif [[ -z "$allow_list" ]]; then
-        warn_check "ALLOW_LIST is empty - anyone who finds the bot can use its trial"
+        warn_check "PREAPPROVED_USERS is empty - anyone who finds the bot can use its trial"
     elif [[ "$allow_list" == *"010-1234-5678"* || "$allow_list" == *"010-9876-5432"* ]]; then
-        fail_check "ALLOW_LIST still holds the .env.example sample numbers - real users will be refused"
+        fail_check "PREAPPROVED_USERS still holds the .env.example sample numbers - real users will be refused"
     else
-        pass_check "ALLOW_LIST is configured"
+        pass_check "PREAPPROVED_USERS is configured"
     fi
 
     debug_value="$(env_value FLASK_DEBUG)"
@@ -683,12 +686,13 @@ say "봇을 아무나 쓰지 못하게 전화번호로 제한할 수 있습니�
 say "비워두면 봇 주소를 아는 누구나 사용할 수 있습니다."
 echo
 
-CURRENT_ALLOW="$(env_value ALLOW_LIST)"
+CURRENT_ALLOW="$(env_value PREAPPROVED_USERS)"
+[[ -z "$CURRENT_ALLOW" ]] && CURRENT_ALLOW="$(env_value ALLOW_LIST)"
 [[ "$CURRENT_ALLOW" == *"010-1234-5678"* ]] && CURRENT_ALLOW=""
 DEFAULT_ALLOW="${CURRENT_ALLOW:-${KORAIL_ID:-}}"
 
 ALLOW_INPUT="$(ask "허용할 전화번호 (쉼표로 구분, 비우면 제한 없음)" "$DEFAULT_ALLOW")"
-set_env_key ALLOW_LIST "$ALLOW_INPUT"
+set_env_key PREAPPROVED_USERS "$ALLOW_INPUT"
 
 if [[ -z "$ALLOW_INPUT" ]]; then
     note "제한 없음으로 설정했습니다. 봇 주소가 알려지면 누구나 사용할 수 있습니다."

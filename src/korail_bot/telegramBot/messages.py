@@ -1015,9 +1015,9 @@ class Messages:
     # point users at anyone else's paid service.
     ERROR_NOT_SUBSCRIBER = """🚫 사용 권한이 없습니다.
 
-입력하신 번호가 이 봇의 허용 목록(ALLOW_LIST)에 없습니다.
+입력하신 번호가 이 봇의 허용 목록(PREAPPROVED_USERS)에 없습니다.
 
-이 봇을 직접 운영하신다면 .env 의 ALLOW_LIST 에 번호를 추가하거나,
+이 봇을 직접 운영하신다면 .env 의 PREAPPROVED_USERS 에 번호를 추가하거나,
 제한 없이 열려면 값을 비워두세요.
 
 그 외에는 봇 운영자에게 문의해주세요.

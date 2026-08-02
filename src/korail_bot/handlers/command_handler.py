@@ -9,6 +9,7 @@ from korail_bot.services import (
     AccessService,
     MessageTemplates,
     PaymentReminderService,
+    PendingPaymentService,
     ReservationService,
     TelegramService,
 )
@@ -54,6 +55,9 @@ class CommandHandler:
         self.access = (
             conversation_handler.access if conversation_handler else AccessService(storage)
         )
+        # Everything /status has to say about a seat that is already booked,
+        # and the only way to give one back short of the railway's own site.
+        self.pending_payments = PendingPaymentService(storage, telegram_service)
 
     def handle_start(self, chat_id: int) -> None:
         """
@@ -850,13 +854,51 @@ class CommandHandler:
         """
         Handle /status command.
 
+        A seat already booked is reported alongside the search, not instead of
+        it: someone can be waiting on a second seat while the first one sits
+        unpaid, and either half alone would read as the other having been lost.
+
         Args:
             chat_id: Telegram chat ID
         """
         logger.info(f"Handling /status for chat_id={chat_id}")
 
         status_message = self.reservation.get_status(chat_id)
-        self.telegram.send_message(chat_id, status_message)
+        pending = self.pending_payments.describe(chat_id)
+
+        if not pending:
+            self.telegram.send_message(chat_id, status_message)
+            return
+
+        self.telegram.send_message(
+            chat_id,
+            f"{status_message}\n\n{pending}",
+            reply_markup=keyboards.payment_pending_keyboard(),
+        )
+
+    def handle_payment_callback(self, chat_id: int, value: str) -> None:
+        """
+        Act on what the user chose to do about a reservation awaiting payment.
+
+        Args:
+            chat_id: Telegram chat ID
+            value: The answer the button carried
+        """
+        from korail_bot.telegramBot.messages import Messages
+
+        if value == keyboards.PAY_CANCEL:
+            self.pending_payments.confirm_cancellation(chat_id)
+            return
+
+        if value == keyboards.PAY_CONFIRM_CANCEL:
+            self.pending_payments.cancel(chat_id)
+            return
+
+        if value == keyboards.PAY_KEEP:
+            self.telegram.send_message(chat_id, Messages.PAYMENT_CANCEL_KEPT)
+            return
+
+        logger.warning(f"Unknown payment choice {value!r} from chat_id={chat_id}")
 
     def handle_debug_on(self, chat_id: int) -> None:
         """

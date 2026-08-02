@@ -9,6 +9,11 @@ import requests
 from korail2 import AdultPassenger, NoResultsError, ReserveOption, SoldOutError, TrainType
 from korail2 import Korail as K2MKorail
 
+# Not re-exported by the package, and there is no other way to reach the
+# cancellation endpoint: the client's own cancel() cannot be called (see
+# cancel_reservation below).
+from korail2.korail2 import KORAIL_CANCEL
+
 from korail_bot.config.settings import settings
 from korail_bot.services.rail_service import (
     DuplicateReservationError,
@@ -402,13 +407,75 @@ class KorailService(RailService):
 
         return any(str(getattr(r, "rsv_id", "")) == str(rsv_id) for r in reservations)
 
-    # Partial reservations are not cancelled here. korail2 has a cancel(), but
-    # it sends a GET with its parameters in the body, which Korail ignores -
-    # the call raises JSONDecodeError without cancelling anything - and it
-    # asserts on a Reservation object where this would pass an id. Fixing both
-    # is a change to make deliberately, not as a side effect of this one; the
-    # inherited no-op logs what it would have cancelled. See
-    # docs/payment-automation-poc.md.
+    def cancel_reservation(self, rsv_id: str) -> bool:
+        """
+        Give one unpaid reservation back to Korail.
+
+        korail2's own cancel() is not used, and cannot be: it sends the GET
+        with its parameters in the body, which Korail ignores, so the call
+        raises JSONDecodeError without having cancelled anything. The same
+        values sent as query parameters are accepted - that is what this does,
+        and it is the whole of the difference. See docs/payment-automation-poc.md.
+
+        The reservation is looked up rather than taken on trust, because the
+        cancellation needs the journey numbers that only the listing carries -
+        and because a number that is not on the list is not outstanding, which
+        is worth finding out before telling anyone it was cancelled.
+
+        Args:
+            rsv_id: The reservation number to give back
+
+        Returns:
+            True when Korail confirmed it. False for every other outcome,
+            including a reservation that was not there to cancel.
+        """
+        if not self._logged_in or not self._korail_instance:
+            logger.warning(f"Not logged in - cannot cancel {rsv_id}")
+            return False
+
+        korail = self._korail_instance
+        try:
+            reservations = korail.reservations()
+        except NoResultsError:
+            reservations = []
+        except Exception as e:
+            logger.error(f"Could not list reservations to cancel {rsv_id}: {e}")
+            return False
+
+        target = next(
+            (r for r in reservations if str(getattr(r, "rsv_id", "")) == str(rsv_id)), None
+        )
+        if target is None:
+            logger.warning(f"Reservation {rsv_id} is not outstanding - nothing to cancel")
+            return False
+
+        try:
+            response = korail._session.get(
+                KORAIL_CANCEL,
+                params={
+                    "Device": korail._device,
+                    "Version": korail._version,
+                    "Key": korail._key,
+                    "txtPnrNo": target.rsv_id,
+                    "txtJrnySqno": target.journey_no,
+                    "txtJrnyCnt": target.journey_cnt,
+                    "hidRsvChgNo": target.rsv_chg_no,
+                },
+            )
+            cancelled = bool(korail._result_check(response.json()))
+        except Exception as e:
+            # Includes KorailError, which is how the client reports a refusal.
+            logger.error(f"Korail refused to cancel {rsv_id}: {type(e).__name__}: {e}")
+            return False
+
+        logger.info(f"Cancelled reservation {rsv_id}")
+        return cancelled
+
+    # Partial reservations from a random-seating run are still not cancelled
+    # here. Doing so is a decision about a search that is already going wrong -
+    # which of the seats already taken to give back, and whether giving them
+    # back beats leaving the user something to pay for - and it is not this
+    # method's to make. The inherited no-op logs what it would have released.
 
     @staticmethod
     def reservation_id(reservation) -> str | None:

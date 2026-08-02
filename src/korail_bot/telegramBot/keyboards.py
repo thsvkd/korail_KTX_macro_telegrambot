@@ -64,6 +64,9 @@ STEP_FAV = "fv"
 # - it is asked by /start and answered straight away - so it carries a
 # progress state like the rest of them.
 STEP_RESUME = "rs"
+# What to do about a reservation waiting to be paid for. Offered by /status,
+# not by the conversation: the booking is over by the time this is on screen.
+STEP_PAY = "py"
 
 # Answers to STEP_CONFIRM that are neither yes nor no.
 CONFIRM_SCHEDULE = "*schedule"
@@ -92,6 +95,13 @@ DEAD_DISCARD = "discard"
 # Answers to STEP_ACCESS.
 ACCESS_ASK = "ask"
 ACCESS_DISMISS = "dismiss"
+
+# Answers to STEP_PAY: give the seat back, or leave it alone. Cancelling is
+# confirmed first, so the button that asks and the button that does it are
+# two different values - a stale press on the first one costs nothing.
+PAY_CANCEL = "cancel"
+PAY_CONFIRM_CANCEL = "confirm"
+PAY_KEEP = "keep"
 
 # Prefixes for the operator's lists. The rest of the value is a phone hash,
 # which is 32 hex characters - well inside the 64-byte callback_data limit.
@@ -481,6 +491,30 @@ def resume_draft_keyboard() -> InlineKeyboard:
     return _keyboard(
         [_button("▶️ 이어서 진행", STEP_RESUME, "Y")],
         [_button("🆕 처음부터 다시", STEP_RESUME, "N")],
+    )
+
+
+def payment_pending_keyboard() -> InlineKeyboard:
+    """
+    What /status offers about a reservation still waiting to be paid for.
+
+    Not part of the conversation: the booking that produced the reservation is
+    over, and the answer is as good ten minutes later as it was at the time -
+    right up to the moment the railway takes the seat back.
+    """
+    return _keyboard([_button("🚫 예약 취소하기", STEP_PAY, PAY_CANCEL)])
+
+
+def payment_cancel_keyboard() -> InlineKeyboard:
+    """
+    Confirm giving the seat back.
+
+    Confirmed rather than done on the way past: the seat is what the user
+    waited hours for, and it goes straight back into the pool.
+    """
+    return _keyboard(
+        [_button("🚫 예약을 취소합니다", STEP_PAY, PAY_CONFIRM_CANCEL)],
+        [_button("◀️ 그대로 두기", STEP_PAY, PAY_KEEP)],
     )
 
 

@@ -517,6 +517,32 @@ class SrtService(RailService):
             "soldout": not (hasattr(train, "seat_available") and train.seat_available()),
         }
 
+    def cancel_reservation(self, rsv_id: str) -> bool:
+        """
+        Give one unpaid reservation back to SR.
+
+        SR's client takes a reservation number as readily as a reservation
+        object, so unlike Korail's this needs no lookup and no workaround.
+
+        Args:
+            rsv_id: The reservation number to give back
+
+        Returns:
+            True when SR confirmed it, False for every other outcome
+        """
+        if not self._logged_in or not self._srt_instance:
+            logger.warning(f"Not logged in - cannot cancel {rsv_id}")
+            return False
+
+        try:
+            cancelled = bool(self._srt_instance.cancel(rsv_id))
+        except Exception as e:
+            logger.error(f"SR refused to cancel {rsv_id}: {type(e).__name__}: {e}")
+            return False
+
+        logger.info(f"Cancelled reservation {rsv_id}")
+        return cancelled
+
     def _cancel_reservations(self, reservations: list) -> None:
         """
         Give back the seats a random-seating run took but could not finish.

@@ -136,10 +136,24 @@ class Settings:
     # window meant sixty messages, which is a phone buzzing continuously
     # while someone is trying to type their card number into another app.
     PAYMENT_REMINDER_INTERVAL_SECONDS: int = int(os.environ.get("PAYMENT_REMINDER_INTERVAL", "60"))
-    # How often the search process asks Korail whether the reservation it
-    # just made is still unpaid. One request each time, against a search that
-    # was making one every few seconds, so this is gentle by comparison.
-    PAYMENT_VERIFY_INTERVAL_SECONDS: int = int(os.environ.get("PAYMENT_VERIFY_INTERVAL", "30"))
+    # How often a watcher asks the railway whether the reservation is still
+    # unpaid. One listing request each time - the same cadence a search runs
+    # at, and for the same reason: the answer is only useful while it is
+    # fresh. Someone who has just paid should be told within seconds, not
+    # left wondering whether the bot noticed.
+    PAYMENT_VERIFY_INTERVAL_SECONDS: int = int(os.environ.get("PAYMENT_VERIFY_INTERVAL", "3"))
+    # How long a watcher's claim on one chat's payment stays good without
+    # being renewed.
+    #
+    # Two things can watch a payment: the search process that took the seat,
+    # which is already logged in, and the app, which picks up what nobody is
+    # watching. The claim is what keeps them from both polling the same
+    # reservation and both announcing it. Several intervals long, so an
+    # ordinary slow request does not hand the watch over, and short enough
+    # that a killed process is replaced in seconds.
+    PAYMENT_WATCH_LEASE_SECONDS: int = int(
+        os.environ.get("PAYMENT_WATCH_LEASE", str(max(10, PAYMENT_VERIFY_INTERVAL_SECONDS * 4)))
+    )
 
     # Progress reports from a running search
     #

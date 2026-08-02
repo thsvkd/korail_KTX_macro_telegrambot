@@ -17,12 +17,13 @@ straight back, with more confidence behind it.
 """
 
 from datetime import datetime, timedelta
+from itertools import repeat
 from unittest.mock import Mock, patch
 
 import pytest
 from korail2 import NoResultsError
 
-from korail_bot.models import PaymentStatus
+from korail_bot.models import Operator, PaymentStatus
 from korail_bot.services.korail_service import KorailService
 from korail_bot.telegramBot.messages import Messages
 
@@ -131,6 +132,10 @@ class TestWatchPayment:
         self.process.rail.payment_due = KorailService.payment_due
         self.process.telegram = Mock()
         self.process.storage = Mock()
+        # Who this process is when it claims the watch, and which railway it
+        # is booking with. Both are set by __init__, which these tests skip.
+        self.process._watch_owner = "search:test"
+        self.process.operator = Operator.KORAIL
         self.process.storage.get_payment_status.return_value = PaymentStatus(
             chat_id=12345, completed=False, reminder_active=True
         )
@@ -175,7 +180,7 @@ class TestWatchPayment:
         The case the old guess got most wrong: the user said they had paid,
         so the reminders stopped, and nobody found out until the station.
         """
-        self.watch([True] * 40)
+        self.watch(repeat(True))
 
         assert Messages.PAYMENT_EXPIRED_VERIFIED in self.sent()
 
@@ -184,7 +189,7 @@ class TestWatchPayment:
             chat_id=12345, completed=True, reminder_active=False
         )
 
-        self.watch([True] * 40)
+        self.watch(repeat(True))
 
         assert Messages.PAYMENT_EXPIRED_VERIFIED in self.sent()
 
@@ -213,7 +218,7 @@ class TestWatchPayment:
         The reminder loop lives in the other process and reads this out of
         Redis. Left set, it goes on reminding about a settled reservation.
         """
-        for sequence in ([False], [True] * 40):
+        for sequence in ([False], repeat(True)):
             self.process.telegram.reset_mock()
             self.process.storage.reset_mock()
             status = PaymentStatus(chat_id=12345, completed=False, reminder_active=True)

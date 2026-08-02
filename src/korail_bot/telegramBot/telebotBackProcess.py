@@ -9,6 +9,7 @@ JSON line on stdin, because argv is readable by every process on the host.
 """
 
 import json
+import os
 import signal
 import sys
 import time
@@ -22,6 +23,7 @@ from korail_bot.config.settings import settings
 from korail_bot.models import (
     MultiReservationStatus,
     Operator,
+    PaymentStatus,
     ReservationPaymentStatus,
     SingleReservationInfo,
 )
@@ -133,6 +135,11 @@ class BackgroundReservationProcess:
         self.payment_reminder = PaymentReminderService(self.storage, self.telegram)
         self.multi_reminder = MultiReservationReminderService(self.storage, self.telegram)
         self.rail = self._build_rail_service()
+
+        # Who this process is when it claims the watch on a payment. Per
+        # process, so the claim cannot outlive it by being renewed by whatever
+        # takes its place.
+        self._watch_owner = f"search:{os.getpid()}"
 
         # Progress reporting state. The first report is due one interval from
         # now rather than immediately: the user has just been told the search
@@ -604,6 +611,12 @@ class BackgroundReservationProcess:
         without paying was told the matter was settled and quietly lost the
         seat, while someone who paid and said nothing was nagged until the
         window closed.
+
+        The app watches too, for the payments this cannot - a random-seating
+        run, or one whose process was killed by a restart. The claim renewed
+        on each pass is what keeps the two of them from both asking and both
+        announcing; it lapses seconds after this process dies, which is
+        exactly when the app should be taking over.
         """
         rsv_id = self.rail.reservation_id(reservation)
         if not rsv_id:
@@ -614,8 +627,14 @@ class BackgroundReservationProcess:
         interval = settings.PAYMENT_VERIFY_INTERVAL_SECONDS
         logger.info(f"Watching reservation {rsv_id} until {deadline:%H:%M:%S}")
 
+        # Claimed before the details are written down, so the app never sees a
+        # reservation it could watch without also seeing that this is on it.
+        self._claim_the_watch()
+        self._record_pending_payment(reservation, rsv_id, deadline)
+
         while datetime.now() < deadline:
             time.sleep(min(interval, max(1.0, (deadline - datetime.now()).total_seconds())))
+            self._claim_the_watch()
 
             outstanding = self.rail.is_reservation_outstanding(rsv_id)
             if outstanding is None:
@@ -635,6 +654,52 @@ class BackgroundReservationProcess:
         # the station.
         logger.warning(f"Reservation {rsv_id} expired unpaid")
         self._settle_payment(verified=False)
+
+    def _claim_the_watch(self) -> None:
+        """
+        Tell the app that this process is watching, and keep telling it.
+
+        Best effort in both directions. If the claim cannot be made, the worst
+        case is that the app watches too and one of them announces the payment
+        first; if it is never renewed - because this process died - the app
+        picks the payment up, which is the point.
+        """
+        try:
+            self.storage.claim_payment_watch(
+                self.chat_id, self._watch_owner, settings.PAYMENT_WATCH_LEASE_SECONDS
+            )
+        except Exception as e:
+            logger.warning(f"Could not claim the payment watch for chat_id={self.chat_id}: {e}")
+
+    def _record_pending_payment(self, reservation, rsv_id: str, deadline: datetime) -> None:
+        """
+        Write down what the user is being asked to pay for.
+
+        The payment record used to say only that a window was open, which was
+        all the reminder loop needed. /status has to name the booking, and
+        giving it back needs its number - and this process is the only place
+        that has either: the main app deletes the credentials the moment the
+        reservation lands, and never sees the reservation itself.
+
+        Written after the callback, which is what creates the record. Best
+        effort: the seat is already booked and the user already told, so
+        nothing here is worth failing the watch over.
+        """
+        try:
+            status = self.storage.get_payment_status(self.chat_id)
+            if not status:
+                # The callback did not get as far as creating one. A record
+                # with the reservation on it beats no record at all.
+                status = PaymentStatus(chat_id=self.chat_id, completed=False, reminder_active=False)
+
+            status.reservation_id = rsv_id
+            status.train_info = str(reservation)
+            status.operator = str(self.operator)
+            status.expires_at = deadline
+            self.storage.save_payment_status(status)
+            logger.info(f"Recorded reservation {rsv_id} as awaiting payment until {deadline:%H:%M}")
+        except Exception as e:
+            logger.error(f"Could not record what {rsv_id} is waiting on: {e}", exc_info=True)
 
     def _settle_payment(self, verified: bool) -> None:
         """Record what the watch found, and tell the user."""
@@ -690,6 +755,7 @@ class BackgroundReservationProcess:
                     seat_strategy=self.seat_strategy,
                     created_at=now,
                     manually_stopped=False,
+                    operator=str(self.operator),
                 )
 
             # Add this reservation
@@ -751,6 +817,7 @@ class BackgroundReservationProcess:
                 seat_strategy=self.seat_strategy,
                 created_at=now,
                 manually_stopped=False,
+                operator=str(self.operator),
             )
 
             # Save to storage

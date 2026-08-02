@@ -184,6 +184,27 @@ class RailService(ABC):
         must not be read as one.
         """
 
+    def cancel_reservation(self, rsv_id: str) -> bool:
+        """
+        Give one unpaid reservation back.
+
+        Not abstract: the base answer is "this operator's client cannot", and
+        an operator that can says so by overriding. Reservations left alone
+        are not lost either - unpaid, the railway reclaims the seat when the
+        deadline passes - so the difference is how soon the seat goes back and
+        whether the user is left holding a booking they never wanted.
+
+        Args:
+            rsv_id: The reservation number to give back
+
+        Returns:
+            True when the railway confirmed the cancellation. False for every
+            other outcome, including "could not ask" - a caller must never
+            read this as the seat having been given back.
+        """
+        logger.warning(f"{self.operator_name} cannot cancel {rsv_id} outright")
+        return False
+
     # ==================== Reading a reservation ====================
     #
     # The two clients hand back objects that carry the same facts under

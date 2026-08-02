@@ -313,6 +313,17 @@ class TelegramUpdateProcessor:
             self._handle_dead_search(chat_id, value)
             return
 
+        # What to do about a seat that is booked and unpaid. Not a step of the
+        # conversation either - the booking that took the seat is over - and
+        # handled before the progress check for the same reason the dead-search
+        # buttons are: the reservation goes on sitting there unpaid however
+        # long the message waits to be read.
+        if step == keyboards.STEP_PAY:
+            self.telegram.answer_callback_query(query_id)
+            self._settle_keyboard(chat_id, message_id, message, data)
+            self.command_handler.handle_payment_callback(chat_id, value)
+            return
+
         # Asking to keep using the bot. Like the dead-search buttons, this is
         # not a step of the conversation - the session was reset when the
         # trial ran out - and the answer stays valid however long it sits.

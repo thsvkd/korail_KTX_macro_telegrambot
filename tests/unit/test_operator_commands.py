@@ -31,6 +31,10 @@ class OperatorFixture:
         self.storage = Mock(spec=StorageInterface)
         self.storage.get_all_user_sessions.return_value = []
         self.storage.get_user_session.return_value = None
+        # Nothing booked and waiting to be paid for, which is what /status
+        # reports on beside the search.
+        self.storage.get_payment_status.return_value = None
+        self.storage.get_multi_reservation_status.return_value = None
         self.telegram = Mock(spec=TelegramService)
         self.reservation = Mock(spec=ReservationService)
         self.payment_reminder = Mock(spec=PaymentReminderService)

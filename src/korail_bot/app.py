@@ -20,6 +20,7 @@ from korail_bot.config.settings import settings
 from korail_bot.handlers import TelegramUpdateProcessor
 from korail_bot.services import (
     PaymentReminderService,
+    PaymentWatchdogService,
     ReleaseAnnouncer,
     ReservationService,
     ScheduledSearchService,
@@ -72,6 +73,7 @@ reservation_service = ReservationService(storage, telegram_service)
 payment_reminder_service = PaymentReminderService(storage, telegram_service)
 scheduled_search_service = ScheduledSearchService(storage, telegram_service, reservation_service)
 search_watchdog_service = SearchWatchdogService(reservation_service)
+payment_watchdog_service = PaymentWatchdogService(storage, telegram_service)
 
 # Configure API resources with dependency injection
 api.add_resource(
@@ -107,6 +109,7 @@ else:
     logger.info(f"Search interval: {settings.KORAIL_SEARCH_INTERVAL}s (fixed)")
 logger.info(f"Payment timeout: {settings.PAYMENT_TIMEOUT_MINUTES}min")
 logger.info(f"Reminder interval: {settings.PAYMENT_REMINDER_INTERVAL_SECONDS}s")
+logger.info(f"Payment verify interval: {settings.PAYMENT_VERIFY_INTERVAL_SECONDS}s")
 logger.info("Public Telegram endpoint: disabled")
 logger.info(f"Admin commands: {'enabled' if settings.ADMIN_PASSWORD else 'disabled'}")
 logger.info(f"Developer mode: {'enabled' if settings.ADMIN_MAGIC_STRING else 'disabled'}")
@@ -167,6 +170,13 @@ if not is_running_from_reloader():
 if not is_running_from_reloader():
     search_watchdog_service.start()
 
+# A payment is watched by the search process that took the seat, which is
+# already logged in - but that process does not exist for a random-seating run
+# and does not survive a restart. This thread watches whatever is left, so a
+# payment is confirmed in the chat within seconds either way.
+if not is_running_from_reloader():
+    payment_watchdog_service.start()
+
 poller = None
 if not is_running_from_reloader():
     poller = TelegramPoller(
@@ -202,6 +212,7 @@ def shutdown() -> None:
 
     scheduled_search_service.stop()
     search_watchdog_service.stop()
+    payment_watchdog_service.stop()
 
     try:
         reservation_service.shutdown()

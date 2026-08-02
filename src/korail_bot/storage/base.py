@@ -294,6 +294,33 @@ class StorageInterface(ABC):
         """Delete payment status."""
         pass
 
+    @abstractmethod
+    def get_all_payment_statuses(self) -> list[PaymentStatus]:
+        """Every payment record there is, settled or not."""
+        pass
+
+    # Who is watching a payment
+    #
+    # Two things can: the search process that took the seat, which is already
+    # logged in and so does it cheaply, and the app, which picks up whatever
+    # nobody is watching - a random-seating run, or any payment whose process
+    # died with a restart. The claim below is what stops them doing it at the
+    # same time and announcing the same payment twice.
+    @abstractmethod
+    def claim_payment_watch(self, chat_id: int, owner: str, ttl: int) -> bool:
+        """
+        Take or renew the watch on one chat's payment.
+
+        Returns True when the caller may watch: either it was free, or the
+        caller already held it. False means somebody else does.
+        """
+        pass
+
+    @abstractmethod
+    def release_payment_watch(self, chat_id: int, owner: str) -> None:
+        """Give up the watch, if it is still ours to give up."""
+        pass
+
     # Admin Session Management
     @abstractmethod
     def is_admin_authenticated(self, chat_id: int) -> bool:

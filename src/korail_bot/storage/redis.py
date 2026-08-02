@@ -827,17 +827,70 @@ class RedisStorage(StorageInterface):
             return None
 
     def save_payment_status(self, status: PaymentStatus) -> None:
-        """Save payment status."""
+        """
+        Save payment status.
+
+        Kept until a little past the moment the seat is lost. The configured
+        window is only this bot's idea of how long a railway holds a seat, so
+        the deadline stated on the reservation wins when there is one - a
+        record that expired while its reservation was still live would have
+        /status say there is nothing to pay for.
+        """
         key = f"payment_status:{status.chat_id}"
         data = json.dumps(self._serialize_payment_status(status))
-        # Set with TTL (payment timeout + buffer)
-        ttl = (settings.PAYMENT_TIMEOUT_MINUTES + 5) * 60
+        grace = 5 * 60
+        ttl = settings.PAYMENT_TIMEOUT_MINUTES * 60 + grace
+        if status.expires_at:
+            ttl = max(ttl, int((status.expires_at - datetime.now()).total_seconds()) + grace)
         self.redis.set(key, data, ex=ttl)
 
     def delete_payment_status(self, chat_id: int) -> None:
         """Delete payment status."""
         key = f"payment_status:{chat_id}"
         self.redis.delete(key)
+
+    def claim_payment_watch(self, chat_id: int, owner: str, ttl: int) -> bool:
+        """
+        Take or renew the watch on one chat's payment.
+
+        SET NX is what makes this a claim rather than a note: whichever
+        watcher asks first gets it, and the other finds out by being told no
+        instead of by both of them announcing the same payment.
+
+        The expiry is what hands it over when a watcher dies - which is the
+        case this exists for, since the search process holding it is killed by
+        every restart and the app has to take over without being told.
+
+        Args:
+            chat_id: The chat whose payment is being watched
+            owner: Who is asking, stable for as long as they watch
+            ttl: How long the claim is good for without renewal, in seconds
+
+        Returns:
+            True when the caller may watch
+        """
+        key = f"payment_watch:{chat_id}"
+        if self.redis.set(key, owner, nx=True, ex=ttl):
+            return True
+
+        # Already claimed. Ours to renew, or somebody else's to leave alone.
+        if self._text(self.redis.get(key)) != owner:
+            return False
+
+        self.redis.expire(key, ttl)
+        return True
+
+    def release_payment_watch(self, chat_id: int, owner: str) -> None:
+        """
+        Give up the watch, if it is still ours to give up.
+
+        Checked rather than deleted outright: a claim that expired and was
+        taken by somebody else belongs to them now, and dropping it would put
+        two watchers back on the same payment.
+        """
+        key = f"payment_watch:{chat_id}"
+        if self._text(self.redis.get(key)) == owner:
+            self.redis.delete(key)
 
     def get_all_payment_statuses(self) -> list[PaymentStatus]:
         """Get all payment statuses."""
@@ -1226,6 +1279,11 @@ class RedisStorage(StorageInterface):
             "reminder_active": status.reminder_active,
             "completed": status.completed,
             "created_at": status.created_at.isoformat() if status.created_at else None,
+            "reservation_id": status.reservation_id,
+            "train_info": status.train_info,
+            "operator": str(status.operator),
+            "expires_at": status.expires_at.isoformat() if status.expires_at else None,
+            "cancelled": status.cancelled,
         }
 
     def _deserialize_payment_status(self, data: dict) -> PaymentStatus:
@@ -1241,6 +1299,16 @@ class RedisStorage(StorageInterface):
             created_at=datetime.fromisoformat(created_at_raw)
             if (created_at_raw := data.get("created_at") or data.get("reservation_time"))
             else None,
+            # Everything below is written after the seat is secured, so a
+            # record read between the window opening and that write has none
+            # of it - as has one written before these fields existed.
+            reservation_id=data.get("reservation_id"),
+            train_info=data.get("train_info") or "",
+            operator=data.get("operator") or Operator.KORAIL,
+            expires_at=datetime.fromisoformat(expires_raw)
+            if (expires_raw := data.get("expires_at"))
+            else None,
+            cancelled=data.get("cancelled", False),
         )
 
     def _serialize_multi_reservation_status(self, status: MultiReservationStatus) -> dict:
@@ -1262,6 +1330,7 @@ class RedisStorage(StorageInterface):
             "seat_strategy": status.seat_strategy,
             "created_at": status.created_at.isoformat(),
             "manually_stopped": status.manually_stopped,
+            "operator": str(status.operator),
         }
 
     def _deserialize_multi_reservation_status(self, data: dict) -> MultiReservationStatus:
@@ -1290,6 +1359,7 @@ class RedisStorage(StorageInterface):
             seat_strategy=data["seat_strategy"],
             created_at=datetime.fromisoformat(data["created_at"]),
             manually_stopped=data["manually_stopped"],
+            operator=data.get("operator") or Operator.KORAIL,
         )
 
     # ==================== Admin Operations ====================

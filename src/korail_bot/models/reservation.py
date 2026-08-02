@@ -179,6 +179,34 @@ class PaymentStatus:
     created_at: datetime | None = field(default_factory=lambda: datetime.now())
     reminder_active: bool = False
 
+    # What is actually waiting to be paid for.
+    #
+    # The record used to say only that a window was open, which was all the
+    # reminder loop needed. /status has to name the booking, and cancelling it
+    # needs its number - so the search process, which is the only thing
+    # holding the reservation, writes them here once the seat is secured.
+    # Absent on a record written before this existed, and on one whose
+    # reservation carried no number.
+    reservation_id: str | None = None
+    train_info: str = ""
+    operator: str = Operator.KORAIL
+    expires_at: datetime | None = None
+    # Given back on purpose, as opposed to paid for or left to expire. Kept
+    # apart from `completed`, which the reminder loop reads as "stop asking":
+    # both are true here, and only one of them is what happened.
+    cancelled: bool = False
+
+    @property
+    def rail_operator(self) -> Operator:
+        """The railway holding this reservation, however it was stored."""
+        return Operator.parse(self.operator)
+
+    def is_awaiting_payment(self) -> bool:
+        """Whether there is still a seat here for the user to pay for."""
+        if self.completed or self.cancelled:
+            return False
+        return not (self.expires_at and datetime.now() >= self.expires_at)
+
 
 class ReservationPaymentStatus(Enum):
     """Payment status for individual reservations."""
@@ -237,6 +265,15 @@ class MultiReservationStatus:
     seat_strategy: str  # "random" or "consecutive"
     created_at: datetime
     manually_stopped: bool = False  # True if user manually stopped reminders
+    # Which railway is holding these seats. Defaulted rather than required so
+    # that records written before there were two read back as what they were,
+    # the same way TrainSearchParams.operator does.
+    operator: str = Operator.KORAIL
+
+    @property
+    def rail_operator(self) -> Operator:
+        """The railway holding these seats, however it was stored."""
+        return Operator.parse(self.operator)
 
     def get_pending_count(self) -> int:
         """Count how many reservations are still pending payment."""

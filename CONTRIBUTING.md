@@ -34,9 +34,9 @@ uv run pre-commit install
 
 두 군데에서 필요합니다.
 
-- **로컬 실행**: `scripts/run.sh` 는 Redis 에 못 닿으면 그 자리에서 종료합니다.
-  개발용 Redis 는 `./scripts/run.sh redis` (== `make dev-redis`) 가 컨테이너로
-  띄웁니다.
+- **로컬 실행**: `scripts/server.sh start` 는 Redis 에 못 닿으면 그 자리에서
+  종료합니다. 개발용 Redis 는 `./scripts/server.sh redis start` (== `make redis`)
+  가 컨테이너로 띄웁니다.
 - **테스트**: `tests/integration` 과 `tests/e2e` 는 `tests/conftest.py` 가
   testcontainers 로 일회용 Redis 컨테이너를 띄워서 돌립니다. Docker 데몬이 없으면
   이 두 스위트는 돌지 않습니다.
@@ -185,7 +185,7 @@ fork PR 에는 시크릿이 주입되지 않고 `GITHUB_TOKEN` 도 읽기 전용
 제보할 때 있으면 좋은 정보:
 
 - 무엇을 했고 무엇을 기대했고 실제로 무엇이 일어났는지
-- 실행 방식(로컬 `run.sh` / Docker)
+- 실행 방식(로컬 `server.sh` / Docker)
 - `make status` 결과, 그리고 관련 로그 몇 줄
 
 로그를 붙일 때는 **전화번호, 텔레그램 chat_id, 코레일 계정 정보를 지우고**

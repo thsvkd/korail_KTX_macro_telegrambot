@@ -14,7 +14,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SETUP = ROOT / "scripts" / "setup.sh"
 DEPLOY = ROOT / "scripts" / "deploy.sh"
-RUN = ROOT / "scripts" / "run.sh"
+SERVER = ROOT / "scripts" / "server.sh"
+BOOTSTRAP = ROOT / "scripts" / "bootstrap.sh"
 COMMON = ROOT / "scripts" / "_common.sh"
 EXAMPLE = ROOT / ".env.example"
 
@@ -411,7 +412,7 @@ def test_host_test_runtime_cannot_start_with_the_production_token(tmp_path):
     test.write_text("BOTTOKEN=shared-token\n", encoding="utf-8")
 
     result = subprocess.run(
-        ["bash", str(RUN), "--test"],
+        ["bash", str(SERVER), "start", "--test"],
         cwd=ROOT,
         env={
             **os.environ,
@@ -489,7 +490,9 @@ def test_test_daemon_auto_starts_its_local_redis(tmp_path):
     bin_dir.mkdir()
     venv_bin.mkdir(parents=True)
     shutil.copy(COMMON, scripts / "_common.sh")
-    shutil.copy(RUN, scripts / "run.sh")
+    shutil.copy(SERVER, scripts / "server.sh")
+    # start delegates the .venv sync to it, so the copy has to be complete.
+    shutil.copy(BOOTSTRAP, scripts / "bootstrap.sh")
 
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -592,7 +595,7 @@ while true; do sleep 1; done
 
     try:
         result = subprocess.run(
-            ["bash", str(scripts / "run.sh"), "--daemon", "--test"],
+            ["bash", str(scripts / "server.sh"), "start", "--daemon", "--test"],
             cwd=project,
             env=env,
             text=True,
@@ -627,7 +630,7 @@ def test_status_uses_the_running_process_environment_across_worktrees(tmp_path):
     bin_dir.mkdir()
     venv_bin.mkdir(parents=True)
     shutil.copy(COMMON, scripts / "_common.sh")
-    shutil.copy(ROOT / "scripts" / "status.sh", scripts / "status.sh")
+    shutil.copy(SERVER, scripts / "server.sh")
 
     redis_server = socket.socket()
     redis_server.bind(("127.0.0.1", 0))
@@ -706,7 +709,7 @@ esac
 
     try:
         result = subprocess.run(
-            ["bash", str(scripts / "status.sh")],
+            ["bash", str(scripts / "server.sh"), "status"],
             cwd=project,
             env={
                 **os.environ,
@@ -727,7 +730,7 @@ esac
         )
 
         redis_result = subprocess.run(
-            ["bash", str(scripts / "status.sh"), "redis", "PING"],
+            ["bash", str(scripts / "server.sh"), "redis-cli", "PING"],
             cwd=project,
             env={
                 **os.environ,

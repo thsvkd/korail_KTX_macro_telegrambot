@@ -226,18 +226,18 @@ scripts/deploy.sh --test up
 scripts/deploy.sh --test logs
 ```
 
-Compose 대신 호스트에서 띄울 때는 아래 명령을 쓴다. `run.sh --test`는 운영
+Compose 대신 호스트에서 띄울 때는 아래 명령을 쓴다. `server.sh --test`는 운영
 프로세스와 다른 PID 파일·로그·HTTP 8081·Redis 6380을 사용하므로 둘을 동시에
 실행하거나 테스트 봇만 중지할 수 있다.
 
 ```bash
-scripts/run.sh --test --daemon
-scripts/status.sh --test
-scripts/run.sh --test --stop
+scripts/server.sh start --daemon --test
+scripts/server.sh status --test
+scripts/server.sh stop --test
 ```
 
-테스트 전용 Redis가 없으면 `run.sh --test`가 6380 포트에 자동으로 기동한다.
-`run.sh --test redis`는 Redis만 따로 관리해야 할 때 쓴다.
+테스트 전용 Redis가 없으면 `server.sh start --test`가 6380 포트에 자동으로
+기동한다. `server.sh redis --test`는 Redis만 따로 관리해야 할 때 쓴다.
 
 설정 때 나온 개발자 문구를 테스트 봇에 보내면 SRT 고정 계정
 (`SRT_ID`/`SRT_PW`)으로 로그인 성공·예약·취소를 운영 데이터와 섞지 않고

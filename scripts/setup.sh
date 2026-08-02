@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 #
-# Prepare a development environment: dependencies, .env, secrets.
+# First-time initialisation: .env, secrets, and the decisions behind them.
+#
+# The choices live here; the machine setup does not. Installing dependencies
+# is scripts/bootstrap.sh, which this calls and which is safe to run on its
+# own at any time. Anything below either creates a file or asks a question,
+# so it is not something to run on every start.
 #
 # Usage:
-#   scripts/setup.sh            # install dev dependencies and create .env
+#   scripts/setup.sh            # create .env, generate secrets, bootstrap
 #   scripts/setup.sh --no-deps  # only create .env and secrets
 #   scripts/setup.sh --dev      # also set up a developer chat (see below)
 #   scripts/setup.sh --test     # create an isolated .env.test staging bot
@@ -599,8 +604,8 @@ if [[ "$RUN_MODE" == "docker" ]]; then
 else
     set_env_key REDIS_HOST "localhost"
     echo
-    if ask_yn "파이썬 의존성을 지금 설치할까요? (scripts/setup.sh)" y; then
-        "${SCRIPT_DIR}/setup.sh" || note "의존성 설치에 실패했습니다. 나중에 다시 시도하세요."
+    if ask_yn "파이썬 의존성을 지금 설치할까요? (scripts/bootstrap.sh)" y; then
+        "${SCRIPT_DIR}/bootstrap.sh" || note "의존성 설치에 실패했습니다. 나중에 다시 시도하세요."
     fi
 fi
 
@@ -781,7 +786,8 @@ if [[ "$RUN_MODE" == "docker" ]]; then
     say "  scripts/deploy.sh logs        # 로그 보기"
     say "  docker compose down           # 중지"
 else
-    say "  scripts/run.sh                # Redis 자동 준비 후 봇 시작"
+    say "  scripts/server.sh start       # Redis 자동 준비 후 봇 시작"
+    say "  scripts/server.sh status      # 상태 확인"
 fi
 
 echo
@@ -834,7 +840,7 @@ for arg in "$@"; do
         --no-deps) INSTALL_DEPS=0 ;;
         --dev) DEV_SETUP=1 ;;
         --test) TEST_SETUP=1 ;;
-        -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "Unknown option: $arg" ;;
     esac
 done
@@ -1000,7 +1006,7 @@ if [[ "$TEST_SETUP" -eq 1 ]]; then
     ok "격리된 테스트 봇 설정이 준비되었습니다."
     echo "  이미지 빌드: scripts/deploy.sh --test build"
     echo "  테스트 봇 기동: scripts/deploy.sh --test up"
-    echo "  호스트 데몬: scripts/run.sh --test --daemon  # 전용 Redis도 자동 기동"
+    echo "  호스트 데몬: scripts/server.sh start --daemon --test  # 전용 Redis도 자동 기동"
     echo "  로그 확인: scripts/deploy.sh --test logs"
     echo "  테스트 봇 중지: scripts/deploy.sh --test down"
     echo "  설정 점검: scripts/setup.sh check --test"
@@ -1011,17 +1017,8 @@ fi
 
 # ------------------------------------------------------------- dependencies
 if [[ "$INSTALL_DEPS" -eq 1 ]]; then
-    require_uv
-
-    # No interpreter search here: uv reads requires-python from
-    # pyproject.toml and downloads that version when the host has not got it.
     info "Creating the environment from uv.lock (this can take a while)"
-    if ! uv sync --frozen; then
-        err "Dependency installation failed."
-        err "If uv.lock is out of step with pyproject.toml, refresh it with:"
-        die "  uv lock"
-    fi
-    ok "Dependencies installed into .venv ($(uv run --frozen python -V))"
+    "${SCRIPT_DIR}/bootstrap.sh"
 else
     info "Skipping dependency installation (--no-deps)"
 fi
@@ -1032,7 +1029,7 @@ ok "Setup complete."
 echo
 echo "Still to do by hand:"
 echo "  1. Put your bot token in .env         -> BOTTOKEN="
-echo "  2. Start the app                       -> scripts/run.sh"
+echo "  2. Start the app                       -> scripts/server.sh start"
 echo
 if [[ "$DEV_SETUP" -eq 1 ]]; then
     echo "개발자 방:"
@@ -1047,6 +1044,6 @@ if [[ "$TEST_SETUP" -eq 1 ]]; then
     echo
     echo "테스트 봇:"
     echo "  Compose: scripts/deploy.sh --test build && scripts/deploy.sh --test up"
-    echo "  호스트: scripts/run.sh --test --daemon  # 전용 Redis도 자동 기동"
+    echo "  호스트: scripts/server.sh start --daemon --test  # 전용 Redis도 자동 기동"
     echo "  운영 봇과 다른 Telegram 토큰·Redis 볼륨·포트를 사용합니다."
 fi

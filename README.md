@@ -31,7 +31,7 @@
 
 - **텔레그램 봇 토큰** — 텔레그램에서 [@BotFather](https://t.me/BotFather) 에게 `/newbot` 을 보내 봇을 만들면 토큰을 받습니다.
 - **코레일 회원 계정** — 봇이 사용자의 휴대전화번호와 비밀번호로 코레일에 로그인합니다. 미리 가입되어 있어야 합니다.
-- **Docker** — 로컬 Redis(`scripts/run.sh redis`)와 통합·E2E 테스트(testcontainers)에 필요합니다.
+- **Docker** — 로컬 Redis(`scripts/server.sh redis`)와 통합·E2E 테스트(testcontainers)에 필요합니다.
 - **uv** — 아래 첫 명령으로 설치합니다. Python 3.13 은 uv 가 알아서 받아옵니다.
 
 ### 설치와 실행
@@ -50,16 +50,18 @@ cd korail_KTX_macro_telegrambot
 # .env 에 BOTTOKEN 입력
 
 # 실행 (Redis가 없으면 자동 기동하며, 공인 IP·HTTPS는 필요 없습니다)
-./scripts/run.sh
+./scripts/server.sh start
 
-# 계속 띄워둘 거라면 백그라운드로. 상태는 status.sh 로 봅니다.
-./scripts/run.sh --daemon
-./scripts/status.sh
+# 계속 띄워둘 거라면 백그라운드로.
+./scripts/server.sh start --daemon
+./scripts/server.sh status
 ```
 
 봇은 한 번에 하나만 돌아야 합니다 — 같은 토큰을 둘이 물면 텔레그램이 한쪽에
-409 를 돌려주고 업데이트가 갈라집니다. 그래서 `run.sh` 는 기동 전에 이미
-돌고 있는 봇을 먼저 정지시킵니다.
+409 를 돌려주고 업데이트가 갈라집니다. 그래서 `server.sh start` 는 기동 전에
+이미 돌고 있는 봇을 먼저 정지시킵니다. 다만 정지는 새 프로세스가 뜰 수 있다는
+것이 확인된 뒤에야 일어나므로, 올라오지 못할 재시작이 멀쩡히 돌던 봇을
+죽이지는 않습니다.
 
 스크립트 전체 목록은 [scripts/README.md](scripts/README.md)를 참고하세요.
 
@@ -262,21 +264,21 @@ BotFather에서 테스트용 봇을 하나 더 만든 뒤 다음을 실행합니
 ```
 
 Docker Compose 대신 호스트에서 직접 실행할 수도 있습니다. 이 경우에도 운영
-`run.sh` 프로세스와 별도의 PID·로그·HTTP 포트·Redis를 사용합니다.
+봇 프로세스와 별도의 PID·로그·HTTP 포트·Redis를 사용합니다.
 
 ```bash
-./scripts/run.sh --test --daemon
-./scripts/status.sh --test
-./scripts/status.sh logs --test -f
+./scripts/server.sh start --daemon --test
+./scripts/server.sh status --test
+./scripts/server.sh logs -f --test
 ./scripts/setup.sh check --test
 
 # 운영 봇은 건드리지 않고 테스트 봇만 중지
-./scripts/run.sh --test --stop
-./scripts/run.sh --test redis stop
+./scripts/server.sh stop --test
+./scripts/server.sh redis stop --test
 ```
 
-`run.sh --test`는 6380 포트의 테스트 전용 Redis가 없으면 자동으로
-기동합니다. `run.sh --test redis`는 Redis만 별도로 관리할 때 사용합니다.
+`server.sh start --test`는 6380 포트의 테스트 전용 Redis가 없으면 자동으로
+기동합니다. `server.sh redis --test`는 Redis만 별도로 관리할 때 사용합니다.
 
 설정 중 출력된 개발자 문구를 **테스트 봇과의 채팅방**에 보내면 그 방만
 개발자 모드가 됩니다. `.env.test`는 Git에서 제외되고 권한은 `600`으로
@@ -288,7 +290,7 @@ Docker Compose 대신 호스트에서 직접 실행할 수도 있습니다. 이 
 | Compose 프로젝트 | 기본 프로젝트 | `korail-bot-test` |
 | 앱·Redis 컨테이너 | `korail_bot` / `korail_redis` | `korail_bot_test` / `korail_redis_test` |
 | Redis 데이터 | 운영 전용 볼륨 | 테스트 전용 볼륨 |
-| HTTP 포트 | Compose 비공개 / `run.sh` 8080 | Compose 비공개 / `run.sh` 8081 |
+| HTTP 포트 | Compose 비공개 / 호스트 8080 | Compose 비공개 / 호스트 8081 |
 | 호스트 실행용 Redis | 127.0.0.1:6379 | 127.0.0.1:6380 |
 | 검색 접근·동시 실행 | 운영 설정 | 체험 0회, 철도별 최대 1개 |
 
@@ -336,7 +338,7 @@ Docker Compose 대신 호스트에서 직접 실행할 수도 있습니다. 이 
 ## 설정법
 
 로컬 개발(macOS/Linux) 절차는 위 [빠른 시작](#설치와-실행)과 같습니다 —
-`setup.sh` → `.env` 에 `BOTTOKEN` 입력 → `run.sh redis` → `run.sh`.
+`setup.sh` → `.env` 에 `BOTTOKEN` 입력 → `server.sh start`.
 
 ### Telegram 업데이트 수신
 
@@ -345,24 +347,37 @@ Docker Compose 대신 호스트에서 직접 실행할 수도 있습니다. 이 
 토큰으로 두 인스턴스를 띄우면 Telegram이 409를 돌려줍니다.
 
 > compose 의 Redis 는 보안상 호스트에 포트를 열지 않습니다. 앱을 호스트에서
-> 직접 실행하면 `run.sh`가 127.0.0.1 전용 Redis를 필요할 때 자동 기동합니다.
+> 직접 실행하면 `server.sh`가 127.0.0.1 전용 Redis를 필요할 때 자동 기동합니다.
 
 **사용 가능한 명령어:** `make help` 또는 [scripts/README.md](scripts/README.md)
 
-- `make setup` / `./scripts/setup.sh` - 개발 환경 설정
-- `make setup-test` / `./scripts/setup.sh --test` - 격리된 테스트 봇 설정
-- `make run` / `./scripts/run.sh` - 애플리케이션 실행 (포그라운드)
-- `make daemon` / `./scripts/run.sh --daemon` - 백그라운드 실행
-- `make stop` / `./scripts/run.sh --stop` - 정지
-- `make status` / `./scripts/status.sh` - 상태 확인 (`logs [N] [-f]` 로 로그만)
+스크립트는 역할별로 여섯 개입니다 — `bootstrap.sh`(의존성),
+`setup.sh`(최초 설정), `server.sh`(기동·정지·상태), `deploy.sh`(Compose),
+`test.sh`, `lint.sh`.
+
+- `make bootstrap` / `./scripts/bootstrap.sh` - 의존성 설치·갱신 (몇 번을 해도 안전)
+- `make doctor` / `./scripts/bootstrap.sh --check` - 이 머신에 뭐가 없는지만 보고
+- `make setup` / `./scripts/setup.sh` - 최초 1회 초기화
+- `make start` / `./scripts/server.sh start` - 애플리케이션 실행 (포그라운드)
+- `make daemon` / `./scripts/server.sh start --daemon` - 백그라운드 실행
+- `make stop` / `./scripts/server.sh stop` - 정지
+- `make restart` / `./scripts/server.sh restart` - 정지 후 데몬으로 재시작
+- `make status` / `./scripts/server.sh status` - 상태 확인
+- `make logs` / `./scripts/server.sh logs -f` - 데몬 로그 따라가기
+- `make redis` / `./scripts/server.sh redis start` - 호스트 개발용 Redis 기동
 - `make test` / `./scripts/test.sh` - 테스트 실행
+- `make lint` / `./scripts/lint.sh` - 포맷·린트 검사 (`--fix` 로 자동 수정)
 - `make secrets` / `./scripts/setup.sh secrets` - 시크릿 발급 및 로테이션
-- `make secrets-test` / `./scripts/setup.sh secrets --test` - 테스트 시크릿 관리
-- `make security-check` / `./scripts/setup.sh check` - 설정 보안 점검
-- `make logs` / `./scripts/status.sh logs -f` - 데몬 로그 따라가기
+- `make check` / `./scripts/setup.sh check` - 설정 보안 점검
 - `make up` / `down` / `docker-logs` - docker compose 스택 조작
-- `make up-test` / `down-test` / `docker-logs-test` - 테스트 봇 스택 조작
-- `make dev-redis-test` / `daemon-test` / `status-test` / `stop-test` - 호스트 테스트 봇 조작
+
+스테이징 봇을 대상으로 하려면 타겟마다 이름을 따로 두는 대신 `TEST=1`을
+붙입니다. 스크립트를 직접 부를 때는 `--test`입니다.
+
+```bash
+make status            # 운영 봇
+make status TEST=1     # .env.test 의 스테이징 봇
+```
 
 ### Docker 배포
 

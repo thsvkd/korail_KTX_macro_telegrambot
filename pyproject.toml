@@ -2,7 +2,7 @@
 name = "korail-ktx-bot"
 # The one place a release edits the number. korail_bot.__version__ reads it
 # back out of the installed metadata, and `make lock` has to follow a bump so
-# that scripts/run.sh - which syncs with --frozen before serving - is not
+# that scripts/server.sh - which syncs with --frozen before serving - is not
 # stopped by a lockfile still naming the old one.
 #
 # Written in PEP 440's canonical form, because that is what comes back out:

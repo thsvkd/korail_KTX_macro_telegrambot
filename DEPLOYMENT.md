@@ -54,15 +54,17 @@ docker compose version
 ./scripts/deploy.sh down
 
 # 호스트에서 직접 실행
-./scripts/run.sh --daemon
-./scripts/status.sh
-./scripts/status.sh logs -f
-./scripts/run.sh --stop
-./scripts/run.sh redis stop
+./scripts/server.sh start --daemon
+./scripts/server.sh status
+./scripts/server.sh logs -f
+./scripts/server.sh restart
+./scripts/server.sh stop
+./scripts/server.sh redis stop
 
 # 진단
+./scripts/bootstrap.sh --check
 ./scripts/setup.sh check
-./scripts/status.sh redis --keys
+./scripts/server.sh redis-cli --keys
 ```
 
 `deploy.sh down --volumes`는 운영 Redis 볼륨을 삭제합니다. 모든 세션, 등록 계정,
@@ -90,17 +92,17 @@ Compose 테스트 서버:
 호스트에서 운영 봇과 함께 실행하는 테스트 서버:
 
 ```bash
-./scripts/run.sh --test --daemon
-./scripts/status.sh --test
-./scripts/status.sh --test logs -f
+./scripts/server.sh start --daemon --test
+./scripts/server.sh status --test
+./scripts/server.sh logs -f --test
 
 # 테스트 런타임만 중지
-./scripts/run.sh --test --stop
-./scripts/run.sh --test redis stop
+./scripts/server.sh stop --test
+./scripts/server.sh redis stop --test
 ```
 
 호스트 실행은 선택한 포트의 Redis가 없으면 해당 런타임 전용 컨테이너를
-자동으로 기동합니다. `run.sh [--test] redis`는 Redis만 별도로 관리할 때
+자동으로 기동합니다. `server.sh redis [--test]`는 Redis만 별도로 관리할 때
 사용합니다.
 
 운영과 테스트는 다음 항목이 분리됩니다.
@@ -117,7 +119,7 @@ Compose 테스트 서버:
 | 호스트 Redis | 127.0.0.1:6379 | 127.0.0.1:6380 |
 | PID·로그 | `.run/korail-bot.*` | `.run/korail-bot-test.*` |
 
-`deploy.sh --test up`과 `run.sh --test`는 `.env`와 `.env.test`의
+`deploy.sh --test up`과 `server.sh start --test`는 `.env`와 `.env.test`의
 `BOTTOKEN`이 같으면 기동을 거부합니다. 토큰 하나를 두 poller가 사용하면
 Telegram 409와 업데이트 유실이 발생하기 때문입니다.
 

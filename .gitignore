@@ -26,5 +26,5 @@ htmlcov/
 .omc/
 .claude/
 
-# Runtime state for scripts/run.sh --daemon: pidfile and log.
+# Runtime state for scripts/server.sh start --daemon: pidfile and log.
 .run/

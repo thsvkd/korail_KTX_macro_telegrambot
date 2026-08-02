@@ -231,15 +231,19 @@ can_import() {
 # asked first and answers the other with a 409. Production and test may run
 # together only because they have different tokens and runtime profiles;
 # everything below finds processes belonging to the selected profile alone.
+#
+# Discovery is by command line and runtime profile, never by which script did
+# the starting, so a bot started by an older revision of these scripts is still
+# found and still stops cleanly.
 
 RUN_DIR="${ROOT_DIR}/.run"
 PID_FILE="${RUN_DIR}/korail-bot.pid"
-# Consumed by run.sh and status.sh after this file is sourced.
+# Consumed by server.sh after this file is sourced.
 # shellcheck disable=SC2034
 LOG_FILE="${RUN_DIR}/korail-bot.log"
 BOT_RUNTIME_PROFILE="${BOT_RUNTIME_PROFILE:-production}"
 
-# use_test_runtime - select the host-side test bot managed by run.sh.
+# use_test_runtime - select the host-side test bot managed by server.sh.
 #
 # Compose only needs use_test_stack. A host process additionally needs its own
 # pidfile and log so starting or stopping it cannot touch the production bot.
@@ -247,6 +251,8 @@ use_test_runtime() {
     use_test_stack
     BOT_RUNTIME_PROFILE="test"
     PID_FILE="${RUN_DIR}/korail-bot-test.pid"
+    # Read by server.sh, which sources this file.
+    # shellcheck disable=SC2034
     LOG_FILE="${RUN_DIR}/korail-bot-test.log"
     export BOT_RUNTIME_PROFILE
 }
@@ -305,6 +311,9 @@ load_bot_runtime_env() {
             REDIS_SOCKET_CONNECT_TIMEOUT|REDIS_MAX_CONNECTIONS|REDIS_CONTAINER_NAME|\
             DEV_REDIS_CONTAINER_NAME|DEV_REDIS_PORT|SESSION_SECRET)
                 printf -v "$key" '%s' "$value"
+                # The name is in the variable on purpose - the allow-list above
+                # is the point, and each match exports the variable it named.
+                # shellcheck disable=SC2163
                 export "$key"
                 ;;
         esac

@@ -8,7 +8,7 @@ from importlib.metadata import version as _distribution_version
 #: edits.
 #:
 #: Metadata is a copy written at install time, so it can in principle lag the
-#: declaration. Nothing here has to guard against that: scripts/run.sh syncs
+#: declaration. Nothing here has to guard against that: scripts/server.sh syncs
 #: the environment before it starts the bot, and it does so with --frozen, so
 #: a lockfile left behind by a bump stops the start with a message about it
 #: rather than serving the old number quietly.

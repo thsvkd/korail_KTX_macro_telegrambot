@@ -87,8 +87,21 @@ https://thsvkd.github.io/korail_KTX_macro_telegrambot/
 MINI_APP_URL=https://thsvkd.github.io/korail_KTX_macro_telegrambot/
 ```
 
-봇을 재시작하면 `/start`의 답장 키보드가 이 HTTPS 페이지를 엽니다. Telegram
-결과는 기존 long polling으로 들어오므로 `FLASK_HOST`를 외부에 열거나 webhook,
+봇을 재시작하면 `/start`의 답장 키보드와 채팅 입력창의 `예약 열기` 메뉴가 이
+HTTPS 페이지를 엽니다. 채팅 메뉴 URL에는 봇이 `transport=start`와 자신의
+username을 자동으로 붙입니다.
+
+봇 프로필에도 큰 **앱 열기** 버튼을 표시하려면 BotFather에서 Main Mini App을
+한 번 활성화해야 합니다. `@BotFather`에서 `/mybots` → 운영 봇 → **Bot Settings**
+→ **Configure Mini App** → **Enable Mini App**을 선택하고 다음 URL을 등록합니다.
+
+```text
+https://thsvkd.github.io/korail_KTX_macro_telegrambot/?transport=start&bot=thsvkd_korail_bot
+```
+
+프로필·채팅 메뉴에서 연 Mini App은 조건을 짧은 Telegram `/start` 파라미터로
+되돌리고, 답장 키보드에서 연 화면은 `sendData()` 서비스 메시지를 사용합니다.
+둘 다 기존 long polling으로 들어오므로 `FLASK_HOST`를 외부에 열거나 webhook,
 도메인, TLS 인증서를 앱 서버에 추가할 필요가 없습니다. 주소가 비어 있거나
 HTTPS가 아니면 시작 로그에 비활성/경고가 남고 기존 채팅 예약만 동작합니다.
 

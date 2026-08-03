@@ -12,31 +12,37 @@
 
 ## 배포 — 먼저 읽으십시오
 
-### 이 봇은 Docker 로 돌고 있지 않습니다
+### 이 봇은 docker compose 스택으로 돕니다
 
-**프로덕션은 호스트에서 직접 실행됩니다.** `docker ps` 에는 개발·테스트용
-Redis 컨테이너만 보이는데, 그것을 보고 "프로덕션이 안 돌고 있다"고 판단하면
-틀립니다.
+운영 봇은 `korail_bot` + `korail_redis` 컨테이너입니다(테스트 봇은
+`korail_bot_test` + `korail_redis_test`). 호스트에 `waitress-serve` 프로세스는
+없는 것이 정상입니다.
 
 ```bash
-./scripts/server.sh status      # 살아 있으면 종료코드 0
-./scripts/server.sh restart     # 배포 = 이것
-./scripts/server.sh logs 50     # 또는 .run/korail-bot.log
+./scripts/server.sh status         # 살아 있으면 종료코드 0
+./scripts/server.sh restart        # 배포 = 이것 (앱 컨테이너만 새로 만든다)
+./scripts/server.sh restart --build  # 코드가 바뀌었으면 이미지부터
+./scripts/server.sh logs 50
 ```
 
-`restart` 는 새 프로세스가 뜰 수 있음을 확인한 뒤에야 기존 것을 내립니다.
+`restart` 는 Redis 를 건드리지 않고 앱 컨테이너만 교체하며, 새 컨테이너가 실제로
+기동했는지 확인한 뒤에 끝납니다.
 
-### deploy.sh 를 쓰지 마십시오
+### 데이터는 컨테이너 밖에 있습니다
 
-`scripts/deploy.sh` 는 **Docker Compose 전용**이며 현재 운영과 별개
-경로입니다(`scripts/README.md:10-11`). 지금 `deploy.sh up` 을 실행하면:
+Redis 상태는 이름 있는 볼륨이 아니라 `REDIS_DATA_DIR`(기본 `./.data/redis`)에
+바인드 마운트됩니다. `stop`, `down`, 컨테이너 삭제, `docker volume prune` 어느
+것도 등록 계정·세션·검색 상태를 지우지 않습니다. 지우려면 그 디렉터리를 지워야
+하고, 그 경로는 `deploy.sh down --purge-data` 하나뿐입니다.
 
-- Compose 가 자체 Redis 볼륨을 쓰므로 **등록된 계정과 세션이 없는 빈 상태**로
-  뜹니다
-- 같은 봇 토큰으로 두 개가 long polling 하며 업데이트를 서로 뺏습니다
+파일은 Redis 컨테이너의 uid 소유이므로 호스트에서 직접 읽고 쓰려 하지 말고
+컨테이너를 거치십시오.
 
-Docker 로 옮기는 것은 데이터 이관이 따르는 별도 결정입니다. 지시 없이
-진행하지 마십시오.
+### --host 는 디버깅용입니다
+
+`server.sh <명령> --host` 는 `.venv` 프로세스와 **별도 개발용 Redis** 를 씁니다.
+배포된 스택의 데이터가 보이지 않으므로, "계정이 다 사라졌다" 로 오해하기 쉽습니다.
+운영 작업에는 쓰지 마십시오.
 
 ### 재시작 전 확인
 
@@ -44,7 +50,7 @@ Docker 로 옮기는 것은 데이터 이관이 따르는 별도 결정입니다
 사용자가 있을 수 있습니다.**
 
 ```bash
-ps aux | grep telebotBackProcess | grep -v grep
+./scripts/server.sh status      # "진행 중인 작업" 절을 보십시오
 ```
 
 0개가 아니면 사용자에게 알리고 판단을 받으십시오. 재시작 시 Redis 기록에서

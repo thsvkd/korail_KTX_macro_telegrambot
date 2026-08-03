@@ -34,7 +34,7 @@
 
 - **텔레그램 봇 토큰** — 텔레그램에서 [@BotFather](https://t.me/BotFather) 에게 `/newbot` 을 보내 봇을 만들면 토큰을 받습니다.
 - **코레일 회원 계정** — 봇이 사용자의 휴대전화번호와 비밀번호로 코레일에 로그인합니다. 미리 가입되어 있어야 합니다.
-- **Docker** — 로컬 Redis(`scripts/server.sh redis`)와 통합·E2E 테스트(testcontainers)에 필요합니다.
+- **Docker** — 봇과 Redis가 docker compose 스택으로 돌아가며, 통합·E2E 테스트(testcontainers)에도 필요합니다. Docker Engine과 Compose V2가 있어야 합니다.
 - **uv** — 아래 첫 명령으로 설치합니다. Python 3.13 은 uv 가 알아서 받아옵니다.
 
 ### 설치와 실행
@@ -52,19 +52,20 @@ cd korail_KTX_macro_telegrambot
 
 # .env 에 BOTTOKEN 입력
 
-# 실행 (Redis가 없으면 자동 기동하며, 공인 IP·HTTPS는 필요 없습니다)
+# 실행 - 앱과 Redis 컨테이너를 띄웁니다. 이미지가 없으면 여기서 빌드하고,
+# 공인 IP·HTTPS·포트포워딩은 필요 없습니다.
 ./scripts/server.sh start
-
-# 계속 띄워둘 거라면 백그라운드로.
-./scripts/server.sh start --daemon
 ./scripts/server.sh status
+./scripts/server.sh logs -f
 ```
 
 봇은 한 번에 하나만 돌아야 합니다 — 같은 토큰을 둘이 물면 텔레그램이 한쪽에
-409 를 돌려주고 업데이트가 갈라집니다. 그래서 `server.sh start` 는 기동 전에
-이미 돌고 있는 봇을 먼저 정지시킵니다. 다만 정지는 새 프로세스가 뜰 수 있다는
-것이 확인된 뒤에야 일어나므로, 올라오지 못할 재시작이 멀쩡히 돌던 봇을
-죽이지는 않습니다.
+409 를 돌려주고 업데이트가 갈라집니다. 컨테이너 이름이 하나이므로 스택을 두 번
+띄워도 복제본이 생기지는 않지만, `--host` 로 띄운 프로세스와 스택을 같은 토큰
+으로 동시에 돌리지는 마십시오.
+
+등록된 계정과 검색 상태는 컨테이너가 아니라 `REDIS_DATA_DIR`(기본
+`./.data/redis`)에 저장됩니다. 컨테이너를 멈추거나 지워도 남습니다.
 
 스크립트 전체 목록은 [scripts/README.md](scripts/README.md)를 참고하세요.
 
@@ -291,34 +292,22 @@ cd korail_KTX_macro_telegrambot
 BotFather에서 테스트용 봇을 하나 더 만든 뒤 다음을 실행합니다.
 
 ```bash
-# 별도 토큰, Redis 볼륨, 포트와 개발자 문구를 .env.test에 설정
+# 별도 토큰, 컨테이너, Redis 데이터 디렉터리와 개발자 문구를 .env.test에 설정
 ./scripts/setup.sh --test
 
-# 현재 체크아웃(예: worktree-srt-support)을 테스트 전용 이미지로 빌드·기동
-./scripts/deploy.sh --test build
-./scripts/deploy.sh --test up
-
-# 확인과 종료
-./scripts/deploy.sh --test logs
-./scripts/deploy.sh --test down
-```
-
-Docker Compose 대신 호스트에서 직접 실행할 수도 있습니다. 이 경우에도 운영
-봇 프로세스와 별도의 PID·로그·HTTP 포트·Redis를 사용합니다.
-
-```bash
-./scripts/server.sh start --daemon --test
+# 현재 체크아웃을 테스트 전용 이미지로 빌드해 기동
+./scripts/server.sh start --test --build
 ./scripts/server.sh status --test
 ./scripts/server.sh logs -f --test
 ./scripts/setup.sh check --test
 
 # 운영 봇은 건드리지 않고 테스트 봇만 중지
 ./scripts/server.sh stop --test
-./scripts/server.sh redis stop --test
 ```
 
-`server.sh start --test`는 6380 포트의 테스트 전용 Redis가 없으면 자동으로
-기동합니다. `server.sh redis --test`는 Redis만 별도로 관리할 때 사용합니다.
+`--test`를 붙이면 컨테이너 이름, Compose 프로젝트, 네트워크, Redis 데이터
+디렉터리(`./.data/redis-test`)가 모두 분리됩니다. Redis만 따로 다뤄야 할 때는
+`server.sh redis --test`를 씁니다.
 
 설정 중 출력된 개발자 문구를 **테스트 봇과의 채팅방**에 보내면 그 방만
 개발자 모드가 됩니다. `.env.test`는 Git에서 제외되고 권한은 `600`으로
@@ -329,7 +318,7 @@ Docker Compose 대신 호스트에서 직접 실행할 수도 있습니다. 이 
 | Telegram 토큰 | `.env`의 `BOTTOKEN` | `.env.test`의 별도 `BOTTOKEN` |
 | Compose 프로젝트 | 기본 프로젝트 | `korail-bot-test` |
 | 앱·Redis 컨테이너 | `korail_bot` / `korail_redis` | `korail_bot_test` / `korail_redis_test` |
-| Redis 데이터 | 운영 전용 볼륨 | 테스트 전용 볼륨 |
+| Redis 데이터 | `./.data/redis` | `./.data/redis-test` |
 | HTTP 포트 | Compose 비공개 / 호스트 8080 | Compose 비공개 / 호스트 8081 |
 | 호스트 실행용 Redis | 127.0.0.1:6379 | 127.0.0.1:6380 |
 | 검색 접근·동시 실행 | 운영 설정 | 체험 0회, 철도별 최대 1개 |
@@ -419,37 +408,43 @@ Docker Compose 대신 호스트에서 직접 실행할 수도 있습니다. 이 
 포트포워딩은 필요 없습니다. 시작할 때 과거에 등록된 webhook을 해제하며, 같은
 토큰으로 두 인스턴스를 띄우면 Telegram이 409를 돌려줍니다.
 
-> compose 의 Redis 는 보안상 호스트에 포트를 열지 않습니다. 앱을 호스트에서
-> 직접 실행하면 `server.sh`가 127.0.0.1 전용 Redis를 필요할 때 자동 기동합니다.
+> Redis 는 보안상 호스트에 포트를 열지 않습니다. 안을 들여다볼 때는
+> `server.sh redis-cli` 가 컨테이너를 거쳐 접속합니다. `--host` 로 앱을 직접
+> 실행하면 `server.sh`가 127.0.0.1 전용 개발용 Redis를 따로 기동합니다.
 
 **사용 가능한 명령어:** `make help` 또는 [scripts/README.md](scripts/README.md)
 
-스크립트는 역할별로 여섯 개입니다 — `bootstrap.sh`(의존성),
-`setup.sh`(최초 설정), `server.sh`(기동·정지·상태), `deploy.sh`(Compose),
-`test.sh`, `lint.sh`.
+스크립트는 역할별로 일곱 개입니다 — `bootstrap.sh`(의존성),
+`setup.sh`(최초 설정), `server.sh`(기동·정지·상태), `deploy.sh`(이미지·스택),
+`migrate-redis.sh`(데이터 이관), `test.sh`, `lint.sh`.
 
 - `make bootstrap` / `./scripts/bootstrap.sh` - 의존성 설치·갱신 (몇 번을 해도 안전)
 - `make doctor` / `./scripts/bootstrap.sh --check` - 이 머신에 뭐가 없는지만 보고
 - `make setup` / `./scripts/setup.sh` - 최초 1회 초기화
-- `make start` / `./scripts/server.sh start` - 애플리케이션 실행 (포그라운드)
-- `make daemon` / `./scripts/server.sh start --daemon` - 백그라운드 실행
-- `make stop` / `./scripts/server.sh stop` - 정지
-- `make restart` / `./scripts/server.sh restart` - 정지 후 데몬으로 재시작
+- `make start` / `./scripts/server.sh start` - 스택 기동 (앱 + Redis, 백그라운드)
+- `make foreground` / `./scripts/server.sh start --foreground` - 이 터미널에 붙여서 실행
+- `make stop` / `./scripts/server.sh stop` - 정지 (데이터는 그대로)
+- `make restart` / `./scripts/server.sh restart` - 앱 컨테이너만 새로 생성
+- `make rebuild` / `./scripts/server.sh restart --build` - 이미지부터 다시 만들고 재시작
 - `make status` / `./scripts/server.sh status` - 상태 확인
-- `make logs` / `./scripts/server.sh logs -f` - 데몬 로그 따라가기
-- `make redis` / `./scripts/server.sh redis start` - 호스트 개발용 Redis 기동
+- `make logs` / `./scripts/server.sh logs -f` - 로그 따라가기
+- `make redis` / `./scripts/server.sh redis start` - Redis만 기동
+- `make migrate-redis` / `./scripts/migrate-redis.sh` - 예전 Redis 데이터 이관
 - `make test` / `./scripts/test.sh` - 테스트 실행
 - `make lint` / `./scripts/lint.sh` - 포맷·린트 검사 (`--fix` 로 자동 수정)
 - `make secrets` / `./scripts/setup.sh secrets` - 시크릿 발급 및 로테이션
 - `make check` / `./scripts/setup.sh check` - 설정 보안 점검
-- `make up` / `down` / `docker-logs` - docker compose 스택 조작
+- `make build` / `up` / `down` / `docker-logs` / `publish` - 이미지와 스택 조작
 
 스테이징 봇을 대상으로 하려면 타겟마다 이름을 따로 두는 대신 `TEST=1`을
-붙입니다. 스크립트를 직접 부를 때는 `--test`입니다.
+붙입니다. 스크립트를 직접 부를 때는 `--test`입니다. 컨테이너 대신 `.venv`
+프로세스를 대상으로 하려면 `HOST=1`(스크립트에서는 `--host`)이며, 이때는
+배포된 스택과 분리된 개발용 Redis를 씁니다.
 
 ```bash
 make status            # 운영 봇
 make status TEST=1     # .env.test 의 스테이징 봇
+make start HOST=1      # 디버깅용 .venv 실행
 ```
 
 ### Docker 배포
@@ -471,6 +466,17 @@ waitress 이고, 폴러가 중복 기동되지 않도록 의도적으로 단일 
 띄웁니다. 따라서 `.env` 에 `REDIS_PASSWORD` 가 반드시 있어야 합니다
 (`./scripts/setup.sh secrets` 가 채워줍니다).
 
+Redis 데이터는 이름 있는 볼륨이 아니라 `REDIS_DATA_DIR`(기본 `./.data/redis`)를
+`/data` 에 바인드 마운트해 저장합니다. 컨테이너를 멈추거나 지워도,
+`docker compose down --volumes` 나 `docker volume prune` 을 해도 등록 계정과
+검색 상태는 남습니다. 지우는 경로는 `./scripts/deploy.sh down --purge-data`
+하나뿐입니다. 예전에 호스트에서 직접 실행하며 단독 Redis 컨테이너를 쓰던
+설치는 `./scripts/migrate-redis.sh` 로 한 번만 옮기면 됩니다.
+
+앱 컨테이너에는 헬스체크가 있어 waitress 가 응답하지 않으면 `docker ps` 의
+상태에 드러나고, `stop_grace_period: 30s` 로 종료 신호를 받은 봇이 진행 중인
+검색 상태를 Redis 에 정리할 시간을 줍니다.
+
 ### 환경변수
 
 | 변수명 | 필수 | 설명 |
@@ -479,6 +485,7 @@ waitress 이고, 폴러가 중복 기동되지 않도록 의도적으로 단일 
 | `MINI_APP_URL` | ❌ | 예약 조건을 한 화면에서 받는 정적 HTTPS Mini App 주소. 미설정·비 HTTPS이면 기존 채팅 흐름만 사용 |
 | `SESSION_SECRET` | ⚠️ | 코레일 로그인 정보 암호화 키. 없으면 임시 키를 쓰며 재시작 시 세션이 무효화됩니다 |
 | `REDIS_PASSWORD` | ⚠️ | Redis AUTH 비밀번호. docker compose 사용 시 필수 |
+| `REDIS_DATA_DIR` | ❌ | Redis 데이터를 둘 호스트 경로. 기본 `./.data/redis` |
 | `ADMIN_PASSWORD` | ❌ | 관리자 명령 비밀번호. 미설정 시 관리자 명령 전체 비활성화. **코레일 비밀번호와 달라야 합니다** |
 | `ADMIN_MAGIC_STRING` | ❌ | 개발자 모드 전환 문자열. 16자 이상 권장, 미설정 시 비활성 |
 | `USERID` / `USERPW` | ❌ | 개발·테스트용 고정 코레일 계정. **개발자 모드인 채팅방에서만** 적용되어 로그인 단계를 건너뜁니다. 일반 사용자는 설정 여부와 무관하게 자기 계정을 등록합니다 |

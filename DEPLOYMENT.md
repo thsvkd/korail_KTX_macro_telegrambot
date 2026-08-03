@@ -46,29 +46,67 @@ docker compose version
 
 ## 운영 명령
 
+봇과 Redis는 모두 컨테이너로 뜹니다. `server.sh`가 그 스택을 다룹니다.
+
 ```bash
-# Compose 배포
+# 일상 운영 (docker compose)
+./scripts/server.sh start            # 앱 + Redis 기동 (없으면 이미지도 빌드)
+./scripts/server.sh status           # 컨테이너·설정·연결·진행 중인 검색
+./scripts/server.sh logs -f
+./scripts/server.sh restart          # 앱 컨테이너만 새로 만든다
+./scripts/server.sh restart --build  # 코드가 바뀌었을 때
+./scripts/server.sh stop             # 컨테이너만 멈춘다 (데이터 유지)
+./scripts/server.sh stop --remove    # 컨테이너·네트워크까지 제거 (데이터 유지)
+
+# 이미지만 다루기
 ./scripts/deploy.sh build
 ./scripts/deploy.sh up
-./scripts/deploy.sh logs
 ./scripts/deploy.sh down
 
-# 호스트에서 직접 실행
-./scripts/server.sh start --daemon
-./scripts/server.sh status
-./scripts/server.sh logs -f
-./scripts/server.sh restart
-./scripts/server.sh stop
-./scripts/server.sh redis stop
-
 # 진단
-./scripts/bootstrap.sh --check
 ./scripts/setup.sh check
 ./scripts/server.sh redis-cli --keys
+
+# 로컬 인터프리터로 디버깅 (배포된 데이터와 분리된 개발용 Redis)
+./scripts/server.sh start --host --foreground
 ```
 
-`deploy.sh down --volumes`는 운영 Redis 볼륨을 삭제합니다. 모든 세션, 등록 계정,
-예약 검색 상태가 사라지므로 초기화가 명확히 필요한 경우에만 사용하십시오.
+Docker 데몬이 뜨면 `restart: unless-stopped`가 스택을 다시 올리므로 재부팅 후
+따로 할 일은 없습니다.
+
+## Redis 데이터가 있는 곳
+
+`REDIS_DATA_DIR`(기본 `./.data/redis`, 테스트 봇은 `./.data/redis-test`)를 컨테이너
+`/data`에 그대로 마운트합니다. 이름 있는 볼륨이 아니므로 컨테이너를 멈추든 지우든,
+`docker compose down --volumes`나 `docker volume prune`을 하든 등록 계정·세션·예약
+검색 상태는 남습니다. 지우는 방법은 그 디렉터리를 지우는 것뿐입니다.
+
+```bash
+./scripts/deploy.sh down --purge-data   # 확인을 받고 데이터까지 삭제
+```
+
+파일은 Redis 컨테이너의 uid 소유라 호스트에서 바로 읽고 쓸 수 없습니다. 백업은
+컨테이너를 통해 하십시오.
+
+```bash
+docker run --rm -v "$PWD/.data/redis:/data:ro" -v "$PWD:/out" \
+  redis:7-alpine sh -c 'cp -a /data /out/redis-backup-$(date +%F)'
+```
+
+## 예전 방식에서 옮겨오기
+
+호스트에서 직접 실행하며 단독 Redis 컨테이너(`korail_dev_redis`)를 쓰던 설치나,
+Redis 데이터가 이름 있는 볼륨에 있던 설치는 한 번만 옮기면 됩니다.
+
+```bash
+./scripts/server.sh stop --host        # 호스트 프로세스를 먼저 내린다
+./scripts/migrate-redis.sh             # 스냅숏을 REDIS_DATA_DIR 로 복사
+./scripts/server.sh start
+```
+
+`migrate-redis.sh`는 원본을 지우지 않습니다. 봇이 정상 동작하는 것을 확인한 뒤
+직접 `docker rm -f korail_dev_redis` 로 정리하십시오. 원본을 자동으로 찾지 못하면
+`--from-container NAME` 이나 `--from-volume NAME` 으로 지정할 수 있습니다.
 
 ## Telegram Mini App 배포
 

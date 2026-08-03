@@ -36,11 +36,11 @@ assignees: ''
 
 ## 실행 환경
 
-- 실행 방식: <!-- Docker(docker-compose) / 로컬(scripts/server.sh) / 기타 -->
+- 실행 방식: <!-- compose 스택(scripts/server.sh start) / 로컬(--host) / 기타 -->
 - 커밋 또는 이미지 태그: <!-- git rev-parse --short HEAD 결과 또는 이미지 태그 -->
 - OS / 아키텍처: <!-- 예: Raspberry Pi OS aarch64, Ubuntu 24.04 x86_64 -->
 - Python: <!-- uv run python -V (직접 실행한 경우만) -->
-- Redis: <!-- docker-compose 기본 / 외부 Redis / scripts/server.sh redis -->
+- Redis: <!-- compose 기본 / 외부 Redis / scripts/server.sh redis --host -->
 
 ## 관련 설정
 
@@ -62,9 +62,9 @@ assignees: ''
 붙이기 전에 전화번호, chat_id, 토큰류를 반드시 가려주십시오.
 
 로그 위치:
-  - 로컬 포그라운드 실행(scripts/server.sh start): 터미널 출력
-  - 로컬 데몬 실행(scripts/server.sh start --daemon): .run/korail-bot.log
-  - Docker: docker compose logs --tail=100
+  - compose 스택: scripts/server.sh logs 100
+  - 포그라운드 실행(scripts/server.sh start --foreground): 터미널 출력
+  - 로컬 데몬 실행(scripts/server.sh start --host): .run/korail-bot.log
 -->
 
 ```

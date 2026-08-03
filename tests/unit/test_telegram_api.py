@@ -326,6 +326,38 @@ class TestTheCommandMenu(ServiceFixture):
         assert self.service.delete_my_commands(CHAT_ID) is False
 
 
+class TestTheMiniAppMenuButton(ServiceFixture):
+    """The persistent button beside the chat input, separate from commands."""
+
+    def test_a_web_app_becomes_the_default_chat_menu_button(self):
+        assert (
+            self.service.set_chat_menu_button(
+                "예약 열기", "https://example.test/app?transport=start"
+            )
+            is True
+        )
+        assert self.method() == "setChatMenuButton"
+        assert self.payload() == {
+            "menu_button": {
+                "type": "web_app",
+                "text": "예약 열기",
+                "web_app": {"url": "https://example.test/app?transport=start"},
+            }
+        }
+
+    def test_the_default_command_button_can_be_restored(self):
+        assert self.service.reset_chat_menu_button() is True
+        assert self.method() == "setChatMenuButton"
+        assert self.payload() == {"menu_button": {"type": "default"}}
+
+    def test_the_bot_username_can_be_discovered_without_exposing_the_token(self):
+        self.answer(response(result={"id": 1, "username": "rail_bot"}))
+
+        assert self.service.get_bot_username() == "rail_bot"
+        assert self.method() == "getMe"
+        assert self.payload() == {}
+
+
 class TestTheServiceItself:
     """Construction, which decides where the calls go."""
 

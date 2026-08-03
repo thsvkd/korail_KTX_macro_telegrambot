@@ -253,6 +253,34 @@ class TelegramService:
 
         return self._call("setMyCommands", payload) is not None
 
+    def get_bot_username(self) -> str | None:
+        """Return this token's public username for a Mini App deep link."""
+        result = self._call("getMe", {})
+        if result is None:
+            return None
+        username = result.get("username")
+        return username if isinstance(username, str) and username else None
+
+    def set_chat_menu_button(self, text: str, url: str) -> bool:
+        """Make the default button beside the chat input open the Mini App."""
+        return (
+            self._call(
+                "setChatMenuButton",
+                {
+                    "menu_button": {
+                        "type": "web_app",
+                        "text": text,
+                        "web_app": {"url": url},
+                    }
+                },
+            )
+            is not None
+        )
+
+    def reset_chat_menu_button(self) -> bool:
+        """Restore Telegram's default command-list button."""
+        return self._call("setChatMenuButton", {"menu_button": {"type": "default"}}) is not None
+
     def delete_my_commands(self, chat_id: int) -> bool:
         """
         Drop one chat's own command list, so it falls back to the default.

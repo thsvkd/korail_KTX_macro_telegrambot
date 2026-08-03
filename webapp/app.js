@@ -22,6 +22,9 @@ const errorBox = document.querySelector("#form-error");
 const preview = document.querySelector("#browser-preview");
 const submitButton = document.querySelector("#submit-button");
 const tg = window.Telegram?.WebApp;
+const launchParams = new URLSearchParams(location.search);
+const startTransport = launchParams.get("transport") === "start";
+const botUsername = (launchParams.get("bot") || "").replace(/^@/, "");
 
 function localDate(offsetDays) {
   const date = new Date();
@@ -38,22 +41,18 @@ function selectedOperator() {
 }
 
 function configureOperators() {
-  const requested = new URLSearchParams(location.search).get("operators");
-  const allowed = new Set((requested || "korail,srt").split(",").filter((value) => value in STATIONS));
-  if (!allowed.size) allowed.add("korail");
-
   for (const label of operatorPicker.querySelectorAll("[data-operator]")) {
-    const enabled = allowed.has(label.dataset.operator);
-    label.hidden = !enabled;
-    label.querySelector("input").disabled = !enabled;
+    label.hidden = false;
+    label.querySelector("input").disabled = false;
   }
-  const first = [...allowed][0];
-  form.elements.operator.value = first;
-  operatorPicker.style.gridTemplateColumns = allowed.size === 1 ? "1fr" : "1fr 1fr";
+  form.elements.operator.value = "korail";
+  operatorPicker.style.gridTemplateColumns = "1fr 1fr";
 }
 
 function renderStations() {
   const operator = selectedOperator();
+  if (!STATIONS[operator].includes(srcStation.value)) srcStation.value = "";
+  if (!STATIONS[operator].includes(dstStation.value)) dstStation.value = "";
   stationOptions.replaceChildren();
   quickStations.replaceChildren();
   for (const station of STATIONS[operator]) {
@@ -94,6 +93,9 @@ function buildPayload() {
   const destination = String(data.get("dst_station") || "").trim();
 
   if (source.length < 2 || destination.length < 2) throw new Error("출발역과 도착역을 입력해주세요.");
+  if (!STATIONS[selectedOperator()].includes(source) || !STATIONS[selectedOperator()].includes(destination)) {
+    throw new Error("목록에 있는 역을 선택해주세요.");
+  }
   if (source === destination) throw new Error("출발역과 도착역은 달라야 합니다.");
   if (!depDate.value) throw new Error("출발 날짜를 선택해주세요.");
   if (!/^\d{4}$/.test(start) || !/^\d{4}$/.test(end)) throw new Error("검색 시간대를 선택해주세요.");
@@ -115,10 +117,47 @@ function buildPayload() {
   };
 }
 
+function buildStartParameter(data) {
+  const stations = STATIONS[data.operator];
+  const source = stations.indexOf(data.src_station).toString(36);
+  const destination = stations.indexOf(data.dst_station).toString(36);
+  const operator = data.operator === "srt" ? "s" : "k";
+  const token = [
+    "ma1_",
+    operator,
+    data.dep_date,
+    source,
+    destination,
+    data.dep_time,
+    data.max_dep_time,
+    data.train_type,
+    data.seat_option,
+    String(data.passenger_count),
+    data.seat_strategy,
+  ].join("");
+  if (token.length > 64) throw new Error("예약 조건을 채팅으로 전달할 수 없습니다.");
+  return token;
+}
+
 function submit() {
   errorBox.textContent = "";
   try {
-    const payload = JSON.stringify(buildPayload());
+    const data = buildPayload();
+    if (startTransport) {
+      if (!/^[A-Za-z0-9_]{5,32}$/.test(botUsername)) {
+        throw new Error("봇 연결 주소가 올바르지 않습니다. 채팅의 /start에서 다시 열어주세요.");
+      }
+      const link = `https://t.me/${botUsername}?start=${buildStartParameter(data)}`;
+      tg?.HapticFeedback?.notificationOccurred("success");
+      if (tg?.openTelegramLink) {
+        tg.openTelegramLink(link);
+      } else {
+        location.assign(link);
+      }
+      return;
+    }
+
+    const payload = JSON.stringify(data);
     if (new TextEncoder().encode(payload).length > 4096) throw new Error("입력값이 너무 깁니다.");
     if (tg?.sendData) {
       tg.HapticFeedback?.notificationOccurred("success");

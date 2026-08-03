@@ -1,7 +1,6 @@
 """Conversation flow handler for reservation process."""
 
 from datetime import datetime, timedelta
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from korail2 import ReserveOption
 
@@ -36,6 +35,8 @@ logger = get_logger(__name__)
 
 class ConversationHandler:
     """Handles multi-step conversation flow for train reservation."""
+
+    MINI_APP_PENDING_KEY = "miniAppPending"
 
     def __init__(
         self,
@@ -619,42 +620,26 @@ class ConversationHandler:
         )
 
     def offer_mini_app(self, chat_id: int, session: UserSession) -> bool:
-        """Offer the one-screen reservation form when this chat can use it.
+        """Offer the one-screen form with both railways available.
 
-        The page never asks for railway credentials. It is therefore offered
-        only when at least one account is already registered, or when this is
-        a developer chat allowed to use a configured fixed account. The URL
-        tells the static page which railway choices are usable; no identity or
-        secret is placed in it.
+        The page never asks for railway credentials. A missing account is
+        collected only after the conditions return to the private bot chat,
+        and those conditions stay on the session while the login is verified.
         """
         if not settings.mini_app_enabled():
             return False
-
-        available = set(self.storage.get_onboarded_operators(chat_id))
-        for operator in Operator:
-            if self.uses_server_account(chat_id, operator):
-                available.add(operator)
-        if not available:
-            return False
-
-        parsed = urlsplit(settings.MINI_APP_URL or "")
-        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-        query["operators"] = ",".join(
-            str(operator) for operator in Operator if operator in available
-        )
-        url = urlunsplit(parsed._replace(query=urlencode(query)))
 
         session.reset()
         self.storage.save_user_session(session)
         self.telegram.send_message(
             chat_id,
             MessageTemplates.MINI_APP_OFFER,
-            reply_markup=keyboards.mini_app_keyboard(url),
+            reply_markup=keyboards.mini_app_keyboard(settings.MINI_APP_URL or ""),
         )
         return True
 
     def handle_mini_app_data(self, chat_id: int, raw: object) -> None:
-        """Turn one validated Mini App submission into the train-picking step."""
+        """Accept a KeyboardButton Mini App's ``sendData`` submission."""
         try:
             submission = MiniAppSubmission.parse(raw)
         except MiniAppDataError as exc:
@@ -664,6 +649,32 @@ class ConversationHandler:
                 reply_markup=keyboards.remove_reply_keyboard(),
             )
             return
+
+        self._apply_mini_app_submission(chat_id, submission)
+
+    def handle_mini_app_start_parameter(self, chat_id: int, token: str) -> bool:
+        """Accept a profile/menu Mini App submission delivered by ``/start``.
+
+        Returns False for unrelated start parameters so ordinary Telegram
+        deep links retain the normal /start behaviour.
+        """
+        if not token.startswith("ma1_"):
+            return False
+        try:
+            submission = MiniAppSubmission.parse_start_parameter(token)
+        except MiniAppDataError as exc:
+            self.telegram.send_message(
+                chat_id,
+                MessageTemplates.MINI_APP_INVALID.format(error=exc),
+                reply_markup=keyboards.remove_reply_keyboard(),
+            )
+            return True
+
+        self._apply_mini_app_submission(chat_id, submission)
+        return True
+
+    def _apply_mini_app_submission(self, chat_id: int, submission: MiniAppSubmission) -> None:
+        """Log in for validated conditions, collecting a missing account."""
 
         session = self.storage.get_user_session(chat_id) or UserSession(chat_id=chat_id)
         if session.last_action == UserProgress.FINDING_TICKET:
@@ -676,44 +687,59 @@ class ConversationHandler:
 
         session.reset()
         session.in_progress = True
-        session.train_info = {"operator": str(submission.operator)}
+        session.train_info = submission.as_train_info()
+        session.train_info[self.MINI_APP_PENDING_KEY] = True
         self.storage.save_user_session(session)
 
         if self.uses_server_account(chat_id, submission.operator):
-            if not self._login_with_environment_credentials(chat_id, session):
-                session.reset()
-                self.storage.save_user_session(session)
-                self.telegram.send_message(
-                    chat_id,
-                    MessageTemplates.PRECONFIGURED_LOGIN_FAILED.format(
-                        operator=submission.operator.display_name
-                    ),
-                    reply_markup=keyboards.remove_reply_keyboard(),
-                )
+            if self._login_with_environment_credentials(chat_id, session):
+                self._finish_mini_app_submission(chat_id, session)
                 return
-        elif not self.resume_with_registered_account(chat_id, session, announce=False):
-            session.reset()
-            self.storage.save_user_session(session)
             self.telegram.send_message(
                 chat_id,
-                MessageTemplates.MINI_APP_ACCOUNT_REQUIRED.format(
+                MessageTemplates.PRECONFIGURED_LOGIN_FAILED.format(
                     operator=submission.operator.display_name
                 ),
-                reply_markup=keyboards.remove_reply_keyboard(),
+                reply_markup=keyboards.cancel_only_keyboard(),
             )
+            self._ask_for_mini_app_account(chat_id, session, submission.operator)
             return
 
-        # A stale registered login has already been removed and the user has
-        # been sent to onboarding by resume_with_registered_account().
-        if session.last_action != UserProgress.PW_INPUT_SUCCESS:
+        account = self.storage.get_onboarded_account(chat_id, submission.operator)
+        if not account:
+            self._ask_for_mini_app_account(chat_id, session, submission.operator)
+            return
+
+        rail = self._rail_service(chat_id, submission.operator)
+        if not rail.login(account.korail_id, account.korail_pw):
+            self.storage.delete_onboarded_account(chat_id, submission.operator)
             self.telegram.send_message(
                 chat_id,
                 MessageTemplates.MINI_APP_LOGIN_EXPIRED,
-                reply_markup=keyboards.remove_reply_keyboard(),
+                reply_markup=keyboards.cancel_only_keyboard(),
             )
+            self._ask_for_mini_app_account(chat_id, session, submission.operator)
             return
 
-        session.train_info = submission.as_train_info()
+        session.credentials = account.as_credentials()
+        self._finish_mini_app_submission(chat_id, session)
+
+    def _ask_for_mini_app_account(
+        self, chat_id: int, session: UserSession, operator: Operator
+    ) -> None:
+        """Collect one missing railway login while retaining app conditions."""
+        session.last_action = UserProgress.START_ACCEPTED
+        self.storage.save_user_session(session)
+        self.telegram.send_message(
+            chat_id,
+            MessageTemplates.MINI_APP_ACCOUNT_REQUIRED.format(operator=operator.display_name)
+            + MessageTemplates.request_phone_number(),
+            reply_markup=keyboards.cancel_only_keyboard(),
+        )
+
+    def _finish_mini_app_submission(self, chat_id: int, session: UserSession) -> None:
+        """Continue from retained Mini App conditions after a verified login."""
+        session.train_info.pop(self.MINI_APP_PENDING_KEY, None)
         session.last_action = UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
         self.storage.save_user_session(session)
         self.telegram.send_message(
@@ -945,6 +971,10 @@ class ConversationHandler:
             # the registration is written to a key of its own here, at the one
             # moment the password is known to be correct.
             self._remember_account(chat_id, username, password, operator)
+
+            if session.train_info.get(self.MINI_APP_PENDING_KEY):
+                self._finish_mini_app_submission(chat_id, session)
+                return
 
             self.telegram.send_message(
                 chat_id, MessageTemplates.login_success(), reply_markup=keyboards.date_keyboard()

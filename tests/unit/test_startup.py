@@ -13,8 +13,9 @@ way this can go wrong is quiet: the wrong list on the wrong chat, or a start
 that fails over a menu.
 """
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
+from korail_bot.config.settings import settings
 from korail_bot.services.telegram_service import TelegramService
 from korail_bot.startup import publish_command_menus
 from korail_bot.storage.base import StorageInterface
@@ -30,6 +31,9 @@ class MenuFixture:
         self.storage.get_all_developers.return_value = []
         self.telegram = Mock(spec=TelegramService)
         self.telegram.set_my_commands.return_value = True
+        self.telegram.set_chat_menu_button.return_value = True
+        self.telegram.reset_chat_menu_button.return_value = True
+        self.telegram.get_bot_username.return_value = "rail_bot"
 
     def publish(self):
         return publish_command_menus(self.storage, self.telegram)
@@ -77,6 +81,26 @@ class TestPublishingTheMenus(MenuFixture):
     def test_no_developers_leaves_only_the_public_list(self):
         assert self.publish() == 0
         assert self.published() == [(Messages.PUBLIC_COMMANDS, None)]
+
+    def test_enabled_mini_app_replaces_the_default_chat_menu_with_an_app_button(self):
+        with (
+            patch.object(settings, "MINI_APP_URL", "https://example.test/app?source=bot"),
+            patch.object(settings, "mini_app_enabled", return_value=True),
+        ):
+            self.publish()
+
+        self.telegram.set_chat_menu_button.assert_called_once_with(
+            "예약 열기",
+            "https://example.test/app?source=bot&transport=start&bot=rail_bot",
+        )
+        self.telegram.reset_chat_menu_button.assert_not_called()
+
+    def test_disabled_mini_app_restores_the_default_command_menu_button(self):
+        with patch.object(settings, "mini_app_enabled", return_value=False):
+            self.publish()
+
+        self.telegram.reset_chat_menu_button.assert_called_once_with()
+        self.telegram.set_chat_menu_button.assert_not_called()
 
 
 class TestNothingHereIsWorthFailingAStartOver(MenuFixture):

@@ -63,14 +63,26 @@ class CommandHandler:
         # by their own service, and /notify_off has to reach both.
         self.multi_reminder = MultiReservationReminderService(storage, telegram_service)
 
-    def handle_start(self, chat_id: int) -> None:
+    def handle_start(self, chat_id: int, start_parameter: str = "") -> None:
         """
         Handle /start command.
 
         Args:
             chat_id: Telegram chat ID
+            start_parameter: Optional payload from a Telegram deep link
         """
         logger.info(f"Handling /start for chat_id={chat_id}")
+
+        # Profile and menu-button Mini Apps cannot use KeyboardButton's
+        # sendData service message. Their compact, untrusted conditions arrive
+        # as a deep-link parameter and go through the same validation before
+        # an ordinary /start is allowed to reset or resume anything.
+        if (
+            start_parameter
+            and self.conversation
+            and self.conversation.handle_mini_app_start_parameter(chat_id, start_parameter)
+        ):
+            return
 
         # Get or create user session
         session = self.storage.get_user_session(chat_id)
@@ -1136,7 +1148,7 @@ class CommandHandler:
 
         # Public commands
         if command == "/start":
-            self.handle_start(chat_id)
+            self.handle_start(chat_id, args)
         elif command in ("/onboarding", "/init"):
             self.handle_onboarding(chat_id)
         elif command == "/logout":

@@ -1,6 +1,7 @@
 """Boundary between the untrusted Telegram Mini App payload and a search."""
 
 import json
+import re
 from dataclasses import dataclass
 
 from korail_bot.models import Operator
@@ -9,6 +10,58 @@ from korail_bot.utils.validators import InputValidator
 MAX_WEB_APP_DATA_BYTES = 4096
 SCHEMA_VERSION = 1
 ACTION = "prepare_search"
+START_PARAMETER_PREFIX = "ma1_"
+
+# The static app offers these stations. Profile and menu-button Mini Apps do
+# not have KeyboardButton's sendData transport, so their submission returns
+# through Telegram's 64-character /start parameter. One base-36 character is
+# enough to name every option while station names are recovered and validated
+# here, on the trusted side of the boundary.
+START_PARAMETER_STATIONS = {
+    Operator.KORAIL: (
+        "서울",
+        "용산",
+        "청량리",
+        "광명",
+        "천안아산",
+        "오송",
+        "대전",
+        "동대구",
+        "부산",
+        "울산(통도사)",
+        "포항",
+        "익산",
+        "전주",
+        "광주송정",
+        "목포",
+        "여수EXPO",
+        "강릉",
+    ),
+    Operator.SRT: (
+        "수서",
+        "동탄",
+        "평택지제",
+        "천안아산",
+        "오송",
+        "대전",
+        "동대구",
+        "부산",
+        "울산(통도사)",
+        "포항",
+        "광주송정",
+        "목포",
+        "익산",
+        "전주",
+        "여수EXPO",
+        "창원중앙",
+        "진주",
+        "경주",
+    ),
+}
+_START_PARAMETER = re.compile(
+    r"^ma1_([ks])(\d{8})([0-9a-z])([0-9a-z])"
+    r"(\d{4})(\d{4})([12])([1-4])([1-9])([12])$"
+)
 
 
 class MiniAppDataError(ValueError):
@@ -108,6 +161,62 @@ class MiniAppSubmission:
             seat_option=seat_option,
             passenger_count=int(passenger),
             seat_strategy=seat_strategy,
+        )
+
+    @classmethod
+    def parse_start_parameter(cls, token: object) -> "MiniAppSubmission":
+        """Decode a profile/menu launch submission carried by ``/start``.
+
+        Telegram limits start parameters to 64 URL-safe characters. The
+        static page uses fixed-width fields and station indexes, then this
+        method expands them into the ordinary JSON shape and runs the same
+        validators as a KeyboardButton submission.
+        """
+        if not isinstance(token, str):
+            raise MiniAppDataError("예약 화면에서 받은 시작 정보가 올바르지 않습니다.")
+
+        match = _START_PARAMETER.fullmatch(token.strip())
+        if not match:
+            raise MiniAppDataError("예약 화면에서 받은 시작 정보가 올바르지 않습니다.")
+
+        (
+            operator_code,
+            dep_date,
+            src_code,
+            dst_code,
+            dep_time,
+            max_dep_time,
+            train_type,
+            seat_option,
+            passenger_count,
+            seat_strategy,
+        ) = match.groups()
+        operator = Operator.KORAIL if operator_code == "k" else Operator.SRT
+        stations = START_PARAMETER_STATIONS[operator]
+        try:
+            src_station = stations[int(src_code, 36)]
+            dst_station = stations[int(dst_code, 36)]
+        except (IndexError, ValueError) as exc:
+            raise MiniAppDataError("예약 화면에서 선택한 역을 읽을 수 없습니다.") from exc
+
+        return cls.parse(
+            json.dumps(
+                {
+                    "v": SCHEMA_VERSION,
+                    "action": ACTION,
+                    "operator": str(operator),
+                    "dep_date": dep_date,
+                    "src_station": src_station,
+                    "dst_station": dst_station,
+                    "dep_time": dep_time,
+                    "max_dep_time": max_dep_time,
+                    "train_type": train_type,
+                    "seat_option": seat_option,
+                    "passenger_count": passenger_count,
+                    "seat_strategy": seat_strategy,
+                },
+                ensure_ascii=False,
+            )
         )
 
     @staticmethod

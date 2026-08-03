@@ -13,12 +13,49 @@ it had, and the searches this app manages run over a different connection than
 the one that failed.
 """
 
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+from korail_bot.config.settings import settings
 from korail_bot.services.telegram_service import TelegramService
 from korail_bot.storage.base import StorageInterface
 from korail_bot.telegramBot.messages import Messages
 from korail_bot.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+MINI_APP_MENU_TEXT = "예약 열기"
+
+
+def _menu_launch_url(url: str, bot_username: str) -> str:
+    """Add the return transport a profile/menu Mini App needs."""
+    parsed = urlsplit(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query.update({"transport": "start", "bot": bot_username.lstrip("@")})
+    return urlunsplit(parsed._replace(query=urlencode(query)))
+
+
+def publish_mini_app_menu(telegram: TelegramService) -> None:
+    """Synchronize Telegram's persistent chat menu with Mini App settings."""
+    try:
+        if not settings.mini_app_enabled():
+            if telegram.reset_chat_menu_button():
+                logger.info("Default Telegram command menu button restored")
+            else:
+                logger.warning("Could not restore the default Telegram menu button")
+            return
+
+        username = telegram.get_bot_username()
+        if not username:
+            logger.warning("Could not discover the bot username - Mini App menu stays unchanged")
+            return
+
+        url = _menu_launch_url(settings.MINI_APP_URL or "", username)
+        if telegram.set_chat_menu_button(MINI_APP_MENU_TEXT, url):
+            logger.info("Telegram Mini App menu button published")
+        else:
+            logger.warning("Could not publish the Telegram Mini App menu button")
+    except Exception as exc:
+        logger.warning(f"Could not synchronize the Telegram Mini App menu button: {exc}")
 
 
 def publish_command_menus(storage: StorageInterface, telegram: TelegramService) -> int:
@@ -41,6 +78,8 @@ def publish_command_menus(storage: StorageInterface, telegram: TelegramService) 
     Returns:
         How many developer chats got a list of their own
     """
+    publish_mini_app_menu(telegram)
+
     if telegram.set_my_commands(Messages.PUBLIC_COMMANDS):
         logger.info("Command menu published to Telegram")
     else:

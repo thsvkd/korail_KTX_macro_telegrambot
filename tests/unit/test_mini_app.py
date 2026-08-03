@@ -4,12 +4,11 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
-from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
 from korail_bot.config.settings import Settings, settings
-from korail_bot.handlers import TelegramUpdateProcessor
+from korail_bot.handlers import CommandHandler, TelegramUpdateProcessor
 from korail_bot.handlers.conversation_handler import ConversationHandler
 from korail_bot.models import OnboardedAccount, Operator, UserProgress, UserSession
 from korail_bot.services import (
@@ -49,6 +48,25 @@ def payload(**changes) -> str:
     }
     values.update(changes)
     return json.dumps(values, ensure_ascii=False)
+
+
+def start_parameter() -> str:
+    """A profile/menu launch payload for 수서→부산 on SRT."""
+    return "".join(
+        (
+            "ma1_",
+            "s",
+            future_date(),
+            "0",  # 수서
+            "7",  # 부산
+            "0700",
+            "1200",
+            "1",  # SRT has one train type
+            "1",  # general first
+            "2",  # passengers
+            "1",  # consecutive
+        )
+    )
 
 
 class TestMiniAppSubmission:
@@ -107,6 +125,19 @@ class TestMiniAppSubmission:
         with pytest.raises(MiniAppDataError, match="너무 큽니다"):
             MiniAppSubmission.parse("가" * 1400)
 
+    def test_profile_start_parameter_becomes_the_same_validated_submission(self):
+        submission = MiniAppSubmission.parse_start_parameter(start_parameter())
+
+        assert submission.operator is Operator.SRT
+        assert submission.src_station == "수서"
+        assert submission.dst_station == "부산"
+        assert submission.passenger_count == 2
+
+    @pytest.mark.parametrize("token", ["", "ma1_", "ma1_x2026080407070012001121"])
+    def test_invalid_profile_start_parameters_are_refused(self, token):
+        with pytest.raises(MiniAppDataError):
+            MiniAppSubmission.parse_start_parameter(token)
+
 
 class TestMiniAppKeyboard:
     def test_launch_uses_a_reply_keyboard_web_app_button(self):
@@ -144,6 +175,16 @@ class TestMiniAppConfiguration:
         assert 'name="payment"' not in lower
         assert "connect-src 'none'" in page
 
+    def test_the_static_page_offers_both_railways_and_returns_menu_launches_to_chat(self):
+        page = (WEBAPP / "index.html").read_text()
+        script = (WEBAPP / "app.js").read_text()
+
+        assert 'value="korail"' in page
+        assert 'value="srt"' in page
+        assert '"ma1_"' in script
+        assert "openTelegramLink" in script
+        assert 'get("operators")' not in script
+
 
 class MiniAppConversationFixture:
     def setup_method(self):
@@ -167,7 +208,7 @@ class MiniAppConversationFixture:
 
 
 class TestMiniAppOffer(MiniAppConversationFixture):
-    def test_start_offer_contains_only_available_operators(self):
+    def test_start_offer_leaves_both_operators_available(self):
         with (
             patch.object(settings, "MINI_APP_URL", "https://example.test/app?source=bot"),
             patch.object(settings, "mini_app_enabled", return_value=True),
@@ -177,15 +218,15 @@ class TestMiniAppOffer(MiniAppConversationFixture):
         assert offered is True
         markup = self.telegram.send_message.call_args.kwargs["reply_markup"]
         url = markup["keyboard"][0][0]["web_app"]["url"]
-        assert parse_qs(urlsplit(url).query) == {"source": ["bot"], "operators": ["korail"]}
+        assert url == "https://example.test/app?source=bot"
 
-    def test_no_registered_account_keeps_the_chat_flow(self):
+    def test_no_registered_account_can_still_choose_an_operator_in_the_app(self):
         self.storage.get_onboarded_operators.return_value = []
         with (
             patch.object(settings, "MINI_APP_URL", "https://example.test/app"),
             patch.object(settings, "mini_app_enabled", return_value=True),
         ):
-            assert self.conversation.offer_mini_app(CHAT_ID, self.session) is False
+            assert self.conversation.offer_mini_app(CHAT_ID, self.session) is True
 
 
 class TestApplyingMiniAppData(MiniAppConversationFixture):
@@ -206,15 +247,42 @@ class TestApplyingMiniAppData(MiniAppConversationFixture):
             "remove_keyboard": True
         }
 
-    def test_unregistered_operator_is_refused_without_listing_trains(self):
+    def test_unregistered_srt_account_is_collected_without_losing_the_app_conditions(self):
         self.storage.get_onboarded_account.return_value = None
         self.conversation._show_train_selection = Mock()
+        rail = Mock()
+        rail.login.return_value = True
 
-        self.conversation.handle_mini_app_data(CHAT_ID, payload())
+        self.conversation.handle_mini_app_data(CHAT_ID, payload(operator="srt", src_station="수서"))
 
         self.conversation._show_train_selection.assert_not_called()
-        assert self.session.in_progress is False
+        assert self.session.in_progress is True
+        assert self.session.last_action == UserProgress.START_ACCEPTED
+        assert self.session.train_info["operator"] == "srt"
+        assert self.session.train_info["srcLocate"] == "수서"
         assert "등록되어 있지" in self.telegram.send_message.call_args.args[1]
+
+        with patch("korail_bot.handlers.conversation_handler.SrtService", return_value=rail):
+            self.conversation.handle_message(CHAT_ID, PHONE)
+            self.conversation.handle_message(CHAT_ID, PASSWORD)
+
+        assert self.session.last_action == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+        assert self.session.train_info["srcLocate"] == "수서"
+        self.conversation._show_train_selection.assert_called_once_with(CHAT_ID, self.session)
+
+    def test_profile_start_parameter_uses_the_same_conversation_path(self):
+        self.account(Operator.SRT)
+        rail = Mock()
+        rail.login.return_value = True
+        self.conversation._show_train_selection = Mock()
+
+        with patch("korail_bot.handlers.conversation_handler.SrtService", return_value=rail):
+            assert (
+                self.conversation.handle_mini_app_start_parameter(CHAT_ID, start_parameter())
+                is True
+            )
+
+        self.conversation._show_train_selection.assert_called_once_with(CHAT_ID, self.session)
 
     def test_running_search_cannot_be_replaced(self):
         self.session.last_action = UserProgress.FINDING_TICKET
@@ -275,3 +343,25 @@ class TestMiniAppUpdateRouting:
         self.processor.process(update)
 
         self.processor.command_handler.handle_chat_start.assert_called_once_with(CHAT_ID)
+
+
+class TestMiniAppStartCommandRouting:
+    def test_start_parameter_is_given_to_the_mini_app_conversation(self):
+        storage = Mock(spec=StorageInterface)
+        telegram = Mock(spec=TelegramService)
+        conversation = Mock()
+        conversation.handle_mini_app_start_parameter.return_value = True
+        handler = CommandHandler(
+            storage,
+            telegram,
+            Mock(spec=ReservationService),
+            Mock(spec=PaymentReminderService),
+            conversation_handler=conversation,
+        )
+
+        assert handler.route_command(CHAT_ID, f"/start {start_parameter()}") is True
+
+        conversation.handle_mini_app_start_parameter.assert_called_once_with(
+            CHAT_ID, start_parameter()
+        )
+        storage.get_user_session.assert_not_called()

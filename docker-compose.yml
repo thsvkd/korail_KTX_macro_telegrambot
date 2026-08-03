@@ -1,9 +1,16 @@
 services:
   app:
-    # Built locally by scripts/deploy.sh build. Set IMAGE_NAME in .env to run
-    # an image you publish yourself instead; there is no shared registry image
-    # to pull, on purpose - running a bot that handles Korail logins from an
-    # image someone else controls is not a default anyone should inherit.
+    # Built from this checkout: `docker compose up --build` or `make build`.
+    # There is no shared registry image to pull, on purpose - running a bot
+    # that handles Korail logins from an image someone else controls is not a
+    # default anyone should inherit. Set IMAGE_NAME in .env to publish and run
+    # your own tag instead.
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.13}
+        UV_VERSION: ${UV_VERSION:-0.9}
     image: ${IMAGE_NAME:-korailbot:local}
     container_name: ${APP_CONTAINER_NAME:-korail_bot}
     environment:
@@ -18,6 +25,33 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    # SIGTERM makes the bot stop its running searches and write their state
+    # back to Redis before exiting. Docker's 10s default is enough for an idle
+    # bot and not for a busy one, and the difference is a search that resumes
+    # after the restart versus one that has to be reconstructed.
+    stop_grace_period: 30s
+    # waitress listens on loopback inside the container - nothing is published
+    # to the host - so the check has to run inside it too. It answers the
+    # question the restart policy needs answered: is the process still serving,
+    # or is it up but wedged.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import os, socket;
+          socket.create_connection(
+          ('127.0.0.1', int(os.environ.get('FLASK_PORT', '8080'))), 3).close()"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    # Without a cap the JSON log file grows until the disk is full, which on a
+    # single-board host is the failure that takes the bot down with it.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     networks:
       - korail_network
 
@@ -26,10 +60,16 @@ services:
     container_name: ${REDIS_CONTAINER_NAME:-korail_redis}
     # Deliberately not published to the host: Redis holds user sessions and
     # encrypted credentials, and only the app container needs to reach it.
+    # `scripts/server.sh redis-cli` goes in through `docker exec` instead.
     expose:
       - "6379"
     volumes:
-      - redis_data:/data
+      # A bind mount rather than a named volume, so registered accounts and
+      # in-flight searches live at a path you can see and back up - and so they
+      # survive every way a container or volume gets removed, including
+      # `docker compose down --volumes` and `docker volume prune`. The only
+      # thing that deletes them is deleting this directory.
+      - ${REDIS_DATA_DIR:-./.data/redis}:/data
     env_file:
       - ${BOT_ENV_FILE:-.env}
     command: >
@@ -46,12 +86,13 @@ services:
       timeout: 3s
       retries: 5
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - korail_network
-
-volumes:
-  redis_data:
-    driver: local
 
 networks:
   korail_network:

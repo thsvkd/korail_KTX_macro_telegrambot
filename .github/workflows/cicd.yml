@@ -215,6 +215,19 @@ jobs:
                 # Pull latest image
                 docker pull '${{ vars.IMAGE_NAME }}'
 
+                # Redis state moved from a named volume to a bind mount, so
+                # that stopping or removing containers cannot take registered
+                # accounts and running searches with them. A host that still
+                # has the old volume would otherwise come up empty and silent:
+                # stop instead, and say what to run.
+                legacy="$(docker volume ls -q --filter name=_redis_data | head -n 1)"
+                if [ -n "$legacy" ] && [ ! -d ./.data/redis/appendonlydir ]; then
+                  echo "Redis data is still in the '$legacy' volume." >&2
+                  echo "Move it once, from a checkout on this host:" >&2
+                  echo "  scripts/migrate-redis.sh --from-volume $legacy" >&2
+                  exit 1
+                fi
+
                 # Stop and remove old containers
                 docker compose down
 

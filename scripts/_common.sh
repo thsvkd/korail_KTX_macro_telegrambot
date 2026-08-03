@@ -156,6 +156,11 @@ compose() {
     local files=(-f "${ROOT_DIR}/docker-compose.yml")
     [[ "$BOT_RUNTIME_PROFILE" != "test" && -f "${ROOT_DIR}/docker-compose.override.yml" ]] && \
         files+=(-f "${ROOT_DIR}/docker-compose.override.yml")
+    # A caller-generated fragment, for settings that belong to one invocation
+    # rather than to the checkout - `server.sh start --debug` raising the log
+    # level without editing .env or leaving anything behind.
+    [[ -n "${COMPOSE_EXTRA_FILE:-}" && -f "${COMPOSE_EXTRA_FILE}" ]] && \
+        files+=(-f "$COMPOSE_EXTRA_FILE")
 
     if docker compose version >/dev/null 2>&1; then
         docker compose --env-file "$ENV_FILE" "${files[@]}" "$@"
@@ -191,6 +196,51 @@ use_test_stack() {
     BOT_RUNTIME_PROFILE="test"
     export COMPOSE_PROJECT_NAME
     export BOT_RUNTIME_PROFILE
+}
+
+# redis_data_dir - absolute host path holding the selected stack's Redis state
+#
+# docker-compose.yml bind-mounts this instead of using a named volume, so the
+# data outlives every container and every volume command. Relative values are
+# read the way compose reads them: against the repository root.
+redis_data_dir() {
+    local dir
+    dir="$(env_value REDIS_DATA_DIR)"
+    dir="${dir:-./.data/redis}"
+    if [[ "$dir" != /* ]]; then
+        dir="${ROOT_DIR}/${dir#./}"
+    fi
+    printf '%s' "$dir"
+}
+
+# ensure_redis_data_dir - create the bind-mount source before compose does
+#
+# Compose creates a missing bind source itself, owned by root. Creating it here
+# first leaves the directory owned by whoever runs these scripts, so backing it
+# up does not need sudo. Redis chowns the files it writes inside either way.
+ensure_redis_data_dir() {
+    mkdir -p "$(redis_data_dir)"
+}
+
+# compose_container <app|redis> - the container name the selected stack uses
+compose_container() {
+    local name
+    case "$1" in
+        app)   name="$(env_value APP_CONTAINER_NAME)";   name="${name:-korail_bot}" ;;
+        redis) name="$(env_value REDIS_CONTAINER_NAME)"; name="${name:-korail_redis}" ;;
+        *)     return 1 ;;
+    esac
+    printf '%s' "$name"
+}
+
+# container_running <name> - true when a container by that name is up
+container_running() {
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$1"
+}
+
+# container_exists <name> - true when it is up, stopped or merely created
+container_exists() {
+    docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$1"
 }
 
 # require_uv - abort unless uv is installed
@@ -321,7 +371,25 @@ load_bot_runtime_env() {
     return 0
 }
 
-# _is_bot <pid> - true when the pid is really one of ours
+# _in_container <pid> - true when the pid belongs to a container, not this host
+#
+# A container's processes are in the host process table too, so pgrep finds the
+# bot inside the compose stack and it carries the same command line and the same
+# BOT_RUNTIME_PROFILE. Nothing below could tell it apart from a host process,
+# and the consequence is not cosmetic: `stop` would signal into the container,
+# which compose then restarts, and `status` would report the containerised bot
+# as a second copy fighting for the token.
+#
+# The mount namespace is the discriminator. Every container has its own; a host
+# process shares this script's.
+_in_container() {
+    local pid="$1" theirs mine
+    theirs="$(readlink "/proc/${pid}/ns/mnt" 2>/dev/null)" || return 1
+    mine="$(readlink /proc/self/ns/mnt 2>/dev/null)" || return 1
+    [[ -n "$theirs" && "$theirs" != "$mine" ]]
+}
+
+# _is_bot <pid> - true when the pid is really one of ours, running on this host
 #
 # The number in the pidfile is only a claim. Pids get reused, so a stale file
 # can name a process that has nothing to do with us, and signalling that would
@@ -330,6 +398,7 @@ _is_bot() {
     local pid="$1" cmd profile
     [[ "$pid" =~ ^[0-9]+$ ]] || return 1
     kill -0 "$pid" 2>/dev/null || return 1
+    _in_container "$pid" && return 1
     cmd="$(_pid_cmdline "$pid")" || return 1
     [[ "$cmd" == *korail_bot.app* ]] || return 1
     profile="$(_pid_runtime_profile "$pid")" || return 1

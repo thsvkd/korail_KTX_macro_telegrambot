@@ -1,50 +1,64 @@
 #!/usr/bin/env bash
 #
-# The bot as a service on this host: start it, stop it, look at it.
+# The bot as a service on this machine: start it, stop it, look at it.
 #
-# Serves with waitress, the same server the container uses, rather than the
-# Flask development server: this machine runs the bot for real. Telegram
-# updates are pulled with long polling, so no public address is needed, and a
-# missing loopback Redis is started automatically in its isolated container.
+# By default this drives the docker compose stack - the app and its Redis, both
+# in containers - which is how the bot is deployed. Telegram updates are pulled
+# with long polling, so no public address is needed and neither container
+# publishes a port. Redis state is bind-mounted from the host, so stopping or
+# removing containers never touches registered accounts or running searches.
+#
+# `--host` runs the app straight out of .venv instead, against a separate
+# development Redis. That is for debugging with a local interpreter; it does
+# not see the compose stack's data.
 #
 # `--test` selects the staging bot in .env.test, which has a separate token,
-# pidfile, log, port and Redis. It may stay up beside production without
-# either lifecycle touching the other.
+# project, containers, port and Redis directory. It may stay up beside
+# production without either lifecycle touching the other.
 #
 # Usage:
-#   scripts/server.sh start [--daemon] [--debug]
-#   scripts/server.sh stop
-#   scripts/server.sh restart [--foreground] [--debug]
+#   scripts/server.sh start [--foreground] [--build] [--debug]
+#   scripts/server.sh stop [--remove]
+#   scripts/server.sh restart [--build] [--debug]
 #   scripts/server.sh status [--log N]
 #   scripts/server.sh logs [N] [-f]
 #   scripts/server.sh redis [start|stop|status]
 #   scripts/server.sh redis-cli [--keys|COMMAND ...]
 #
-#   ... any of them with --test to act on the staging bot instead.
+#   ... any of them with --test to act on the staging bot instead,
+#       or with --host to act on a .venv process instead of the stack.
 #
 # `redis` manages the container the bot talks to; `redis-cli` looks inside
 # whichever one it is actually using, the compose stack's included.
 #
 # `status` exits 0 when the bot is running and 1 when it is not, so it can
 # gate something else:
-#   scripts/server.sh status >/dev/null || scripts/server.sh start --daemon
+#   scripts/server.sh status >/dev/null || scripts/server.sh start
 
 # shellcheck source=scripts/_common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-usage() { sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; }
 
 TEST_RUNTIME=0
+# compose unless asked otherwise: the deployed shape is the one that should be
+# reachable by default, so `start` after a reboot brings up what is deployed
+# rather than a second, differently-configured copy on the host.
+RUNTIME_BACKEND="${RUNTIME_BACKEND:-compose}"
 PRODUCTION_ENV_FILE="$ENV_FILE"
 FILTERED_ARGS=()
 for arg in "$@"; do
-    if [[ "$arg" == "--test" ]]; then
-        TEST_RUNTIME=1
-    else
-        FILTERED_ARGS+=("$arg")
-    fi
+    case "$arg" in
+        --test) TEST_RUNTIME=1 ;;
+        --host) RUNTIME_BACKEND="host" ;;
+        --compose) RUNTIME_BACKEND="compose" ;;
+        *) FILTERED_ARGS+=("$arg") ;;
+    esac
 done
 set -- "${FILTERED_ARGS[@]}"
+
+# on_compose - true when this invocation acts on the container stack
+on_compose() { [[ "$RUNTIME_BACKEND" == "compose" ]]; }
 
 if (( TEST_RUNTIME )); then
     use_test_runtime
@@ -58,18 +72,17 @@ fi
 # Every hint printed below has to name the right runtime, and writing that out
 # by hand is how half of them ended up naming the other one.
 self() {
-    if (( TEST_RUNTIME )); then
-        printf 'scripts/server.sh %s --test' "$*"
-    else
-        printf 'scripts/server.sh %s' "$*"
-    fi
+    local suffix=""
+    (( TEST_RUNTIME )) && suffix+=" --test"
+    on_compose || suffix+=" --host"
+    printf 'scripts/server.sh %s%s' "$*" "$suffix"
 }
 
 # ==================== Redis ====================
 
-# The standalone Redis a host-side run needs. The compose stack brings its own
-# (see scripts/deploy.sh); this is the one for running the bot straight on the
-# machine, bound to loopback so nothing off the host can reach it.
+# Redis for the selected backend: the compose service by default, or the
+# standalone development container a `--host` run needs - bound to loopback so
+# nothing off the host can reach it.
 server_redis() {
     local action="${1:-start}" container host_port setup_command password
 
@@ -78,6 +91,11 @@ server_redis() {
     esac
 
     require_cmd docker
+
+    if on_compose; then
+        compose_redis "$action"
+        return
+    fi
 
     if (( TEST_RUNTIME )); then
         container="$(env_value DEV_REDIS_CONTAINER_NAME)"
@@ -171,10 +189,294 @@ except OSError as exc:
 PY
 }
 
+# ==================== Compose backend ====================
+#
+# The deployed shape: app and Redis as containers on a private network, with
+# Redis state bind-mounted from the host. Nothing here removes that directory,
+# so every command below - stop, down, even removing the containers - leaves
+# registered accounts and in-flight searches where they are.
+
+# setup_hint - the setup command that fixes a missing value in this env file
+setup_hint() {
+    if (( TEST_RUNTIME )); then
+        printf 'scripts/setup.sh --test'
+    else
+        printf 'scripts/setup.sh secrets'
+    fi
+}
+
+# compose_preflight_redis - refuse to start a stack Redis cannot come up in
+compose_preflight_redis() {
+    require_cmd docker
+    require_env_file
+    # docker-compose.yml refuses to start Redis without a password, and does it
+    # with an interpolation error rather than something a reader can act on.
+    [[ -n "$(env_value REDIS_PASSWORD)" ]] || \
+        die "REDIS_PASSWORD is empty in ${ENV_FILE#"$ROOT_DIR"/}. Run '$(setup_hint)'."
+    ensure_redis_data_dir
+}
+
+# compose_preflight_app - everything above, plus what the bot itself needs
+compose_preflight_app() {
+    local token production_token
+
+    compose_preflight_redis
+
+    token="$(clean_default "$(env_value BOTTOKEN)")"
+    [[ -n "$token" ]] || \
+        die "BOTTOKEN is empty in ${ENV_FILE#"$ROOT_DIR"/}. Run '$(setup_hint)'."
+
+    # Two stacks on one token means Telegram hands each update to whichever
+    # asked first and answers the other with a 409.
+    if (( TEST_RUNTIME )) && [[ -f "$PRODUCTION_ENV_FILE" ]]; then
+        production_token="$(sed -n 's/^BOTTOKEN=//p' "$PRODUCTION_ENV_FILE" | tail -n 1)"
+        if [[ -n "$production_token" && "$token" == "$production_token" ]]; then
+            die ".env.test must use a different BOTTOKEN from .env. Create a separate bot with BotFather."
+        fi
+    fi
+}
+
+# compose_debug_override - raise the log level for this invocation only
+#
+# LOG_LEVEL reaches the container through env_file, so it cannot be overridden
+# from the shell the way it can for a host process. A one-service fragment can,
+# without editing .env or leaving state behind for the next start.
+compose_debug_override() {
+    mkdir -p "$RUN_DIR"
+    COMPOSE_EXTRA_FILE="${RUN_DIR}/compose-debug.yml"
+    cat > "$COMPOSE_EXTRA_FILE" <<'YAML'
+services:
+  app:
+    environment:
+      LOG_LEVEL: DEBUG
+YAML
+    export COMPOSE_EXTRA_FILE
+}
+
+# compose_await_app - wait for the app container to be up and past its startup
+#
+# Coming up means reading the configuration, connecting to Redis and
+# reconciling any interrupted search, so a container that exists is not yet a
+# bot that works. Returns 1 when it stopped instead.
+compose_await_app() {
+    local container="$1" state _
+    for _ in $(seq 1 40); do
+        state="$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null || echo missing)"
+        [[ "$state" == "running" ]] || return 1
+        if compose logs --tail 200 app 2>/dev/null | \
+            grep -q 'Telegram poller started\|Serving on'; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 0
+}
+
+# compose_redis <start|stop|status> - the stack's Redis on its own
+compose_redis() {
+    local action="${1:-start}" container
+
+    cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
+    container="$(compose_container redis)"
+
+    case "$action" in
+        status)
+            if container_running "$container"; then
+                ok "${container} 실행 중 (컨테이너 네트워크 전용, 호스트 포트 없음)"
+            else
+                info "${container} 실행 중이 아님"
+            fi
+            info "데이터: $(redis_data_dir)"
+            ;;
+
+        stop)
+            compose_preflight_redis
+            if container_running "$container"; then
+                info "Stopping ${container}"
+                compose stop redis
+                ok "Stopped. 데이터는 $(redis_data_dir) 에 그대로 있습니다."
+            else
+                info "${container} 실행 중이 아님"
+            fi
+            ;;
+
+        start)
+            compose_preflight_redis
+            info "Starting ${container}"
+            compose up -d --wait redis
+            ok "Ready. 봇을 띄우려면: $(self start)"
+            ;;
+
+        *)
+            die "Unknown redis action: ${action}. Use start, stop or status."
+            ;;
+    esac
+}
+
+# compose_start [--foreground] [--build] [--debug]
+compose_start() {
+    local foreground=0 build=0 recreate=0 arg container up=(up)
+
+    for arg in "$@"; do
+        case "$arg" in
+            --foreground|--fg) foreground=1 ;;
+            -d|--daemon|--detach) foreground=0 ;;
+            --build) build=1 ;;
+            --recreate|--force-recreate) recreate=1 ;;
+            --debug) compose_debug_override ;;
+            -h|--help) usage; return 0 ;;
+            *) die "Unknown option: $arg" ;;
+        esac
+    done
+
+    cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
+    compose_preflight_app
+    container="$(compose_container app)"
+
+    info "Runtime profile: ${BOT_RUNTIME_PROFILE} (${ENV_FILE#"$ROOT_DIR"/})"
+    info "Receive mode: long polling (no public address needed)"
+    info "Redis data:   $(redis_data_dir)"
+
+    # No image and a build section means compose builds it here rather than
+    # failing, so a fresh checkout needs no separate build step.
+    (( build )) && up+=(--build)
+
+    if (( foreground )); then
+        info "Starting the stack in the foreground (Ctrl-C to stop)"
+        compose "${up[@]}"
+        return
+    fi
+
+    (( recreate )) && up+=(--force-recreate)
+    up+=(-d)
+
+    info "Starting the stack"
+    compose "${up[@]}"
+
+    if ! compose_await_app "$container"; then
+        err "앱 컨테이너가 바로 종료됐습니다. 마지막 로그:"
+        compose logs --tail 30 app >&2 || true
+        die "Start failed."
+    fi
+
+    ok "Running as ${container}"
+    info "Status: $(self status)"
+    info "Logs:   $(self logs) -f"
+    info "Stop:   $(self stop)"
+}
+
+# compose_stop [--remove]
+#
+# `stop` leaves the containers in place so the next start is a resume;
+# `--remove` takes them and the network away as well. Neither touches the
+# Redis directory, so the difference is only how much gets rebuilt next time.
+compose_stop() {
+    local remove=0 arg container
+
+    for arg in "$@"; do
+        case "$arg" in
+            --remove|--down|--rm) remove=1 ;;
+            -h|--help) usage; return 0 ;;
+            *) die "Unknown option: $arg" ;;
+        esac
+    done
+
+    cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
+    require_env_file
+    container="$(compose_container app)"
+
+    if (( remove )); then
+        info "Stopping and removing the stack"
+        compose down
+        ok "Removed. 데이터는 $(redis_data_dir) 에 그대로 있습니다."
+        return
+    fi
+
+    if ! container_exists "$container"; then
+        info "Nothing to stop - the stack is not up"
+        return
+    fi
+
+    info "Stopping the stack"
+    compose stop
+    ok "Stopped. 데이터는 $(redis_data_dir) 에 그대로 있습니다."
+}
+
+# compose_restart [--build] [--debug]
+#
+# Only the app is recreated. Redis is left alone unless it is down: restarting
+# it would drop the app's connection for no reason, and the reason to restart
+# is almost always new code or new configuration for the bot.
+compose_restart() {
+    local build=0 arg container recreate=(--force-recreate --no-deps)
+
+    for arg in "$@"; do
+        case "$arg" in
+            --build) build=1 ;;
+            --debug) compose_debug_override ;;
+            --foreground|--fg) die "restart always ends detached. Use '$(self start) --foreground'." ;;
+            -h|--help) usage; return 0 ;;
+            *) die "Unknown option: $arg" ;;
+        esac
+    done
+
+    cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
+    compose_preflight_app
+    container="$(compose_container app)"
+
+    info "Making sure Redis is up"
+    compose up -d --wait redis
+
+    (( build )) && recreate+=(--build)
+
+    info "Recreating the app container"
+    compose up -d "${recreate[@]}" app
+
+    if ! compose_await_app "$container"; then
+        err "앱 컨테이너가 바로 종료됐습니다. 마지막 로그:"
+        compose logs --tail 30 app >&2 || true
+        die "Restart failed."
+    fi
+
+    ok "Running as ${container}"
+}
+
+# compose_logs [N] [-f] [service]
+compose_logs() {
+    local lines=20 follow=0 arg services=()
+
+    for arg in "$@"; do
+        case "$arg" in
+            -f|--follow) follow=1 ;;
+            [0-9]*) lines="$arg" ;;
+            -h|--help) usage; return 0 ;;
+            app|redis) services+=("$arg") ;;
+            *) die "Unknown option: $arg" ;;
+        esac
+    done
+
+    cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
+    require_env_file
+
+    local args=(logs --tail "$lines")
+    (( follow )) && args+=(--follow)
+    (( ${#services[@]} )) || services=(app)
+
+    compose "${args[@]}" "${services[@]}"
+}
+
 # ==================== Start ====================
 
 server_start() {
     local daemon=0 arg listen threads pid production_token configured_test_token
+
+    if on_compose; then
+        compose_start "$@"
+        return
+    fi
+
+    warn "--host 는 .venv 프로세스와 별도 개발용 Redis를 씁니다."
+    warn "배포된 스택의 등록 계정·검색 상태는 보이지 않습니다."
 
     for arg in "$@"; do
         case "$arg" in
@@ -331,6 +633,11 @@ server_start() {
 # ==================== Stop ====================
 
 server_stop() {
+    if on_compose; then
+        compose_stop "$@"
+        return
+    fi
+
     case "${1:-}" in
         -h|--help) usage; return 0 ;;
         "") ;;
@@ -353,6 +660,11 @@ server_stop() {
 server_restart() {
     local arg forwarded=(--daemon)
 
+    if on_compose; then
+        compose_restart "$@"
+        return
+    fi
+
     for arg in "$@"; do
         case "$arg" in
             --foreground|--fg) forwarded=(--foreground) ;;
@@ -369,6 +681,11 @@ server_restart() {
 
 server_logs() {
     local lines=20 follow=0 arg
+
+    if on_compose; then
+        compose_logs "$@"
+        return
+    fi
 
     for arg in "$@"; do
         case "$arg" in
@@ -468,11 +785,196 @@ server_redis_cli() {
     exec docker exec "${docker_flags[@]}" "$container" \
         redis-cli -a "$password" --no-auth-warning "$@"
 }
+# workload_report_py - the program that prints what the bot is working on
+#
+# Kept as a function rather than inline so the same program can be fed to a
+# host interpreter or to `compose exec` inside the app container. It has to
+# run where the searches run: it reports whether each recorded search still
+# has a live process, and pids only mean something in their own namespace.
+workload_report_py() {
+    cat <<'PY'
+import os
+import sys
+
+from korail_bot.storage.redis import RedisStorage
+from korail_bot.utils.privacy import mask_phone
+
+
+def alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+storage = RedisStorage()
+
+reservations = storage.get_all_running_reservations()
+if not reservations:
+    print("  검색 중인 예약 없음")
+else:
+    for r in reservations:
+        p = r.search_params
+        running = alive(r.process_id)
+        mark = "\033[32m●\033[0m 검색 중" if running else "\033[31m●\033[0m 프로세스 없음"
+        print(
+            f"  {mark}  chat_id={r.chat_id}  "
+            f"{p.rail_operator.display_name}={mask_phone(r.korail_id)}"
+        )
+        print(f"      {p.src_locate} → {p.dst_locate}  {p.dep_date}  "
+              f"{p.dep_time[:4]}~{p.max_dep_time}  {p.train_type_display}  "
+              f"{p.passenger_count}명  {p.seat_strategy}")
+        print(f"      pid={r.process_id}  run_id={r.run_id or '(없음)'}")
+        if not running:
+            print("      ⚠ 기록만 남고 검색은 죽었습니다. 봇을 재시작하면 정리/재개합니다.")
+
+scheduled = storage.get_all_scheduled_searches()
+if scheduled:
+    print()
+    for s in sorted(scheduled, key=lambda s: s.start_at):
+        p = s.search_params
+        print(
+            f"  ⏰ 예약 대기  chat_id={s.chat_id}  "
+            f"{p.rail_operator.display_name}={mask_phone(s.korail_id)}"
+        )
+        print(f"      시작 {s.start_at:%m/%d %H:%M}  ({s.seconds_until_due() / 60:.0f}분 뒤)")
+        print(f"      {p.src_locate} → {p.dst_locate}  {p.dep_date}  "
+              f"{p.dep_time[:4]}~{p.max_dep_time}  {p.passenger_count}명")
+
+payments = storage.get_all_payment_statuses()
+pending = [s for s in payments if not s.completed]
+if pending:
+    print()
+    for s in pending:
+        state = "알림 동작 중" if s.reminder_active else "알림 꺼짐"
+        since = s.created_at.strftime("%H:%M:%S") if s.created_at else "?"
+        print(f"  💳 결제 대기  chat_id={s.chat_id}  {state}  (시작 {since})")
+
+if not reservations and not scheduled and not pending:
+    sys.exit(0)
+PY
+}
+
 
 # ==================== Status ====================
 
+heading() { printf '\n%s\n' "${C_BLUE}── $* ${C_RESET}"; }
+field()   { printf '  %-22s %s\n' "$1" "$2"; }
+
+# compose_status [--log N] - the same report, for the container stack
+#
+# Exits 1 when the bot is not running, like the host-side report, so either
+# backend can gate something else.
+compose_status() {
+    local show_log=0 log_lines=20 app redis running=0 state status health
+
+    while (( $# )); do
+        case "$1" in
+            --log) show_log=1; [[ "${2:-}" =~ ^[0-9]+$ ]] && { log_lines="$2"; shift; } ;;
+            -h|--help) usage; return 0 ;;
+            *) die "Unknown option: $1" ;;
+        esac
+        shift
+    done
+
+    require_cmd docker
+    cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
+    require_env_file
+
+    app="$(compose_container app)"
+    redis="$(compose_container redis)"
+
+    # -------------------- The container --------------------
+
+    heading "봇 컨테이너"
+
+    if ! container_exists "$app"; then
+        err "컨테이너 없음"
+        field "이름" "$app"
+        field "기동" "$(self start)"
+    else
+        state="$(docker inspect -f '{{.State.Status}}' "$app" 2>/dev/null || echo unknown)"
+        # 'Up 2 days (healthy)' - the same string docker ps prints, which
+        # already carries uptime and health in the form people recognise.
+        status="$(docker ps -a --filter "name=^${app}$" --format '{{.Status}}' 2>/dev/null || true)"
+        if [[ "$state" == "running" ]]; then
+            running=1
+            ok "실행 중"
+        else
+            err "실행 중이 아님 (${state})"
+        fi
+        field "이름" "$app"
+        field "상태" "${status:-?}"
+        field "이미지" "$(docker inspect -f '{{.Config.Image}}' "$app" 2>/dev/null || echo '?')"
+        field "재시작 횟수" "$(docker inspect -f '{{.RestartCount}}' "$app" 2>/dev/null || echo '?')"
+        (( running )) || field "기동" "$(self start)"
+    fi
+
+    # -------------------- Configuration --------------------
+
+    load_env
+
+    heading "설정"
+    field "런타임" "${BOT_RUNTIME_PROFILE}"
+    field "설정 원본" "${ENV_FILE#"$ROOT_DIR"/} (컨테이너 env_file)"
+    field "Telegram updates" "long polling"
+    field "LOG_LEVEL" "${LOG_LEVEL:-INFO}"
+    field "검색 간격" "${SEARCH_INTERVAL:-1}초 (지터 ${SEARCH_INTERVAL_JITTER:-0.4})"
+    field "장애 알림" "연속 ${SEARCH_FAILURE_ALERT_THRESHOLD:-10}회 실패 시"
+    field "Redis 데이터" "$(redis_data_dir)"
+
+    # -------------------- Connectivity --------------------
+
+    heading "연결"
+
+    if container_running "$redis"; then
+        health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$redis" 2>/dev/null || true)"
+        ok "Redis ${redis} 실행 중${health:+ (${health})}"
+    else
+        err "Redis ${redis} 무응답 - '$(self 'redis start')' 로 기동"
+    fi
+
+    if (( running )); then
+        health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$app" 2>/dev/null || true)"
+        case "$health" in
+            healthy) ok "HTTP 127.0.0.1:${FLASK_PORT:-8080} 응답 (컨테이너 내부)" ;;
+            starting) info "헬스체크 시작 대기 중" ;;
+            "") info "헬스체크 없음" ;;
+            *) err "헬스체크 ${health} - 봇은 살아 있는데 포트가 안 열렸습니다" ;;
+        esac
+    fi
+
+    # -------------------- What it is working on --------------------
+
+    if (( running )); then
+        heading "진행 중인 작업"
+        # Inside the container, where the searches actually run: the report
+        # checks each recorded search against the process table it belongs to.
+        workload_report_py \
+            | compose exec -T -e LOG_LEVEL=CRITICAL app python - \
+            || warn "Redis 상태를 읽지 못했습니다"
+    fi
+
+    # -------------------- Log --------------------
+
+    if (( show_log )); then
+        heading "로그 마지막 ${log_lines}줄"
+        compose logs --tail "$log_lines" --no-color app 2>/dev/null | sed 's/^/  /' \
+            || warn "로그를 읽지 못했습니다"
+    fi
+
+    echo
+    (( running )) || exit 1
+}
+
 server_status() {
     local show_log=0 log_lines=20 arg pid running config_source
+
+    if on_compose; then
+        compose_status "$@"
+        return
+    fi
 
     while (( $# )); do
         case "$1" in
@@ -484,9 +986,6 @@ server_status() {
     done
 
     cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
-
-    heading() { printf '\n%s\n' "${C_BLUE}── $* ${C_RESET}"; }
-    field()   { printf '  %-22s %s\n' "$1" "$2"; }
 
     # -------------------- The process --------------------
 
@@ -603,68 +1102,8 @@ except OSError:
         # LOG_LEVEL=CRITICAL: opening the storage logs that it connected, which
         # belongs in the bot's log and not in the middle of this report.
         # shellcheck disable=SC2046
-        LOG_LEVEL=CRITICAL $(python_runner) - <<'PY' || warn "Redis 상태를 읽지 못했습니다"
-import os
-import sys
-
-from korail_bot.storage.redis import RedisStorage
-from korail_bot.utils.privacy import mask_phone
-
-
-def alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
-
-
-storage = RedisStorage()
-
-reservations = storage.get_all_running_reservations()
-if not reservations:
-    print("  검색 중인 예약 없음")
-else:
-    for r in reservations:
-        p = r.search_params
-        running = alive(r.process_id)
-        mark = "\033[32m●\033[0m 검색 중" if running else "\033[31m●\033[0m 프로세스 없음"
-        print(
-            f"  {mark}  chat_id={r.chat_id}  "
-            f"{p.rail_operator.display_name}={mask_phone(r.korail_id)}"
-        )
-        print(f"      {p.src_locate} → {p.dst_locate}  {p.dep_date}  "
-              f"{p.dep_time[:4]}~{p.max_dep_time}  {p.train_type_display}  "
-              f"{p.passenger_count}명  {p.seat_strategy}")
-        print(f"      pid={r.process_id}  run_id={r.run_id or '(없음)'}")
-        if not running:
-            print("      ⚠ 기록만 남고 검색은 죽었습니다. 봇을 재시작하면 정리/재개합니다.")
-
-scheduled = storage.get_all_scheduled_searches()
-if scheduled:
-    print()
-    for s in sorted(scheduled, key=lambda s: s.start_at):
-        p = s.search_params
-        print(
-            f"  ⏰ 예약 대기  chat_id={s.chat_id}  "
-            f"{p.rail_operator.display_name}={mask_phone(s.korail_id)}"
-        )
-        print(f"      시작 {s.start_at:%m/%d %H:%M}  ({s.seconds_until_due() / 60:.0f}분 뒤)")
-        print(f"      {p.src_locate} → {p.dst_locate}  {p.dep_date}  "
-              f"{p.dep_time[:4]}~{p.max_dep_time}  {p.passenger_count}명")
-
-payments = storage.get_all_payment_statuses()
-pending = [s for s in payments if not s.completed]
-if pending:
-    print()
-    for s in pending:
-        state = "알림 동작 중" if s.reminder_active else "알림 꺼짐"
-        since = s.created_at.strftime("%H:%M:%S") if s.created_at else "?"
-        print(f"  💳 결제 대기  chat_id={s.chat_id}  {state}  (시작 {since})")
-
-if not reservations and not scheduled and not pending:
-    sys.exit(0)
-PY
+        workload_report_py | LOG_LEVEL=CRITICAL $(python_runner) - \
+            || warn "Redis 상태를 읽지 못했습니다"
     fi
 
     # -------------------- Log --------------------

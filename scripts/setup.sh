@@ -962,13 +962,15 @@ if [[ "$TEST_SETUP" -eq 1 ]]; then
     ENV_FILE="$TEST_ENV_FILE"
     export ENV_FILE
 
-    # Compose interpolation, service env, containers, port and project all
-    # get names of their own. The project name is what gives Redis its own
-    # network and named volume rather than sharing production state.
+    # Compose interpolation, service env, containers, port, data directory and
+    # project all get names of their own. The project name gives the stack its
+    # own network and containers; REDIS_DATA_DIR is what keeps the test bot
+    # from writing into production's sessions and registered accounts.
     set_env_key COMPOSE_PROJECT_NAME "korail-bot-test"
     set_env_key APP_CONTAINER_NAME "korail_bot_test"
     set_env_key REDIS_CONTAINER_NAME "korail_redis_test"
     set_env_key DEV_REDIS_CONTAINER_NAME "korail_test_dev_redis"
+    set_env_key REDIS_DATA_DIR "./.data/redis-test"
     set_env_key BOT_ENV_FILE "${TEST_ENV_FILE#"$ROOT_DIR"/}"
     set_env_key BOT_RUNTIME_PROFILE "test"
     set_env_key TRIAL_SEARCH_LIMIT "0"

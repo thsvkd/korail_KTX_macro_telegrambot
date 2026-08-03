@@ -132,10 +132,13 @@ deploy_down() {
 
 require_cmd docker
 
-REMOVE_VOLUMES=0
+PURGE_DATA=0
 for arg in "$@"; do
     case "$arg" in
-        --volumes|-v) REMOVE_VOLUMES=1 ;;
+        # --volumes used to be the way to wipe the dataset, back when it lived
+        # in a named volume. It is kept as a spelling of --purge-data so it
+        # cannot quietly do nothing for someone who means to reset the bot.
+        --purge-data|--volumes|-v) PURGE_DATA=1 ;;
         -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "Unknown option: $arg" ;;
     esac
@@ -144,18 +147,28 @@ done
 cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
 require_env_file
 
-if [[ "$REMOVE_VOLUMES" -eq 1 ]]; then
-    warn "This deletes this stack's Redis volume: all sessions and reservation state go away."
-    read -r -p "Type 'yes' to continue: " confirmation
-    [[ "$confirmation" == "yes" ]] || die "Aborted."
-    info "Stopping services and removing volumes"
-    compose down --volumes
-    ok "Services stopped, volumes removed"
-else
-    info "Stopping services"
-    compose down
-    ok "Services stopped (data volume kept)"
+DATA_DIR="$(redis_data_dir)"
+
+info "Stopping services"
+compose down
+ok "Services stopped"
+
+if [[ "$PURGE_DATA" -eq 0 ]]; then
+    info "Redis data kept in ${DATA_DIR}"
+    return 0
 fi
+
+warn "This deletes ${DATA_DIR}: all sessions, registered accounts and"
+warn "reservation state go away."
+read -r -p "Type 'yes' to continue: " confirmation
+[[ "$confirmation" == "yes" ]] || die "Aborted."
+
+# Through a container: Redis owns those files as its own uid, so removing them
+# from the host would need root.
+docker run --rm -v "${DATA_DIR}:/data" redis:7-alpine \
+    sh -c 'rm -rf /data/appendonlydir /data/dump.rdb'
+compose down --volumes >/dev/null 2>&1 || true
+ok "Data removed from ${DATA_DIR}"
 
 }
 

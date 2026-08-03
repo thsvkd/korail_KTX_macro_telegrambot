@@ -28,3 +28,7 @@ htmlcov/
 
 # Runtime state for scripts/server.sh start --daemon: pidfile and log.
 .run/
+
+# Redis data, bind-mounted by docker-compose.yml. Survives every container
+# and volume removal; only deleting the directory deletes the state.
+.data/

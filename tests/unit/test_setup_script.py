@@ -412,7 +412,7 @@ def test_host_test_runtime_cannot_start_with_the_production_token(tmp_path):
     test.write_text("BOTTOKEN=shared-token\n", encoding="utf-8")
 
     result = subprocess.run(
-        ["bash", str(SERVER), "start", "--test"],
+        ["bash", str(SERVER), "start", "--test", "--host"],
         cwd=ROOT,
         env={
             **os.environ,
@@ -595,7 +595,7 @@ while true; do sleep 1; done
 
     try:
         result = subprocess.run(
-            ["bash", str(scripts / "server.sh"), "start", "--daemon", "--test"],
+            ["bash", str(scripts / "server.sh"), "start", "--daemon", "--test", "--host"],
             cwd=project,
             env=env,
             text=True,
@@ -709,7 +709,7 @@ esac
 
     try:
         result = subprocess.run(
-            ["bash", str(scripts / "server.sh"), "status"],
+            ["bash", str(scripts / "server.sh"), "status", "--host"],
             cwd=project,
             env={
                 **os.environ,
@@ -752,3 +752,104 @@ esac
         stop_server.set()
         redis_server.close()
         server_thread.join(timeout=2)
+
+
+def test_server_start_drives_the_compose_stack_by_default(tmp_path):
+    """No flag means the deployed shape: containers, not a .venv process."""
+    production = tmp_path / "production.env"
+    production.write_text(
+        "BOTTOKEN=production-token\n"
+        "REDIS_PASSWORD=test-password\n"
+        f"REDIS_DATA_DIR={tmp_path / 'redis-data'}\n",
+        encoding="utf-8",
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    marker = tmp_path / "docker-calls"
+    docker = fake_bin / "docker"
+    docker.write_text(
+        """#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DOCKER_MARKER"
+case "$*" in
+    "compose version") echo "Docker Compose version v2.30.0" ;;
+    inspect*) echo running ;;
+    *logs*) echo "Telegram poller started" ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(SERVER), "start"],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "DOCKER_MARKER": str(marker),
+            "ENV_FILE": str(production),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, f"{result.stderr}\n{result.stdout}"
+    calls = marker.read_text(encoding="utf-8")
+    assert f"compose --env-file {production} -f {ROOT / 'docker-compose.yml'} up -d" in calls
+    # The bind-mount source is created before compose can create it as root.
+    assert (tmp_path / "redis-data").is_dir()
+
+
+def test_server_stop_leaves_the_redis_data_alone(tmp_path):
+    """`stop` is not a reset: containers go, registered accounts stay."""
+    production = tmp_path / "production.env"
+    data_dir = tmp_path / "redis-data"
+    data_dir.mkdir()
+    (data_dir / "dump.rdb").write_bytes(b"REDIS")
+    production.write_text(
+        "BOTTOKEN=production-token\n"
+        "REDIS_PASSWORD=test-password\n"
+        f"REDIS_DATA_DIR={data_dir}\n"
+        "APP_CONTAINER_NAME=korail_bot_fake\n",
+        encoding="utf-8",
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    marker = tmp_path / "docker-calls"
+    docker = fake_bin / "docker"
+    docker.write_text(
+        """#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DOCKER_MARKER"
+case "$*" in
+    "compose version") echo "Docker Compose version v2.30.0" ;;
+    "ps -a --format {{.Names}}") echo korail_bot_fake ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(SERVER), "stop"],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "DOCKER_MARKER": str(marker),
+            "ENV_FILE": str(production),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, f"{result.stderr}\n{result.stdout}"
+    calls = marker.read_text(encoding="utf-8")
+    assert f"compose --env-file {production} -f {ROOT / 'docker-compose.yml'} stop" in calls
+    assert "down --volumes" not in calls
+    assert (data_dir / "dump.rdb").read_bytes() == b"REDIS"

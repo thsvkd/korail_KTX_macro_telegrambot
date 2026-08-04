@@ -8,27 +8,45 @@
 
 ## 기본 예약 흐름
 
-### Mini App 지름길
+### Mini App
 
-`MINI_APP_URL`이 유효한 HTTPS 주소이면 `/start`는 아래 단계형 흐름에 바로
-들어가는 대신 `web_app` 답장 키보드를 먼저 보냅니다. 사용자는 정적 화면에서
-코레일·SRT와 날짜·구간·시간·좌석·인원을 한 번에 제출하거나
-`💬 채팅으로 예약`으로 기존 흐름을 고릅니다. 등록 계정 유무는 화면의 운영사
-선택지를 제한하지 않습니다.
+`MINI_APP_URL`과 `MINI_APP_API_ENABLED`가 함께 설정되어 있으면 `/start`는 아래
+단계형 흐름에 바로 들어가는 대신 `web_app` 답장 키보드를 먼저 보냅니다.
+`💬 채팅으로 예약`을 고르면 기존 흐름으로 갑니다.
 
-답장 키보드로 연 Mini App의 `sendData()` 결과는 `web_app_data` 서비스 메시지로
-long polling에 들어옵니다. 프로필의 Main Mini App과 채팅 메뉴 버튼은 이 전송을
-지원하지 않으므로 64자 이내의 `ma1_` 시작 파라미터로 조건을 압축해 봇 채팅의
-`/start`로 되돌립니다. 두 입력 모두 `MiniAppSubmission`이 기존
-`InputValidator`로 다시 검증하고, 선택한 철도의 등록 계정으로 로그인한 뒤 세션을
-`SEAT_STRATEGY_INPUT_SUCCESS`에 놓습니다. 따라서 이후의 실시간 열차 목록,
-최종 확인, 즐겨찾기, 시작 시각 예약, 접근 제한과 검색 프로세스는 기존 흐름을
-그대로 탑니다. 실행 중인 검색은 Mini App 제출로 덮어쓰지 않습니다.
+**Mini App은 이 문서의 흐름을 아래에서 다시 구현하지 않습니다.** 화면은 봇의
+API를 호출하는 얇은 클라이언트이고, 그 API는 채팅이 쓰는 것과 같은 서비스를
+호출합니다. 열차 목록은 `ConversationHandler.fetch_train_options`, 검색 시작은
+`ConversationHandler.start_booking`, 예약 취소는 `PendingPaymentService.cancel`
+입니다. 그래서 접근 승인 검사, 체험 횟수 차감, 중복 검색 방지, 조건 검증이
+양쪽에서 같습니다 — 규칙이 한 곳에만 있기 때문입니다.
 
-선택한 철도의 등록 계정이 없거나 기존 등록이 만료됐으면 Mini App 조건에
-`miniAppPending` 표식을 붙여 세션에 보존하고 `START_ACCEPTED`에서 그 철도의
-계정을 등록받습니다. 로그인이 성공하면 날짜부터 다시 묻지 않고 보존한 조건으로
-열차 선택을 이어갑니다. `MINI_APP_URL`이 비어 있으면 기존 채팅 흐름만 동작합니다.
+화면에서 할 수 있는 일은 다음과 같습니다.
+
+| 화면 | 대응하는 채팅 단계 |
+| --- | --- |
+| 조건 입력 | `PW_INPUT_SUCCESS` ~ `SEAT_STRATEGY_INPUT_SUCCESS` |
+| 열차 선택 | `SEAT_STRATEGY_INPUT_SUCCESS` |
+| 확인 · 지금 시작 · 시각 예약 · 즐겨찾기 | `TRAIN_SELECT_INPUT_SUCCESS`, `SCHEDULE_INPUT_PENDING` |
+| 계정 등록 | `START_ACCEPTED`, `ID_INPUT_SUCCESS`, `/onboarding` |
+| 진행 상황 · 검색 중지 | `/status`, `/cancel` |
+| 결제 대기 · 예약 취소 | `/status` 의 `🚫 예약 취소하기` |
+| 즐겨찾기 목록 | `/fav` |
+| 알림 간격 | `/notify` |
+
+세션은 하나뿐이므로 두 입구가 서로를 방해하지 않도록 두 가지를 지킵니다. 검색이
+`FINDING_TICKET`이면 Mini App은 조건을 덮어쓰지 않고 409로 거절합니다. 그리고
+Mini App이 세션에 쓰는 것은 조건을 확정하는 순간뿐이며, 그 전까지 초안은 화면
+안에만 있습니다. 반대로 채팅에서 하다 만 예약이 있으면 Mini App은 그 답들을
+`draft`로 받아 첫 화면에 채워 넣습니다.
+
+계정이 등록되어 있지 않으면 화면이 등록 단계를 보여주고, 로그인이 성공하면
+답한 조건을 잃지 않고 열차 찾기로 이어집니다. 등록된 비밀번호가 철도사에서
+거절되면 그 등록을 지우고 다시 등록받습니다 — 채팅과 같습니다.
+
+`MINI_APP_URL`이 비어 있으면 기존 채팅 흐름만 동작합니다. `MiniAppSubmission`의
+`ma1_` 시작 파라미터 경로는 API 없이 정적 사본을 여전히 가리키는 배포를 위해
+서버에 남아 있지만, 봇이 서빙하는 화면은 쓰지 않습니다.
 
 | 현재 상태 | 기다리는 입력 | 처리 메서드 | 성공 후 상태 |
 | --- | --- | --- | --- |

@@ -10,7 +10,6 @@ import sys
 import threading
 
 from flask import Flask
-from flask_cors import CORS
 from flask_restful import Api
 from werkzeug.serving import is_running_from_reloader
 
@@ -18,6 +17,7 @@ from korail_bot import __version__
 from korail_bot.api import PaymentCheckAPI, ReservationCallbackAPI
 from korail_bot.config.settings import settings
 from korail_bot.handlers import TelegramUpdateProcessor
+from korail_bot.public_app import serve_public_app
 from korail_bot.services import (
     PaymentReminderService,
     PaymentWatchdogService,
@@ -28,6 +28,7 @@ from korail_bot.services import (
     TelegramPoller,
     TelegramService,
 )
+from korail_bot.services.mini_app_gateway import MiniAppGateway
 from korail_bot.startup import publish_command_menus
 from korail_bot.storage.redis import RedisStorage
 from korail_bot.utils.logger import LoggerFactory, get_logger
@@ -49,9 +50,16 @@ for warning in settings.warnings():
 # Set recursion limit
 sys.setrecursionlimit(settings.RECURSION_LIMIT)
 
-# Create Flask application
+# Create Flask application.
+#
+# This one is the internal listener: the background search processes report
+# here over loopback, and nothing else may. It used to carry a blanket
+# CORS(application), which allowed any origin to have a browser call these
+# endpoints. Nothing needed it - a subprocess making an HTTP request is not
+# subject to the same-origin policy at all - and the Mini App does not use
+# this app. The Mini App's own listener is built in korail_bot.public_app and
+# is same-origin, so it needs no CORS either.
 application = Flask(__name__)
-CORS(application)
 api = Api(application)
 
 # Initialize storage (Redis)
@@ -112,6 +120,14 @@ logger.info(f"Reminder interval: {settings.PAYMENT_REMINDER_INTERVAL_SECONDS}s")
 logger.info(f"Payment verify interval: {settings.PAYMENT_VERIFY_INTERVAL_SECONDS}s")
 logger.info("Public Telegram endpoint: disabled")
 logger.info(f"Telegram Mini App: {'enabled' if settings.mini_app_enabled() else 'disabled'}")
+logger.info(
+    "Mini App API: "
+    + (
+        f"port {settings.MINI_APP_API_PORT}, published"
+        if settings.MINI_APP_API_ENABLED
+        else "disabled"
+    )
+)
 logger.info(f"Admin commands: {'enabled' if settings.ADMIN_PASSWORD else 'disabled'}")
 logger.info(f"Developer mode: {'enabled' if settings.ADMIN_MAGIC_STRING else 'disabled'}")
 logger.info(
@@ -179,14 +195,32 @@ if not is_running_from_reloader():
     payment_watchdog_service.start()
 
 poller = None
+update_processor = None
 if not is_running_from_reloader():
-    poller = TelegramPoller(
-        settings.TELEGRAM_BOT_TOKEN,
-        TelegramUpdateProcessor(
-            storage, telegram_service, reservation_service, payment_reminder_service
-        ),
+    update_processor = TelegramUpdateProcessor(
+        storage, telegram_service, reservation_service, payment_reminder_service
     )
+    poller = TelegramPoller(settings.TELEGRAM_BOT_TOKEN, update_processor)
     poller.start()
+
+# The Mini App's listener, on a port of its own. It shares this process - and
+# so the same conversation handler, the same registry of running searches and
+# the same Redis connection - with the chat, which is the whole reason a
+# reservation started in the app behaves identically to one started in chat.
+#
+# What it does not share is the socket: the internal callbacks above are not
+# registered on it. See korail_bot.public_app for why that separation is
+# structural rather than a check.
+if not is_running_from_reloader() and update_processor is not None:
+    serve_public_app(
+        MiniAppGateway(
+            storage,
+            telegram_service,
+            reservation_service,
+            conversation_handler=update_processor.conversation_handler,
+            scheduled_search_service=scheduled_search_service,
+        )
+    )
 
 
 _shutdown_lock = threading.Lock()

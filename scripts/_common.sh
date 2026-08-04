@@ -162,6 +162,15 @@ compose() {
     [[ -n "${COMPOSE_EXTRA_FILE:-}" && -f "${COMPOSE_EXTRA_FILE}" ]] && \
         files+=(-f "$COMPOSE_EXTRA_FILE")
 
+    # The tailscale sidecar sits behind a profile so that an install which
+    # does not use the Mini App is unaffected by its existence. Selected here
+    # rather than at each call site, so `up`, `ps`, `logs` and `down` all
+    # agree about whether that container is part of this stack - a `down` that
+    # forgot the profile would leave it running and still proxying.
+    if tailscale_enabled && [[ ",${COMPOSE_PROFILES:-}," != *,tailscale,* ]]; then
+        export COMPOSE_PROFILES="${COMPOSE_PROFILES:+${COMPOSE_PROFILES},}tailscale"
+    fi
+
     if docker compose version >/dev/null 2>&1; then
         docker compose --env-file "$ENV_FILE" "${files[@]}" "$@"
     elif command -v docker-compose >/dev/null 2>&1; then
@@ -222,12 +231,233 @@ ensure_redis_data_dir() {
     mkdir -p "$(redis_data_dir)"
 }
 
-# compose_container <app|redis> - the container name the selected stack uses
+# ---------------------------------------------------------------- tailscale
+#
+# The Mini App needs the bot to be reachable from a phone, and the sidecar in
+# docker-compose.yml is how. It joins the tailnet as a node of its own - its
+# own name, its own address - rather than borrowing the host's, so the bot
+# gets a URL that is not shared with whatever else this machine serves.
+#
+# Two things it is deliberately not: it is not on the host's network, and it
+# is not given the host's tailscale state. A container that could rewrite the
+# host's tailnet identity would be a much larger thing to trust than a proxy.
+
+# tailscale_enabled - true when this stack has a sidecar to start
+#
+# Keyed on the node name rather than on the auth key. Naming the node is the
+# decision - it is what the URL is made of - and the key is only one of two
+# ways to authorise it. The other is clicking a link, which is how a node with
+# no key joins, so keying on the key would have meant the interactive path
+# could never start the container that prints the link.
+tailscale_enabled() {
+    [[ -n "$(clean_default "$(env_value TS_HOSTNAME)")" ]]
+}
+
+# tailscale_hostname - the node name, which decides the public URL
+tailscale_hostname() {
+    local name
+    name="$(env_value TS_HOSTNAME)"
+    printf '%s' "${name:-korail-bot}"
+}
+
+# tailscale_authenticated - true once the node has joined a tailnet
+tailscale_authenticated() {
+    local container
+    container="$(compose_container tailscale)"
+    container_running "$container" || return 1
+
+    [[ "$(docker exec "$container" tailscale status --json 2>/dev/null \
+        | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("BackendState", ""))
+except Exception:
+    print("")' 2>/dev/null)" == "Running" ]]
+}
+
+# tailscale_login_url - the link that authorises a node started without a key
+#
+# Read out of the container's log rather than asked of the CLI: tailscaled
+# prints it once while it waits, and at that point `tailscale status` has no
+# tailnet to answer about.
+tailscale_login_url() {
+    local container
+    container="$(compose_container tailscale)"
+    container_exists "$container" || return 1
+
+    docker logs "$container" 2>&1 \
+        | grep -oE 'https://login\.tailscale\.com/a/[0-9a-f]+' \
+        | tail -n 1
+}
+
+# tailscale_login_begin - put a link on screen and leave something waiting
+#
+# Two problems shaped this, and both were found the hard way.
+#
+# The sidecar image cannot do the login itself. Its entrypoint gives
+# `tailscale up` sixty seconds, kills it, and exits; Docker restarts the
+# container, which registers a *new* node key and so invalidates the link it
+# printed a minute earlier. Anyone who was not already looking at the terminal
+# is chasing a link that died before they read it.
+#
+# The obvious fix - run the login by hand and wait for the click - only moves
+# the deadline. It puts a person inside the runtime of a command, so walking
+# away for ten minutes ends the attempt, and the next attempt prints a
+# different link. That happened twice here before this shape existed.
+#
+# So nothing waits on the person. The helper container waits, indefinitely,
+# in the background; this function starts it if it is not already running and
+# prints its link. Whenever the click lands, the state directory becomes
+# authorised, and the next `deploy.sh up` picks it up and carries on. Running
+# this repeatedly is safe and keeps showing the same link.
+tailscale_login_begin() {
+    local state name helper url deadline
+    state="$(tailscale_state_dir)"
+    name="$(tailscale_hostname)"
+    helper="$(compose_container tailscale)_login"
+
+    mkdir -p "$state"
+
+    if ! container_running "$helper"; then
+        # A stopped one has a dead link in it and holds the name.
+        docker rm -f "$helper" >/dev/null 2>&1 || true
+
+        # No --timeout: this is meant to outlast the person's coffee break.
+        # tailscaled and the login run in the same container so they share the
+        # socket, and the state directory is the one the sidecar will use.
+        docker run -d --name "$helper" \
+            --restart unless-stopped \
+            -v "${state}:/var/lib/tailscale" \
+            --entrypoint /bin/sh \
+            "tailscale/tailscale:${TS_IMAGE_TAG:-stable}" \
+            -c "tailscaled --tun=userspace-networking --statedir=/var/lib/tailscale \
+                    --socket=/tmp/tailscaled.sock &
+                sleep 3
+                exec tailscale --socket=/tmp/tailscaled.sock up --hostname='${name}'" \
+            >/dev/null || {
+            err "Could not start the login helper."
+            return 1
+        }
+    fi
+
+    deadline=$(( SECONDS + 60 ))
+    until url="$(docker logs "$helper" 2>&1 \
+        | grep -oE 'https://login\.tailscale\.com/a/[0-9a-f]+' | tail -n 1)" \
+        && [[ -n "$url" ]]; do
+        if (( SECONDS >= deadline )); then
+            err "The login helper printed no link. Its log:"
+            docker logs "$helper" 2>&1 | tail -20 >&2
+            return 1
+        fi
+        sleep 2
+    done
+
+    printf '%s' "$url"
+}
+
+# tailscale_login_finish - clear away the helper once the node has joined
+tailscale_login_finish() {
+    docker rm -f "$(compose_container tailscale)_login" >/dev/null 2>&1 || true
+}
+
+# tailscale_state_authorised - whether the stored state has joined a tailnet
+#
+# A heuristic, and deliberately one: the authoritative answer needs a running
+# tailscaled, and the point of asking is to decide whether to start one. An
+# unauthorised state directory holds only tailscaled.state and its logs; the
+# profile appears when a node is accepted. Being wrong here costs a prompt,
+# not correctness - the sidecar itself is what actually authenticates.
+tailscale_state_authorised() {
+    [[ -d "$(tailscale_state_dir)/profile-data" ]]
+}
+
+# tailscale_serve_mode - `serve` (tailnet only) or `funnel` (public)
+tailscale_serve_mode() {
+    local mode
+    mode="$(env_value TS_SERVE_MODE)"
+    [[ "$mode" == "funnel" ]] && { printf 'funnel'; return; }
+    printf 'serve'
+}
+
+# tailscale_config_dir - host directory holding the generated serve config
+#
+# Generated rather than committed, and a directory rather than a file for two
+# separate reasons. The port it proxies to comes from MINI_APP_API_PORT, so a
+# checked-in file would go stale the moment someone changed that. And
+# tailscaled only notices later edits when the mount is a directory.
+tailscale_config_dir() {
+    local dir
+    dir="$(env_value TS_CONFIG_DIR)"
+    dir="${dir:-./.data/tailscale/config}"
+    [[ "$dir" != /* ]] && dir="${ROOT_DIR}/${dir#./}"
+    printf '%s' "$dir"
+}
+
+# tailscale_state_dir - host directory holding the node's identity
+tailscale_state_dir() {
+    local dir
+    dir="$(env_value TS_STATE_DIR)"
+    dir="${dir:-./.data/tailscale/state}"
+    [[ "$dir" != /* ]] && dir="${ROOT_DIR}/${dir#./}"
+    printf '%s' "$dir"
+}
+
+# write_tailscale_serve_config <serve|funnel> - generate the sidecar's config
+#
+# AllowFunnel is the whole difference between the two modes: false keeps the
+# address inside the tailnet, true puts it on the internet. Generating both
+# from one place means the two cannot drift apart in what they proxy to.
+#
+# ${TS_CERT_DOMAIN} is left for the container to substitute - it is the node's
+# own name, which is not known here and does not need to be.
+write_tailscale_serve_config() {
+    local mode="${1:-serve}" allow="false" port dir
+    [[ "$mode" == "funnel" ]] && allow="true"
+
+    port="$(env_value MINI_APP_API_PORT)"
+    port="${port:-8081}"
+    dir="$(tailscale_config_dir)"
+    mkdir -p "$dir"
+
+    cat > "${dir}/serve.json" <<EOF
+{
+  "TCP": { "443": { "HTTPS": true } },
+  "Web": {
+    "\${TS_CERT_DOMAIN}:443": {
+      "Handlers": { "/": { "Proxy": "http://app:${port}" } }
+    }
+  },
+  "AllowFunnel": { "\${TS_CERT_DOMAIN}:443": ${allow} }
+}
+EOF
+}
+
+# tailscale_url - the address the running sidecar actually answers on
+#
+# Asked of the container rather than assembled from the hostname, because the
+# tailnet's domain is not something this checkout knows and a guessed URL that
+# almost works is worse than none.
+tailscale_url() {
+    local container
+    container="$(compose_container tailscale)"
+    container_running "$container" || return 1
+
+    docker exec "$container" tailscale status --json 2>/dev/null \
+        | python3 -c 'import json,sys
+try:
+    name = json.load(sys.stdin)["Self"]["DNSName"].rstrip(".")
+except Exception:
+    raise SystemExit(1)
+print(f"https://{name}/" if name else "", end="")' 2>/dev/null
+}
+
+# compose_container <app|redis|tailscale> - the container name the stack uses
 compose_container() {
     local name
     case "$1" in
         app)   name="$(env_value APP_CONTAINER_NAME)";   name="${name:-korail_bot}" ;;
         redis) name="$(env_value REDIS_CONTAINER_NAME)"; name="${name:-korail_redis}" ;;
+        tailscale)
+            name="$(env_value TS_CONTAINER_NAME)"; name="${name:-korail_tailscale}" ;;
         *)     return 1 ;;
     esac
     printf '%s' "$name"

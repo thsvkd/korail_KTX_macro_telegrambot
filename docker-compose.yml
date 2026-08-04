@@ -21,6 +21,16 @@ services:
       - BOT_RUNTIME_PROFILE=${BOT_RUNTIME_PROFILE:-production}
     env_file:
       - ${BOT_ENV_FILE:-.env}
+    # The Mini App's listener, and the only port published. The bot's internal
+    # callbacks are on a different socket inside the container and are not
+    # reachable from here - see korail_bot/public_app.py.
+    #
+    # Bound to loopback on the host: what publishes it to the internet is the
+    # reverse proxy in front (tailscale funnel, cloudflared), which connects
+    # from this host. Binding 0.0.0.0 here would additionally expose it to
+    # everything on the LAN, which nothing needs.
+    ports:
+      - "${MINI_APP_BIND_ADDRESS:-127.0.0.1}:${MINI_APP_API_PORT:-8081}:${MINI_APP_API_PORT:-8081}"
     depends_on:
       redis:
         condition: service_healthy
@@ -85,6 +95,63 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - korail_network
+
+  # How a phone reaches the Mini App.
+  #
+  # A node of its own on the tailnet rather than the host's. The host may be
+  # serving other things under its own name, and a bot that handles railway
+  # accounts should not share an address - or a certificate - with them. This
+  # container gets its own name, so the Mini App lives at a URL that means
+  # only this bot.
+  #
+  # It is behind a profile: without TS_AUTHKEY there is no tailnet to join,
+  # and an install that does not use the Mini App should not have a container
+  # sitting there failing to start. scripts/_common.sh selects the profile
+  # when the key is present.
+  tailscale:
+    image: tailscale/tailscale:${TS_IMAGE_TAG:-stable}
+    container_name: ${TS_CONTAINER_NAME:-korail_tailscale}
+    hostname: ${TS_HOSTNAME:-korail-bot}
+    profiles:
+      - tailscale
+    environment:
+      # Plainly defaulted rather than declared required with `:?`. Compose
+      # interpolates the whole file before it decides which profiles are
+      # active, so a required variable here would stop `docker compose config`
+      # from working at all on an install that has no sidecar and wants none.
+      # What actually guards this is the profile: scripts/_common.sh selects
+      # it only when a key exists.
+      - TS_AUTHKEY=${TS_AUTHKEY:-}
+      - TS_HOSTNAME=${TS_HOSTNAME:-korail-bot}
+      # Without this the node's identity lives in the container's filesystem,
+      # so every recreate joins the tailnet as a brand new machine - a new
+      # name with a numeric suffix, and therefore a different URL.
+      - TS_STATE_DIR=/var/lib/tailscale
+      # Serve and Funnel, configured by file rather than by CLI so the mode is
+      # part of the deployment instead of something typed once and forgotten.
+      # scripts/_common.sh generates it; AllowFunnel inside decides whether
+      # the address is tailnet-only or public.
+      - TS_SERVE_CONFIG=/config/serve.json
+      # Userspace networking: this container only needs to accept connections
+      # and proxy them onward, which works without NET_ADMIN or /dev/net/tun.
+      # Nothing here routes traffic for anyone else.
+      - TS_USERSPACE=true
+    volumes:
+      - ${TS_STATE_DIR:-./.data/tailscale/state}:/var/lib/tailscale
+      # A directory, not the file: tailscaled only picks up later edits to the
+      # serve config when the mount is a directory.
+      - ${TS_CONFIG_DIR:-./.data/tailscale/config}:/config:ro
+    depends_on:
+      app:
+        condition: service_healthy
     restart: unless-stopped
     logging:
       driver: json-file

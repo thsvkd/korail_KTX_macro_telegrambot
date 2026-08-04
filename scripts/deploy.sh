@@ -4,23 +4,29 @@
 #
 # Usage:
 #   scripts/deploy.sh [--test] build [tag]
-#   scripts/deploy.sh [--test] up [service] [--pull] [--foreground]
+#   scripts/deploy.sh [--test] [--publish] up [service] [--pull] [--foreground]
 #   scripts/deploy.sh [--test] down [--volumes]
 #   scripts/deploy.sh [--test] logs [service] [--tail N] [--no-follow]
 #   scripts/deploy.sh [--test] push <registry/image:tag>
+#
+# --publish, -pb   Put the Mini App on the internet (Tailscale Funnel).
+#                  Without it the address stays inside the tailnet, which is
+#                  enough to develop against and reachable from your own
+#                  phone if it is on the tailnet too.
 
 # shellcheck source=scripts/_common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
 TEST_STACK=0
+PUBLISH=0
 PRODUCTION_ENV_FILE="$ENV_FILE"
 FILTERED_ARGS=()
 for arg in "$@"; do
-    if [[ "$arg" == "--test" ]]; then
-        TEST_STACK=1
-    else
-        FILTERED_ARGS+=("$arg")
-    fi
+    case "$arg" in
+        --test) TEST_STACK=1 ;;
+        --publish|-pb) PUBLISH=1 ;;
+        *) FILTERED_ARGS+=("$arg") ;;
+    esac
 done
 set -- "${FILTERED_ARGS[@]}"
 
@@ -52,6 +58,126 @@ ok "Built ${IMAGE}"
 
 docker image inspect "$IMAGE" --format '  size: {{.Size}} bytes'
 
+}
+
+# deploy_prepare_tailscale - settle the Mini App's exposure before starting
+#
+# The mode is written into the env file rather than kept for this one command.
+# The alternative bites: someone publishes with --publish, then restarts the
+# bot a week later for an unrelated reason, and the Mini App quietly stops
+# being reachable with nothing in the logs to say why. Recording it means a
+# restart keeps what was chosen, and `deploy.sh up` with no flag is an
+# explicit instruction to go back to tailnet-only.
+deploy_prepare_tailscale() {
+    local mode="serve"
+    (( PUBLISH )) && mode="funnel"
+
+    if ! tailscale_enabled; then
+        if (( PUBLISH )); then
+            err "--publish needs a Tailscale sidecar, and TS_HOSTNAME is empty in"
+            err "  ${ENV_FILE#"$ROOT_DIR"/}."
+            err "Name the node - it is what the URL is made of:"
+            err "    TS_HOSTNAME=korail-bot"
+            err "Authorise it either by clicking the link this prints on first"
+            err "start, or without prompting by also setting TS_AUTHKEY from"
+            err "  https://login.tailscale.com/admin/settings/keys"
+            die "Nothing was started."
+        fi
+        return 0
+    fi
+
+    if [[ -z "$(clean_default "$(env_value MINI_APP_API_ENABLED)")" ]]; then
+        warn "TS_AUTHKEY is set but MINI_APP_API_ENABLED is not - the sidecar will"
+        warn "  proxy to a port nothing is listening on."
+    fi
+
+    set_env_key TS_SERVE_MODE "$mode"
+    write_tailscale_serve_config "$mode"
+
+    mkdir -p "$(tailscale_state_dir)"
+
+    # Authorise before starting, not after. Left to the sidecar, this goes
+    # wrong in a way that looks like nothing wrong: its entrypoint gives
+    # `tailscale up` sixty seconds, then exits, then Docker restarts it with a
+    # new node key - so the link it printed is dead by the time anyone opens
+    # it, and the next one is dead a minute later.
+    if [[ -z "$(clean_default "$(env_value TS_AUTHKEY)")" ]] \
+        && ! tailscale_state_authorised && ! tailscale_authenticated; then
+        local login_url
+        login_url="$(tailscale_login_begin)" \
+            || die "Could not start the tailscale login. Nothing was started."
+
+        echo
+        warn "This tailscale node has not joined a tailnet yet. Open this once:"
+        echo "    ${login_url}"
+        echo
+        info "Nothing is waiting on you - the link stays valid and this same"
+        info "  address comes back if you run this again. Once you have opened"
+        info "  it, run the same command to finish starting the stack."
+        exit 0
+    fi
+
+    # A helper left over from a previous run has served its purpose.
+    tailscale_login_finish
+
+    if [[ "$mode" == "funnel" ]]; then
+        info "Mini App exposure: public (Funnel)"
+    else
+        info "Mini App exposure: tailnet only (Serve)"
+        info "  Publish it with: $(basename "$0") --publish up"
+    fi
+}
+
+# deploy_report_tailscale - say where the Mini App actually ended up
+#
+# Asked of the running node rather than assembled from TS_HOSTNAME, because
+# the tailnet's domain is not in this checkout and a URL that is nearly right
+# is worse than saying nothing.
+deploy_report_tailscale() {
+    tailscale_enabled || return 0
+
+    local url deadline login
+
+    # Authorising happens before the sidecar starts, so reaching here without
+    # a tailnet means the auth key was refused - a wrong key, or an ephemeral
+    # one that has already been spent.
+    deadline=$(( SECONDS + 30 ))
+    until tailscale_authenticated; do
+        login="$(tailscale_login_url || true)"
+        if [[ -n "$login" ]]; then
+            echo
+            warn "The tailscale node is still asking to be authorised:"
+            echo "    ${login}"
+            warn "That link expires in under a minute - the container restarts and"
+            warn "  registers a new one. Clear TS_AUTHKEY and run this again to"
+            warn "  authorise with a link that waits."
+            return 0
+        fi
+        (( SECONDS < deadline )) || break
+        sleep 2
+    done
+
+    # The node has to register with the control plane before it has a name.
+    deadline=$(( SECONDS + 45 ))
+    until url="$(tailscale_url)" && [[ -n "$url" ]]; do
+        (( SECONDS < deadline )) || break
+        sleep 2
+    done
+
+    if [[ -z "${url:-}" ]]; then
+        warn "The tailscale sidecar has not reported a name yet."
+        warn "  Check it with: docker logs $(compose_container tailscale)"
+        return 0
+    fi
+
+    echo
+    ok "Mini App: ${url}"
+    if [[ "$(tailscale_serve_mode)" == "funnel" ]]; then
+        info "Reachable from the internet. Put this in ${ENV_FILE#"$ROOT_DIR"/}:"
+        info "    MINI_APP_URL=${url}"
+    else
+        info "Reachable from your tailnet only."
+    fi
 }
 
 deploy_up() {
@@ -105,6 +231,8 @@ if [[ -z "$(env_value REDIS_PASSWORD)" ]]; then
     die "REDIS_PASSWORD is empty in ${ENV_FILE#"$ROOT_DIR"/}. Run '${SETUP_COMMAND}'."
 fi
 
+deploy_prepare_tailscale
+
 if [[ "$PULL" -eq 1 ]]; then
     info "Pulling images"
     compose pull ${SERVICES[@]+"${SERVICES[@]}"}
@@ -115,6 +243,7 @@ if [[ "$DETACH" -eq 1 ]]; then
     compose up -d ${SERVICES[@]+"${SERVICES[@]}"}
     echo
     compose ps
+    deploy_report_tailscale
     echo
     if (( TEST_STACK )); then
         info "Follow the logs with: scripts/deploy.sh --test logs"

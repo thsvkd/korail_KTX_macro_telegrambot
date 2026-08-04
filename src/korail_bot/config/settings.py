@@ -77,10 +77,48 @@ class Settings:
     # timeout, otherwise every idle poll would look like a network failure.
     TELEGRAM_POLL_TIMEOUT: int = 30
     TELEGRAM_POLL_REQUEST_TIMEOUT: int = 35
-    # Optional Telegram Mini App used to collect travel preferences in one
-    # screen. It is a static page: credentials never enter it, and its result
-    # returns through Telegram's ordinary long-poll update channel.
+    # Optional Telegram Mini App that carries the whole reservation, from the
+    # travel conditions through the live train list to starting the search.
+    # The page is a thin client: it holds no Korail logic and reaches this app
+    # over the API below, which is the only thing published to the internet.
     MINI_APP_URL: str | None = (os.environ.get("MINI_APP_URL") or "").strip() or None
+
+    # The public listener. Deliberately a second WSGI server on a port of its
+    # own rather than more routes on the existing one. /reservation-callback
+    # can send arbitrary text to arbitrary chats and defends itself by
+    # requiring a loopback source address - and behind a reverse proxy every
+    # request has one, including requests from the internet. Serving it on a
+    # listener that is never exposed removes the question instead of answering
+    # it: the route does not exist on the socket the world can reach.
+    MINI_APP_API_ENABLED: bool = _env_bool("MINI_APP_API_ENABLED", False)
+    # Binds to every interface by default: this listener exists to be reached
+    # from outside the container, and the container publishes nothing to the
+    # host that compose has not been told to publish.
+    MINI_APP_API_HOST: str = os.environ.get("MINI_APP_API_HOST", "0.0.0.0")
+    MINI_APP_API_PORT: int = int(os.environ.get("MINI_APP_API_PORT", "8081"))
+    MINI_APP_API_THREADS: int = int(os.environ.get("MINI_APP_API_THREADS", "8"))
+    # Where the Mini App's own files are. Empty means the webapp/ directory of
+    # this checkout, which is right for both the container and a dev run.
+    MINI_APP_WEBAPP_DIR: str | None = (os.environ.get("MINI_APP_WEBAPP_DIR") or "").strip() or None
+
+    # How long a Telegram initData payload stays usable. Telegram signs it
+    # once at launch and the page reuses it for the whole session, so this is
+    # also how long a session may last before the app has to be reopened.
+    MINI_APP_INIT_DATA_TTL_SECONDS: int = int(
+        os.environ.get("MINI_APP_INIT_DATA_TTL_SECONDS", "86400")
+    )
+    # Tolerance for a phone whose clock runs ahead of this host's.
+    MINI_APP_CLOCK_SKEW_SECONDS: int = int(os.environ.get("MINI_APP_CLOCK_SKEW_SECONDS", "300"))
+    MINI_APP_INIT_DATA_MAX_BYTES: int = int(os.environ.get("MINI_APP_INIT_DATA_MAX_BYTES", "4096"))
+
+    # Per-caller caps. The lower one guards the endpoints that reach Korail or
+    # SR over the network, where an unbounded caller costs the railway too.
+    MINI_APP_RATE_LIMIT: int = int(os.environ.get("MINI_APP_RATE_LIMIT", "60"))
+    MINI_APP_RATE_WINDOW_SECONDS: int = int(os.environ.get("MINI_APP_RATE_WINDOW_SECONDS", "60"))
+    MINI_APP_RAIL_RATE_LIMIT: int = int(os.environ.get("MINI_APP_RAIL_RATE_LIMIT", "10"))
+    MINI_APP_RAIL_RATE_WINDOW_SECONDS: int = int(
+        os.environ.get("MINI_APP_RAIL_RATE_WINDOW_SECONDS", "60")
+    )
 
     # Korail Configuration
     # Credentials kept on the server. When both are set the bot logs in with
@@ -452,6 +490,26 @@ class Settings:
             messages.append(
                 "MINI_APP_URL is ignored because Telegram Mini Apps require an "
                 "absolute HTTPS URL. The chat reservation flow remains available."
+            )
+
+        if cls.MINI_APP_API_ENABLED and not cls.TELEGRAM_BOT_TOKEN:
+            messages.append(
+                "MINI_APP_API_ENABLED is set with no BOTTOKEN. Mini App requests "
+                "are signed with a key derived from the token, so every request "
+                "will be refused until one is configured."
+            )
+
+        if cls.MINI_APP_API_ENABLED and cls.MINI_APP_API_PORT == cls.FLASK_PORT:
+            messages.append(
+                "MINI_APP_API_PORT equals FLASK_PORT. The public listener exists "
+                "to keep the internal callbacks off the exposed socket; sharing a "
+                "port defeats it."
+            )
+
+        if cls.mini_app_enabled() and not cls.MINI_APP_API_ENABLED:
+            messages.append(
+                "MINI_APP_URL is set but MINI_APP_API_ENABLED is not. The screen "
+                "will open and every action in it will fail to reach this bot."
             )
 
         return messages

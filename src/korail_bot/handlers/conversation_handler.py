@@ -1,5 +1,6 @@
 """Conversation flow handler for reservation process."""
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from korail2 import ReserveOption
@@ -31,6 +32,33 @@ from korail_bot.utils.privacy import mask_phone
 from korail_bot.utils.validators import YES_NO_RETRY, InputValidator
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class BookingOutcome:
+    """
+    What happened when a confirmed booking tried to become a running search.
+
+    Two surfaces now reach this point - the chat's final confirmation and the
+    Mini App's start button - and they render the same answer very
+    differently: one sends a message with buttons, the other returns JSON to a
+    page. The decision itself must not differ between them, because it is
+    where the access gate and the trial allowance are enforced. So the
+    decision is made once and described here, and each surface renders it.
+    """
+
+    started: bool
+    # True when the search was refused because the trial is used up. The user
+    # is not stuck: both surfaces offer to ask the operator for access.
+    needs_access_request: bool = False
+    # Whether that request has already been sent, so neither surface offers a
+    # button that would only say "you already asked".
+    access_request_pending: bool = False
+    # Filled when a trial allowance was spent, for the "n of m used" line.
+    trial_used: int | None = None
+    trial_limit: int | None = None
+    # Set when nothing could be started for a reason the user has to be told.
+    error: str | None = None
 
 
 class ConversationHandler:
@@ -1301,7 +1329,7 @@ class ConversationHandler:
     #: is unreadable before it is unsendable.
     MAX_TRAIN_OPTIONS = 30
 
-    def _fetch_train_options(self, chat_id: int, session: UserSession) -> list[dict] | None:
+    def fetch_train_options(self, chat_id: int, session: UserSession) -> list[dict] | None:
         """
         Ask Korail what runs in the chosen window.
 
@@ -1370,7 +1398,7 @@ class ConversationHandler:
             prefix: A line above the list saying why it is on screen. Empty
                 for the ordinary path, where the list needs no explaining.
         """
-        options = self._fetch_train_options(chat_id, session)
+        options = self.fetch_train_options(chat_id, session)
 
         from korail_bot.telegramBot.messages import Messages
 
@@ -2062,11 +2090,28 @@ class ConversationHandler:
             self.telegram.send_message(chat_id, Messages.NO_CREDENTIALS)
         return None
 
-    def _start_reservation(self, chat_id: int, session: UserSession) -> None:
-        """Start the reservation background process."""
+    def start_booking(self, chat_id: int, session: UserSession) -> BookingOutcome:
+        """
+        Turn a confirmed set of answers into a running search.
+
+        Everything that decides whether a search may run lives here - the
+        access gate, the trial allowance, the process itself - so that the
+        chat and the Mini App cannot drift into enforcing different rules.
+        Nothing here writes to the chat; the caller renders the outcome.
+
+        Args:
+            chat_id: Telegram chat ID
+            session: A session whose answers are complete
+
+        Returns:
+            What happened, in the terms each surface needs to explain it
+        """
         credentials = self._booking_credentials(chat_id, session)
         if credentials is None:
-            return
+            # _booking_credentials has already dealt with the user - it either
+            # sent them back to registering or told them there was nothing to
+            # book with - so there is nothing left to say here.
+            return BookingOutcome(started=False)
 
         username = credentials.korail_id
         password = credentials.korail_pw
@@ -2077,13 +2122,20 @@ class ConversationHandler:
         # summary screen they backed out of would be indefensible.
         decision = self.access.evaluate(username, is_developer=self._is_developer(chat_id))
         if not decision.allowed:
-            self._offer_access_request(chat_id, session, username, decision)
-            return
+            session.reset()
+            self.storage.save_user_session(session)
+            return BookingOutcome(
+                started=False,
+                needs_access_request=True,
+                access_request_pending=bool(
+                    self.storage.get_access_request(identity_hash(username))
+                ),
+                trial_used=decision.used,
+                trial_limit=decision.limit,
+            )
 
-        # Create search params
         search_params = self._build_search_params(session)
 
-        # Update session
         session.last_action = UserProgress.FINDING_TICKET
         self.storage.save_user_session(session)
 
@@ -2091,38 +2143,63 @@ class ConversationHandler:
             chat_id=chat_id, username=username, password=password, search_params=search_params
         )
 
-        if success:
-            # Charged only once the search is really running. A refusal - the
-            # duplicate guard, a process that died on startup - must not cost
-            # an allowance for a search that never happened.
-            self.access.consume(username, decision)
-            if decision.counts_against_trial and decision.limit >= 0:
-                self.telegram.send_message(
-                    chat_id,
-                    MessageTemplates.TRIAL_REMAINING.format(
-                        used=decision.used + 1,
-                        limit=decision.limit,
-                    ),
-                )
-            # The background process now owns the password; there is no reason
-            # to keep a copy at rest for the lifetime of the search.
-            credentials.korail_pw = ""
-            self.storage.save_user_session(session)
-
         if not success:
             logger.error(f"Failed to start reservation for chat_id={chat_id}")
             session.reset()
             self.storage.save_user_session(session)
             from korail_bot.telegramBot.messages import Messages
 
-            self.telegram.send_message(chat_id, Messages.ERROR_RESERVATION_START_FAILED)
+            return BookingOutcome(started=False, error=Messages.ERROR_RESERVATION_START_FAILED)
+
+        # Charged only once the search is really running. A refusal - the
+        # duplicate guard, a process that died on startup - must not cost an
+        # allowance for a search that never happened.
+        self.access.consume(username, decision)
+
+        # The background process now owns the password; there is no reason to
+        # keep a copy at rest for the lifetime of the search.
+        credentials.korail_pw = ""
+        self.storage.save_user_session(session)
+
+        charged = decision.counts_against_trial and decision.limit >= 0
+        return BookingOutcome(
+            started=True,
+            trial_used=decision.used + 1 if charged else None,
+            trial_limit=decision.limit if charged else None,
+        )
+
+    def _start_reservation(self, chat_id: int, session: UserSession) -> None:
+        """Start the search and say in the chat what came of it."""
+        outcome = self.start_booking(chat_id, session)
+
+        if outcome.needs_access_request:
+            self._offer_access_request(
+                chat_id,
+                outcome.trial_used or 0,
+                outcome.trial_limit or 0,
+                outcome.access_request_pending,
+            )
+            return
+
+        if outcome.error:
+            self.telegram.send_message(chat_id, outcome.error)
+            return
+
+        if outcome.started and outcome.trial_used is not None:
+            self.telegram.send_message(
+                chat_id,
+                MessageTemplates.TRIAL_REMAINING.format(
+                    used=outcome.trial_used,
+                    limit=outcome.trial_limit,
+                ),
+            )
 
     def _is_developer(self, chat_id: int) -> bool:
         """Whether this chat is in developer mode, and so has no limits."""
         return self.storage.is_developer(chat_id)
 
     def _offer_access_request(
-        self, chat_id: int, session: UserSession, username: str, decision
+        self, chat_id: int, used: int, limit: int, already_pending: bool
     ) -> None:
         """
         Tell the user their trial is over, and offer to ask the operator.
@@ -2132,13 +2209,9 @@ class ConversationHandler:
         in - not reading an instruction to contact a stranger by some means
         the bot never mentions.
         """
-        session.reset()
-        self.storage.save_user_session(session)
-
-        already_pending = bool(self.storage.get_access_request(identity_hash(username)))
         self.telegram.send_message(
             chat_id,
-            MessageTemplates.TRIAL_EXHAUSTED.format(used=decision.used, limit=decision.limit),
+            MessageTemplates.TRIAL_EXHAUSTED.format(used=used, limit=limit),
             reply_markup=keyboards.access_request_keyboard(pending=already_pending),
         )
 

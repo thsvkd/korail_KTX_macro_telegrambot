@@ -41,9 +41,9 @@ class TestPhoneNormalization:
         ],
     )
     def test_validation_accepts_them_all(self, typed):
-        is_valid, error = InputValidator.validate_phone_number(typed)
+        error = InputValidator.validate_phone_number(typed)
 
-        assert is_valid is True, error
+        assert error is None, error
 
     @pytest.mark.parametrize(
         "typed",
@@ -57,13 +57,13 @@ class TestPhoneNormalization:
         ],
     )
     def test_rubbish_is_still_refused(self, typed):
-        is_valid, _ = InputValidator.validate_phone_number(typed)
+        error = InputValidator.validate_phone_number(typed)
 
-        assert is_valid is False
+        assert error is not None
         assert InputValidator.normalize_phone_number(typed) is None
 
     def test_error_message_shows_the_expected_shape(self):
-        _, error = InputValidator.validate_phone_number("12345")
+        error = InputValidator.validate_phone_number("12345")
 
         assert "010-1234-5678" in error
 
@@ -117,18 +117,18 @@ class TestPasswordValidation:
         ],
     )
     def test_real_passwords_are_accepted(self, password):
-        is_valid, error = InputValidator.validate_password(password)
+        error = InputValidator.validate_password(password)
 
-        assert is_valid is True, f"{password!r} was refused: {error}"
+        assert error is None, f"{password!r} was refused: {error}"
 
     @pytest.mark.parametrize("password", ["", "abc", "a" * 51])
     def test_length_bounds_still_apply(self, password):
-        is_valid, _ = InputValidator.validate_password(password)
+        error = InputValidator.validate_password(password)
 
-        assert is_valid is False
+        assert error is not None
 
     @pytest.mark.parametrize("password", ["with\nnewline", "with\ttab"])
     def test_control_characters_are_refused(self, password):
-        is_valid, _ = InputValidator.validate_password(password)
+        error = InputValidator.validate_password(password)
 
-        assert is_valid is False
+        assert error is not None

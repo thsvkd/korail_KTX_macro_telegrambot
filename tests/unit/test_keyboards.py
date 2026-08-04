@@ -205,8 +205,8 @@ class TestValuesPassTheirValidators:
 
     def test_date_buttons_are_all_accepted(self):
         for value in values_of(keyboards.date_keyboard(), keyboards.STEP_DATE):
-            is_valid, error = InputValidator.validate_date(value)
-            assert is_valid, f"{value}: {error}"
+            error = InputValidator.validate_date(value)
+            assert error is None, f"{value}: {error}"
 
     def test_date_buttons_start_today_and_run_forward(self):
         values = values_of(keyboards.date_keyboard(), keyboards.STEP_DATE)
@@ -239,8 +239,8 @@ class TestValuesPassTheirValidators:
             if value == "2400":
                 # The handler special-cases this one; the validator does not.
                 continue
-            is_valid, error = InputValidator.validate_time(value)
-            assert is_valid, f"{value}: {error}"
+            error = InputValidator.validate_time(value)
+            assert error is None, f"{value}: {error}"
 
     def test_the_time_keyboard_covers_every_hour_of_the_day(self):
         values = values_of(
@@ -260,27 +260,27 @@ class TestValuesPassTheirValidators:
 
     def test_train_type_buttons_are_all_accepted(self):
         for value in values_of(keyboards.train_type_keyboard(), keyboards.STEP_TRAIN_TYPE):
-            is_valid, error = InputValidator.validate_train_type_choice(value)
-            assert is_valid, f"{value}: {error}"
+            error = InputValidator.validate_train_type_choice(value)
+            assert error is None, f"{value}: {error}"
 
     def test_seat_option_buttons_are_all_accepted(self):
         values = values_of(keyboards.seat_option_keyboard(), keyboards.STEP_SEAT_OPTION)
         assert values == ["1", "2", "3", "4"]
         for value in values:
-            is_valid, error = InputValidator.validate_special_option_choice(value)
-            assert is_valid, f"{value}: {error}"
+            error = InputValidator.validate_special_option_choice(value)
+            assert error is None, f"{value}: {error}"
 
     def test_passenger_count_buttons_are_all_accepted(self):
         values = values_of(keyboards.passenger_count_keyboard(), keyboards.STEP_PASSENGER_COUNT)
         assert values == [str(count) for count in range(1, 10)]
         for value in values:
-            is_valid, error = InputValidator.validate_passenger_count(value)
-            assert is_valid, f"{value}: {error}"
+            error = InputValidator.validate_passenger_count(value)
+            assert error is None, f"{value}: {error}"
 
     def test_seat_strategy_buttons_are_all_accepted(self):
         for value in values_of(keyboards.seat_strategy_keyboard(), keyboards.STEP_SEAT_STRATEGY):
-            is_valid, error = InputValidator.validate_seat_strategy_choice(value)
-            assert is_valid, f"{value}: {error}"
+            error = InputValidator.validate_seat_strategy_choice(value)
+            assert error is None, f"{value}: {error}"
 
     @pytest.mark.parametrize(
         ("keyboard", "step"),
@@ -316,8 +316,8 @@ class TestStationKeyboard:
         from unittest.mock import patch
 
         with patch("korail_bot.utils.station_codes.is_valid_station", return_value=True):
-            is_valid, error = InputValidator.validate_station_name(station)
-        assert is_valid, f"{station}: {error}"
+            error = InputValidator.validate_station_name(station)
+        assert error is None, f"{station}: {error}"
 
     def test_the_arrival_keyboard_drops_the_departure_station(self):
         keyboard = keyboards.station_keyboard(keyboards.STEP_DST_STATION, exclude="서울")

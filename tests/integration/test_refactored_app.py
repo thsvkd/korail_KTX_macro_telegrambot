@@ -104,40 +104,40 @@ class TestRefactoredArchitecture:
         from korail_bot.utils.validators import InputValidator
 
         # Phone number validation
-        valid, error = InputValidator.validate_phone_number("010-1234-5678")
-        assert valid is True
+        error = InputValidator.validate_phone_number("010-1234-5678")
+        assert error is None
 
         # Hyphens are optional. This used to assert False, which contradicted
         # both the shipped behaviour and
         # test_validators.py::test_valid_phone_without_hyphens.
-        valid, error = InputValidator.validate_phone_number("01012345678")
-        assert valid is True
+        error = InputValidator.validate_phone_number("01012345678")
+        assert error is None
 
-        valid, error = InputValidator.validate_phone_number("010-12-5678")
-        assert valid is False
+        error = InputValidator.validate_phone_number("010-12-5678")
+        assert error is not None
 
         # Date validation. A relative date, because booking is capped at a
         # year ahead - the hardcoded "20991231" this used to assert as valid
         # is past that cap and past what Korail sells.
         next_week = (datetime.now() + timedelta(days=7)).strftime("%Y%m%d")
-        valid, error = InputValidator.validate_date(next_week)
-        assert valid is True
+        error = InputValidator.validate_date(next_week)
+        assert error is None
 
-        valid, error = InputValidator.validate_date("20991231")
-        assert valid is False  # Beyond the one-year booking window
+        error = InputValidator.validate_date("20991231")
+        assert error is not None  # Beyond the one-year booking window
 
-        valid, error = InputValidator.validate_date("20200101")
-        assert valid is False  # Past date
+        error = InputValidator.validate_date("20200101")
+        assert error is not None  # Past date
 
-        valid, error = InputValidator.validate_date("invalid")
-        assert valid is False
+        error = InputValidator.validate_date("invalid")
+        assert error is not None
 
         # Time validation
-        valid, error = InputValidator.validate_time("1430")
-        assert valid is True
+        error = InputValidator.validate_time("1430")
+        assert error is None
 
-        valid, error = InputValidator.validate_time("2560")
-        assert valid is False  # Invalid hour
+        error = InputValidator.validate_time("2560")
+        assert error is not None  # Invalid hour
 
     def test_message_templates(self):
         """Test message templates exist."""

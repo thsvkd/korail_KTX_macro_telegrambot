@@ -28,7 +28,7 @@ from korail_bot.telegramBot import keyboards
 from korail_bot.utils.crypto import identity_hash
 from korail_bot.utils.logger import get_logger
 from korail_bot.utils.privacy import mask_phone
-from korail_bot.utils.validators import InputValidator
+from korail_bot.utils.validators import YES_NO_RETRY, InputValidator
 
 logger = get_logger(__name__)
 
@@ -176,7 +176,7 @@ class ConversationHandler:
             self.telegram.send_message(chat_id, Messages.CANCEL_START_CONFIRMATION)
         else:
             self.telegram.send_message(
-                chat_id, error, reply_markup=keyboards.start_confirm_keyboard()
+                chat_id, error or YES_NO_RETRY, reply_markup=keyboards.start_confirm_keyboard()
             )
 
     def _handle_operator_input(self, chat_id: int, text: str, session: UserSession) -> None:
@@ -190,8 +190,8 @@ class ConversationHandler:
         """
         from korail_bot.telegramBot.messages import Messages
 
-        is_valid, error = InputValidator.validate_operator_choice(text)
-        if not is_valid:
+        error = InputValidator.validate_operator_choice(text)
+        if error:
             self.telegram.send_message(chat_id, error, reply_markup=keyboards.operator_keyboard())
             return
 
@@ -370,7 +370,9 @@ class ConversationHandler:
             )
         else:
             self.telegram.send_message(
-                chat_id, error, reply_markup=keyboards.onboarding_overwrite_keyboard()
+                chat_id,
+                error or YES_NO_RETRY,
+                reply_markup=keyboards.onboarding_overwrite_keyboard(),
             )
 
     def _remember_account(
@@ -766,7 +768,7 @@ class ConversationHandler:
             self.begin_flow(chat_id, session)
         else:
             self.telegram.send_message(
-                chat_id, error, reply_markup=keyboards.resume_draft_keyboard()
+                chat_id, error or YES_NO_RETRY, reply_markup=keyboards.resume_draft_keyboard()
             )
 
     def _resume_draft(self, chat_id: int, session: UserSession) -> None:
@@ -910,9 +912,9 @@ class ConversationHandler:
 
     def _handle_phone_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle phone number input."""
-        is_valid, error = InputValidator.validate_phone_number(text)
+        error = InputValidator.validate_phone_number(text)
 
-        if not is_valid:
+        if error:
             self.telegram.send_message(chat_id, error + " 다시 입력 바랍니다.")
             return
 
@@ -944,8 +946,8 @@ class ConversationHandler:
     def _handle_password_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle password input and login."""
         # Validate password
-        is_valid, error = InputValidator.validate_password(text)
-        if not is_valid:
+        error = InputValidator.validate_password(text)
+        if error:
             self.telegram.send_message(
                 chat_id,
                 error + " 다시 입력 바랍니다.",
@@ -996,9 +998,9 @@ class ConversationHandler:
 
     def _handle_date_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle departure date input."""
-        is_valid, error = InputValidator.validate_date(text)
+        error = InputValidator.validate_date(text)
 
-        if not is_valid:
+        if error:
             self.telegram.send_message(
                 chat_id,
                 f"{error}\n예매 희망일 8자를 입력해주십시오.\n(ex_ 20210124) <- 2021년 1월 24일",
@@ -1029,9 +1031,9 @@ class ConversationHandler:
     def _handle_src_station_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle source station input."""
         operator = self.session_operator(session)
-        is_valid, error = InputValidator.validate_station_name(text, operator)
+        error = InputValidator.validate_station_name(text, operator)
 
-        if not is_valid:
+        if error:
             self.telegram.send_message(
                 chat_id,
                 error,
@@ -1057,9 +1059,9 @@ class ConversationHandler:
     def _handle_dst_station_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle destination station input."""
         operator = self.session_operator(session)
-        is_valid, error = InputValidator.validate_station_name(text, operator)
+        error = InputValidator.validate_station_name(text, operator)
 
-        if not is_valid:
+        if error:
             self.telegram.send_message(
                 chat_id,
                 error,
@@ -1085,9 +1087,9 @@ class ConversationHandler:
 
     def _handle_dep_time_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle departure time input."""
-        is_valid, error = InputValidator.validate_time(text)
+        error = InputValidator.validate_time(text)
 
-        if not is_valid:
+        if error:
             self.telegram.send_message(
                 chat_id, error, reply_markup=keyboards.time_keyboard(keyboards.STEP_DEP_TIME)
             )
@@ -1110,11 +1112,9 @@ class ConversationHandler:
     def _handle_max_dep_time_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle max departure time input."""
         # Allow 2400 as special value
-        if text == "2400":
-            is_valid = True
-        else:
-            is_valid, error = InputValidator.validate_time(text)
-            if not is_valid:
+        if text != "2400":
+            error = InputValidator.validate_time(text)
+            if error:
                 self.telegram.send_message(
                     chat_id,
                     error,
@@ -1156,9 +1156,9 @@ class ConversationHandler:
 
     def _handle_train_type_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle train type selection."""
-        is_valid, error = InputValidator.validate_train_type_choice(text)
+        error = InputValidator.validate_train_type_choice(text)
 
-        if not is_valid:
+        if error:
             self.telegram.send_message(chat_id, error, reply_markup=keyboards.train_type_keyboard())
             return
 
@@ -1185,9 +1185,9 @@ class ConversationHandler:
 
     def _handle_special_option_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle special seat option selection."""
-        is_valid, error = InputValidator.validate_special_option_choice(text)
+        error = InputValidator.validate_special_option_choice(text)
 
-        if not is_valid:
+        if error:
             self.telegram.send_message(
                 chat_id, error, reply_markup=keyboards.seat_option_keyboard()
             )
@@ -1219,9 +1219,9 @@ class ConversationHandler:
     def _handle_passenger_count_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle passenger count input."""
         # Validate input with enhanced validator
-        is_valid, error = InputValidator.validate_passenger_count(text)
+        error = InputValidator.validate_passenger_count(text)
 
-        if not is_valid:
+        if error:
             self.telegram.send_message(
                 chat_id, error, reply_markup=keyboards.passenger_count_keyboard()
             )
@@ -1253,9 +1253,9 @@ class ConversationHandler:
     def _handle_seat_strategy_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle seat strategy selection."""
         # Validate with enhanced validator
-        is_valid, error = InputValidator.validate_seat_strategy_choice(text)
+        error = InputValidator.validate_seat_strategy_choice(text)
 
-        if not is_valid:
+        if error:
             self.telegram.send_message(
                 chat_id, error, reply_markup=keyboards.seat_strategy_keyboard()
             )

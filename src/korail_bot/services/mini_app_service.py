@@ -2,6 +2,7 @@
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from korail_bot.models import Operator
@@ -105,50 +106,42 @@ class MiniAppSubmission:
         if operator is None:
             raise MiniAppDataError("철도를 다시 선택해주세요.")
 
-        dep_date = cls._validated(payload, "dep_date", InputValidator.validate_date, "출발 날짜")
-        src_station = cls._validated_station(payload, "src_station", operator, "출발역")
-        dst_station = cls._validated_station(payload, "dst_station", operator, "도착역")
+        dep_date = cls._validated(payload, "dep_date", InputValidator.validate_date)
+        src_station = cls._validated_station(payload, "src_station", operator)
+        dst_station = cls._validated_station(payload, "dst_station", operator)
         if src_station == dst_station:
             raise MiniAppDataError("출발역과 도착역은 달라야 합니다.")
 
-        dep_time = cls._validated(
-            payload, "dep_time", InputValidator.validate_time, "검색 시작 시각"
-        )
+        dep_time = cls._validated(payload, "dep_time", InputValidator.validate_time)
         max_dep_time = cls._text(payload, "max_dep_time")
         if max_dep_time != "2400":
-            valid, error = InputValidator.validate_time(max_dep_time)
-            if not valid:
-                raise MiniAppDataError(error or "검색 종료 시각을 다시 선택해주세요.")
+            error = InputValidator.validate_time(max_dep_time)
+            if error:
+                raise MiniAppDataError(error)
             if max_dep_time <= dep_time:
                 raise MiniAppDataError("검색 종료 시각은 시작 시각보다 늦어야 합니다.")
 
         train_type = cls._text(payload, "train_type")
         if operator is Operator.KORAIL:
-            valid, error = InputValidator.validate_train_type_choice(train_type)
-            if not valid:
-                raise MiniAppDataError(error or "열차 종류를 다시 선택해주세요.")
+            error = InputValidator.validate_train_type_choice(train_type)
+            if error:
+                raise MiniAppDataError(error)
         else:
             train_type = "1"
 
         seat_option = cls._validated(
-            payload,
-            "seat_option",
-            InputValidator.validate_special_option_choice,
-            "좌석 종류",
+            payload, "seat_option", InputValidator.validate_special_option_choice
         )
         passenger = cls._validated(
-            payload,
-            "passenger_count",
-            InputValidator.validate_passenger_count,
-            "탑승 인원",
+            payload, "passenger_count", InputValidator.validate_passenger_count
         )
         seat_strategy = cls._text(payload, "seat_strategy")
         if int(passenger) == 1:
             seat_strategy = "1"
         else:
-            valid, error = InputValidator.validate_seat_strategy_choice(seat_strategy)
-            if not valid:
-                raise MiniAppDataError(error or "좌석 배치 방식을 다시 선택해주세요.")
+            error = InputValidator.validate_seat_strategy_choice(seat_strategy)
+            if error:
+                raise MiniAppDataError(error)
 
         return cls(
             operator=operator,
@@ -227,19 +220,19 @@ class MiniAppSubmission:
         return str(value).strip()
 
     @classmethod
-    def _validated(cls, payload: dict, key: str, validator, label: str) -> str:
+    def _validated(cls, payload: dict, key: str, validator: Callable[[str], str | None]) -> str:
         value = cls._text(payload, key)
-        valid, error = validator(value)
-        if not valid:
-            raise MiniAppDataError(error or f"{label}을(를) 다시 선택해주세요.")
+        error = validator(value)
+        if error:
+            raise MiniAppDataError(error)
         return value
 
     @classmethod
-    def _validated_station(cls, payload: dict, key: str, operator: Operator, label: str) -> str:
+    def _validated_station(cls, payload: dict, key: str, operator: Operator) -> str:
         value = cls._text(payload, key)
-        valid, error = InputValidator.validate_station_name(value, operator)
-        if not valid:
-            raise MiniAppDataError(error or f"{label}을(를) 다시 선택해주세요.")
+        error = InputValidator.validate_station_name(value, operator)
+        if error:
+            raise MiniAppDataError(error)
         return value
 
     def as_train_info(self) -> dict:

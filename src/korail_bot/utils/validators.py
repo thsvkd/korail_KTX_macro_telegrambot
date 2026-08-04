@@ -3,9 +3,28 @@
 import re
 from datetime import datetime
 
+# What a chat is told when its answer to a yes/no question was neither.
+#
+# validate_yes_no returns this itself. It is named here because the three
+# callers that show it cannot prove to a type checker that a None answer came
+# with a message - the tuple can hold that combination even though nothing
+# produces it - and naming the message beats repeating a literal at each one.
+YES_NO_RETRY = "Y/예 또는 N/아니오를 입력해주세요."
+
 
 class InputValidator:
-    """Validator for user inputs in the reservation flow."""
+    """
+    Validator for user inputs in the reservation flow.
+
+    Every validate_* returns the reason the input cannot be used, or None when
+    it can. There is no separate boolean: a message and a verdict cannot then
+    disagree, and callers cannot be handed "invalid, but here is no reason to
+    show the user" - which is what they used to have to defend against.
+
+    validate_yes_no is the exception, and returns a tuple. Its answer is not
+    the same question as its validity: yes, no, and "that was not an answer"
+    are three outcomes, and the third one is re-asked rather than declined.
+    """
 
     @staticmethod
     def normalize_phone_number(phone: str) -> str | None:
@@ -45,7 +64,7 @@ class InputValidator:
         return None
 
     @staticmethod
-    def validate_phone_number(phone: str) -> tuple[bool, str | None]:
+    def validate_phone_number(phone: str) -> str | None:
         """
         Validate a Korean mobile number, in whatever shape it was typed.
 
@@ -57,24 +76,24 @@ class InputValidator:
             phone: Phone number string
 
         Returns:
-            Tuple of (is_valid, error_message)
+            The reason it is not valid, or None when it is
         """
         if not phone or not phone.strip():
-            return False, "전화번호를 입력해주세요."
+            return "전화번호를 입력해주세요."
 
         phone = phone.strip()
 
         # Anything that is not a digit or common separator is not a typo.
         if not re.fullmatch(r"[0-9\s.\-()+]+", phone):
-            return False, "전화번호는 숫자로만 입력해주세요. (예: 010-1234-5678)"
+            return "전화번호는 숫자로만 입력해주세요. (예: 010-1234-5678)"
 
         if InputValidator.normalize_phone_number(phone) is None:
-            return False, "올바른 전화번호 형식이 아닙니다. (예: 010-1234-5678)"
+            return "올바른 전화번호 형식이 아닙니다. (예: 010-1234-5678)"
 
-        return True, None
+        return None
 
     @staticmethod
-    def validate_date(date_str: str) -> tuple[bool, str | None]:
+    def validate_date(date_str: str) -> str | None:
         """
         Validate date in YYYYMMDD format with enhanced validation.
 
@@ -82,24 +101,24 @@ class InputValidator:
             date_str: Date string
 
         Returns:
-            Tuple of (is_valid, error_message)
+            The reason it is not valid, or None when it is
         """
         if not date_str:
-            return False, "날짜를 입력해주세요."
+            return "날짜를 입력해주세요."
 
         # Trim whitespace
         date_str = date_str.strip()
 
         if not date_str:
-            return False, "날짜를 입력해주세요."
+            return "날짜를 입력해주세요."
 
         # Check for non-digit characters
         if not date_str.isdigit():
-            return False, "날짜는 숫자만 입력해주세요. (예: 20250101)"
+            return "날짜는 숫자만 입력해주세요. (예: 20250101)"
 
         # Check length
         if len(date_str) != 8:
-            return False, "날짜는 8자리로 입력해주세요. (예: 20250101)"
+            return "날짜는 8자리로 입력해주세요. (예: 20250101)"
 
         # Check if date is valid
         try:
@@ -109,38 +128,38 @@ class InputValidator:
 
             # Validate year range (reasonable range: 2020-2100)
             if year < 2020 or year > 2100:
-                return False, f"연도가 유효하지 않습니다. (입력: {year}년)"
+                return f"연도가 유효하지 않습니다. (입력: {year}년)"
 
             # Validate month
             if month < 1 or month > 12:
-                return False, f"월이 유효하지 않습니다. (입력: {month}월)"
+                return f"월이 유효하지 않습니다. (입력: {month}월)"
 
             # Validate day
             if day < 1 or day > 31:
-                return False, f"일이 유효하지 않습니다. (입력: {day}일)"
+                return f"일이 유효하지 않습니다. (입력: {day}일)"
 
             # Parse date to check if it's valid (e.g., Feb 30 would fail)
             datetime(year, month, day)
 
         except ValueError:
-            return False, "유효하지 않은 날짜입니다. (예: 2월 30일은 존재하지 않습니다)"
+            return "유효하지 않은 날짜입니다. (예: 2월 30일은 존재하지 않습니다)"
 
         # Check if date is not in the past
         today = datetime.today().strftime("%Y%m%d")
         if date_str < today:
-            return False, "과거 날짜는 선택할 수 없습니다."
+            return "과거 날짜는 선택할 수 없습니다."
 
         # Check if date is too far in the future (e.g., more than 1 year ahead)
         from datetime import timedelta
 
         max_future_date = (datetime.today() + timedelta(days=365)).strftime("%Y%m%d")
         if date_str > max_future_date:
-            return False, "예매 가능한 기간을 초과했습니다. (최대 1년 이내)"
+            return "예매 가능한 기간을 초과했습니다. (최대 1년 이내)"
 
-        return True, None
+        return None
 
     @staticmethod
-    def validate_time(time_str: str) -> tuple[bool, str | None]:
+    def validate_time(time_str: str) -> str | None:
         """
         Validate time in HHMM format with enhanced validation.
 
@@ -148,43 +167,43 @@ class InputValidator:
             time_str: Time string
 
         Returns:
-            Tuple of (is_valid, error_message)
+            The reason it is not valid, or None when it is
         """
         if not time_str:
-            return False, "시간을 입력해주세요."
+            return "시간을 입력해주세요."
 
         # Trim whitespace
         time_str = time_str.strip()
 
         if not time_str:
-            return False, "시간을 입력해주세요."
+            return "시간을 입력해주세요."
 
         # Check for non-digit characters
         if not time_str.isdigit():
-            return False, "시간은 숫자만 입력해주세요. (예: 1430은 14시 30분)"
+            return "시간은 숫자만 입력해주세요. (예: 1430은 14시 30분)"
 
         # Check length
         if len(time_str) != 4:
-            return False, "시간은 4자리로 입력해주세요. (예: 1430은 14시 30분)"
+            return "시간은 4자리로 입력해주세요. (예: 1430은 14시 30분)"
 
         try:
             hours = int(time_str[:2])
             minutes = int(time_str[2:4])
         except ValueError:
-            return False, "시간 형식이 올바르지 않습니다. (예: 1430)"
+            return "시간 형식이 올바르지 않습니다. (예: 1430)"
 
         # Validate hours
         if hours < 0 or hours > 23:
-            return False, f"시간은 00-23 사이여야 합니다. (입력: {hours}시)"
+            return f"시간은 00-23 사이여야 합니다. (입력: {hours}시)"
 
         # Validate minutes
         if minutes < 0 or minutes > 59:
-            return False, f"분은 00-59 사이여야 합니다. (입력: {minutes}분)"
+            return f"분은 00-59 사이여야 합니다. (입력: {minutes}분)"
 
-        return True, None
+        return None
 
     @staticmethod
-    def validate_station_name(station: str, operator=None) -> tuple[bool, str | None]:
+    def validate_station_name(station: str, operator=None) -> str | None:
         """
         Validate a station name against the railway that would stop there.
 
@@ -194,7 +213,7 @@ class InputValidator:
                       which is what every caller meant when there was only one.
 
         Returns:
-            Tuple of (is_valid, error_message)
+            The reason it is not valid, or None when it is
         """
         # Import here to avoid circular dependency
         from korail_bot.models.operator import Operator
@@ -207,25 +226,25 @@ class InputValidator:
         operator = Operator.parse(operator)
 
         if not station:
-            return False, "역 이름을 입력해주세요."
+            return "역 이름을 입력해주세요."
 
         # Trim whitespace
         station = station.strip()
 
         if not station:
-            return False, "역 이름을 입력해주세요."
+            return "역 이름을 입력해주세요."
 
         # Check for '역' suffix
         if "역" in station:
-            return False, "'역'을 제외한 이름을 입력해주세요. (예: 광명)"
+            return "'역'을 제외한 이름을 입력해주세요. (예: 광명)"
 
         # Check minimum length
         if len(station) < 2:
-            return False, "역 이름이 너무 짧습니다. 최소 2자 이상 입력해주세요."
+            return "역 이름이 너무 짧습니다. 최소 2자 이상 입력해주세요."
 
         # Check maximum length (reasonable limit)
         if len(station) > 10:
-            return False, "역 이름이 너무 깁니다. 올바른 역 이름을 입력해주세요."
+            return "역 이름이 너무 깁니다. 올바른 역 이름을 입력해주세요."
 
         # Check for invalid characters
         if not station.replace(" ", "").replace("-", "").isalnum():
@@ -261,7 +280,7 @@ class InputValidator:
                 ]
                 for c in station
             ):
-                return False, "역 이름에 특수문자를 사용할 수 없습니다."
+                return "역 이름에 특수문자를 사용할 수 없습니다."
 
         # Check against the station list of the railway being booked.
         #
@@ -274,7 +293,7 @@ class InputValidator:
             from korail_bot.models.operator import SRT_MAJOR_STATIONS
 
             offered = ", ".join(SRT_MAJOR_STATIONS[:6])
-            return False, (
+            return (
                 f"'{station}'은(는) {operator.display_name}이(가) 서지 않는 역입니다.\n"
                 f"예: {offered} 등"
             )
@@ -285,9 +304,9 @@ class InputValidator:
             suggestion_text = format_station_suggestions(similar)
 
             error_msg = f"'{station}'은(는) 존재하지 않는 역입니다.{suggestion_text}"
-            return False, error_msg
+            return error_msg
 
-        return True, None
+        return None
 
     @staticmethod
     def validate_yes_no(answer: str) -> tuple[bool | None, str | None]:
@@ -305,17 +324,17 @@ class InputValidator:
             Tuple of (True, None), (False, None), or (None, error_message)
         """
         if not answer:
-            return None, "Y/예 또는 N/아니오를 입력해주세요."
+            return None, YES_NO_RETRY
 
         # Trim and convert to uppercase
         answer = answer.strip().upper()
 
         if not answer:
-            return None, "Y/예 또는 N/아니오를 입력해주세요."
+            return None, YES_NO_RETRY
 
         # Check length (prevent long inputs)
         if len(answer) > 10:
-            return None, "입력이 너무 깁니다. Y/예 또는 N/아니오를 입력해주세요."
+            return None, f"입력이 너무 깁니다. {YES_NO_RETRY}"
 
         # Valid positive responses
         if answer in ["Y", "예", "YES", "네", "ㅇ"]:
@@ -324,10 +343,10 @@ class InputValidator:
         elif answer in ["N", "아니오", "NO", "아니요", "ㄴ"]:
             return False, None
         else:
-            return None, "Y/예 또는 N/아니오를 입력해주세요."
+            return None, YES_NO_RETRY
 
     @staticmethod
-    def validate_operator_choice(choice: str) -> tuple[bool, str | None]:
+    def validate_operator_choice(choice: str) -> str | None:
         """
         Validate which railway was chosen.
 
@@ -341,20 +360,20 @@ class InputValidator:
             choice: What the user pressed or typed
 
         Returns:
-            Tuple of (is_valid, error_message)
+            The reason it is not valid, or None when it is
         """
         from korail_bot.models.operator import Operator
 
         if not (choice or "").strip():
-            return False, "철도를 선택해주세요. (코레일 또는 SRT)"
+            return "철도를 선택해주세요. (코레일 또는 SRT)"
 
         if Operator.from_answer(choice) is None:
-            return False, "코레일 또는 SRT 중에서 선택해주세요."
+            return "코레일 또는 SRT 중에서 선택해주세요."
 
-        return True, None
+        return None
 
     @staticmethod
-    def validate_train_type_choice(choice: str) -> tuple[bool, str | None]:
+    def validate_train_type_choice(choice: str) -> str | None:
         """
         Validate train type choice (1 or 2) with enhanced validation.
 
@@ -362,29 +381,29 @@ class InputValidator:
             choice: User's choice
 
         Returns:
-            Tuple of (is_valid, error_message)
+            The reason it is not valid, or None when it is
         """
         if not choice:
-            return False, "열차 종류를 선택해주세요. (1: KTX만, 2: 전체)"
+            return "열차 종류를 선택해주세요. (1: KTX만, 2: 전체)"
 
         # Trim whitespace
         choice = choice.strip()
 
         if not choice:
-            return False, "열차 종류를 선택해주세요. (1: KTX만, 2: 전체)"
+            return "열차 종류를 선택해주세요. (1: KTX만, 2: 전체)"
 
         # Check if it's a digit
         if not choice.isdigit():
-            return False, "숫자를 입력해주세요. (1 또는 2)"
+            return "숫자를 입력해주세요. (1 또는 2)"
 
         # Validate choice
         if choice not in ["1", "2"]:
-            return False, "1 또는 2를 입력해주세요. (1: KTX만, 2: 전체)"
+            return "1 또는 2를 입력해주세요. (1: KTX만, 2: 전체)"
 
-        return True, None
+        return None
 
     @staticmethod
-    def validate_special_option_choice(choice: str) -> tuple[bool, str | None]:
+    def validate_special_option_choice(choice: str) -> str | None:
         """
         Validate special seat option choice (1, 2, 3, or 4) with enhanced validation.
 
@@ -392,29 +411,29 @@ class InputValidator:
             choice: User's choice
 
         Returns:
-            Tuple of (is_valid, error_message)
+            The reason it is not valid, or None when it is
         """
         if not choice:
-            return False, "좌석 옵션을 선택해주세요. (1~4)"
+            return "좌석 옵션을 선택해주세요. (1~4)"
 
         # Trim whitespace
         choice = choice.strip()
 
         if not choice:
-            return False, "좌석 옵션을 선택해주세요. (1~4)"
+            return "좌석 옵션을 선택해주세요. (1~4)"
 
         # Check if it's a digit
         if not choice.isdigit():
-            return False, "숫자를 입력해주세요. (1, 2, 3, 또는 4)"
+            return "숫자를 입력해주세요. (1, 2, 3, 또는 4)"
 
         # Validate choice
         if choice not in ["1", "2", "3", "4"]:
-            return False, "1, 2, 3, 4 중 하나를 선택해주세요."
+            return "1, 2, 3, 4 중 하나를 선택해주세요."
 
-        return True, None
+        return None
 
     @staticmethod
-    def validate_passenger_count(count_str: str) -> tuple[bool, str | None]:
+    def validate_passenger_count(count_str: str) -> str | None:
         """
         Validate passenger count with enhanced validation.
 
@@ -422,37 +441,37 @@ class InputValidator:
             count_str: Passenger count as string
 
         Returns:
-            Tuple of (is_valid, error_message)
+            The reason it is not valid, or None when it is
         """
         if not count_str:
-            return False, "승객 수를 입력해주세요."
+            return "승객 수를 입력해주세요."
 
         # Trim whitespace
         count_str = count_str.strip()
 
         if not count_str:
-            return False, "승객 수를 입력해주세요."
+            return "승객 수를 입력해주세요."
 
         # Check if it's a digit
         if not count_str.isdigit():
-            return False, "승객 수는 숫자만 입력해주세요. (1~9)"
+            return "승객 수는 숫자만 입력해주세요. (1~9)"
 
         try:
             count = int(count_str)
         except ValueError:
-            return False, "유효한 숫자를 입력해주세요."
+            return "유효한 숫자를 입력해주세요."
 
         # Validate range
         if count < 1:
-            return False, "승객 수는 최소 1명 이상이어야 합니다."
+            return "승객 수는 최소 1명 이상이어야 합니다."
 
         if count > 9:
-            return False, "승객 수는 최대 9명까지 가능합니다."
+            return "승객 수는 최대 9명까지 가능합니다."
 
-        return True, None
+        return None
 
     @staticmethod
-    def validate_seat_strategy_choice(choice: str) -> tuple[bool, str | None]:
+    def validate_seat_strategy_choice(choice: str) -> str | None:
         """
         Validate seat strategy choice (1 or 2).
 
@@ -460,29 +479,29 @@ class InputValidator:
             choice: User's choice
 
         Returns:
-            Tuple of (is_valid, error_message)
+            The reason it is not valid, or None when it is
         """
         if not choice:
-            return False, "좌석 배치 방식을 선택해주세요. (1: 연속 좌석, 2: 랜덤 배치)"
+            return "좌석 배치 방식을 선택해주세요. (1: 연속 좌석, 2: 랜덤 배치)"
 
         # Trim whitespace
         choice = choice.strip()
 
         if not choice:
-            return False, "좌석 배치 방식을 선택해주세요. (1: 연속 좌석, 2: 랜덤 배치)"
+            return "좌석 배치 방식을 선택해주세요. (1: 연속 좌석, 2: 랜덤 배치)"
 
         # Check if it's a digit
         if not choice.isdigit():
-            return False, "숫자를 입력해주세요. (1 또는 2)"
+            return "숫자를 입력해주세요. (1 또는 2)"
 
         # Validate choice
         if choice not in ["1", "2"]:
-            return False, "1 또는 2를 입력해주세요. (1: 연속 좌석, 2: 랜덤 배치)"
+            return "1 또는 2를 입력해주세요. (1: 연속 좌석, 2: 랜덤 배치)"
 
-        return True, None
+        return None
 
     @staticmethod
-    def validate_password(password: str) -> tuple[bool, str | None]:
+    def validate_password(password: str) -> str | None:
         """
         Validate password input with basic security checks.
 
@@ -490,18 +509,18 @@ class InputValidator:
             password: Password string
 
         Returns:
-            Tuple of (is_valid, error_message)
+            The reason it is not valid, or None when it is
         """
         if not password:
-            return False, "비밀번호를 입력해주세요."
+            return "비밀번호를 입력해주세요."
 
         # Check minimum length
         if len(password) < 4:
-            return False, "비밀번호가 너무 짧습니다."
+            return "비밀번호가 너무 짧습니다."
 
         # Check maximum length (reasonable limit)
         if len(password) > 50:
-            return False, "비밀번호가 너무 깁니다."
+            return "비밀번호가 너무 깁니다."
 
         # No pattern blocklist here on purpose. This value is only ever
         # encrypted and posted to Korail's login endpoint - it reaches neither
@@ -509,6 +528,6 @@ class InputValidator:
         # prevent an injection. It only rejects real passwords: anything
         # containing 'drop' ("Raindrop2024") was refused as malicious.
         if any(character in password for character in ("\n", "\r", "\t")):
-            return False, "비밀번호에 줄바꿈이나 탭을 포함할 수 없습니다."
+            return "비밀번호에 줄바꿈이나 탭을 포함할 수 없습니다."
 
-        return True, None
+        return None

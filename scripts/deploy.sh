@@ -74,12 +74,13 @@ deploy_prepare_tailscale() {
 
     if ! tailscale_enabled; then
         if (( PUBLISH )); then
-            err "--publish needs a Tailscale sidecar, and TS_AUTHKEY is empty in"
+            err "--publish needs a Tailscale sidecar, and TS_HOSTNAME is empty in"
             err "  ${ENV_FILE#"$ROOT_DIR"/}."
-            err "Create a key at https://login.tailscale.com/admin/settings/keys"
-            err "and add it, along with the node name the URL will use:"
-            err "    TS_AUTHKEY=tskey-auth-..."
+            err "Name the node - it is what the URL is made of:"
             err "    TS_HOSTNAME=korail-bot"
+            err "Authorise it either by clicking the link this prints on first"
+            err "start, or without prompting by also setting TS_AUTHKEY from"
+            err "  https://login.tailscale.com/admin/settings/keys"
             die "Nothing was started."
         fi
         return 0
@@ -94,6 +95,30 @@ deploy_prepare_tailscale() {
     write_tailscale_serve_config "$mode"
 
     mkdir -p "$(tailscale_state_dir)"
+
+    # Authorise before starting, not after. Left to the sidecar, this goes
+    # wrong in a way that looks like nothing wrong: its entrypoint gives
+    # `tailscale up` sixty seconds, then exits, then Docker restarts it with a
+    # new node key - so the link it printed is dead by the time anyone opens
+    # it, and the next one is dead a minute later.
+    if [[ -z "$(clean_default "$(env_value TS_AUTHKEY)")" ]] \
+        && ! tailscale_state_authorised && ! tailscale_authenticated; then
+        local login_url
+        login_url="$(tailscale_login_begin)" \
+            || die "Could not start the tailscale login. Nothing was started."
+
+        echo
+        warn "This tailscale node has not joined a tailnet yet. Open this once:"
+        echo "    ${login_url}"
+        echo
+        info "Nothing is waiting on you - the link stays valid and this same"
+        info "  address comes back if you run this again. Once you have opened"
+        info "  it, run the same command to finish starting the stack."
+        exit 0
+    fi
+
+    # A helper left over from a previous run has served its purpose.
+    tailscale_login_finish
 
     if [[ "$mode" == "funnel" ]]; then
         info "Mini App exposure: public (Funnel)"
@@ -111,7 +136,27 @@ deploy_prepare_tailscale() {
 deploy_report_tailscale() {
     tailscale_enabled || return 0
 
-    local url deadline
+    local url deadline login
+
+    # Authorising happens before the sidecar starts, so reaching here without
+    # a tailnet means the auth key was refused - a wrong key, or an ephemeral
+    # one that has already been spent.
+    deadline=$(( SECONDS + 30 ))
+    until tailscale_authenticated; do
+        login="$(tailscale_login_url || true)"
+        if [[ -n "$login" ]]; then
+            echo
+            warn "The tailscale node is still asking to be authorised:"
+            echo "    ${login}"
+            warn "That link expires in under a minute - the container restarts and"
+            warn "  registers a new one. Clear TS_AUTHKEY and run this again to"
+            warn "  authorise with a link that waits."
+            return 0
+        fi
+        (( SECONDS < deadline )) || break
+        sleep 2
+    done
+
     # The node has to register with the control plane before it has a name.
     deadline=$(( SECONDS + 45 ))
     until url="$(tailscale_url)" && [[ -n "$url" ]]; do

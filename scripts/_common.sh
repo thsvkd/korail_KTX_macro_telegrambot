@@ -244,11 +244,13 @@ ensure_redis_data_dir() {
 
 # tailscale_enabled - true when this stack has a sidecar to start
 #
-# Keyed on the auth key, because that is the thing without which the container
-# cannot join a tailnet at all. An install that does not use the Mini App sets
-# nothing and gets no sidecar.
+# Keyed on the node name rather than on the auth key. Naming the node is the
+# decision - it is what the URL is made of - and the key is only one of two
+# ways to authorise it. The other is clicking a link, which is how a node with
+# no key joins, so keying on the key would have meant the interactive path
+# could never start the container that prints the link.
 tailscale_enabled() {
-    [[ -n "$(clean_default "$(env_value TS_AUTHKEY)")" ]]
+    [[ -n "$(clean_default "$(env_value TS_HOSTNAME)")" ]]
 }
 
 # tailscale_hostname - the node name, which decides the public URL
@@ -256,6 +258,116 @@ tailscale_hostname() {
     local name
     name="$(env_value TS_HOSTNAME)"
     printf '%s' "${name:-korail-bot}"
+}
+
+# tailscale_authenticated - true once the node has joined a tailnet
+tailscale_authenticated() {
+    local container
+    container="$(compose_container tailscale)"
+    container_running "$container" || return 1
+
+    [[ "$(docker exec "$container" tailscale status --json 2>/dev/null \
+        | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("BackendState", ""))
+except Exception:
+    print("")' 2>/dev/null)" == "Running" ]]
+}
+
+# tailscale_login_url - the link that authorises a node started without a key
+#
+# Read out of the container's log rather than asked of the CLI: tailscaled
+# prints it once while it waits, and at that point `tailscale status` has no
+# tailnet to answer about.
+tailscale_login_url() {
+    local container
+    container="$(compose_container tailscale)"
+    container_exists "$container" || return 1
+
+    docker logs "$container" 2>&1 \
+        | grep -oE 'https://login\.tailscale\.com/a/[0-9a-f]+' \
+        | tail -n 1
+}
+
+# tailscale_login_begin - put a link on screen and leave something waiting
+#
+# Two problems shaped this, and both were found the hard way.
+#
+# The sidecar image cannot do the login itself. Its entrypoint gives
+# `tailscale up` sixty seconds, kills it, and exits; Docker restarts the
+# container, which registers a *new* node key and so invalidates the link it
+# printed a minute earlier. Anyone who was not already looking at the terminal
+# is chasing a link that died before they read it.
+#
+# The obvious fix - run the login by hand and wait for the click - only moves
+# the deadline. It puts a person inside the runtime of a command, so walking
+# away for ten minutes ends the attempt, and the next attempt prints a
+# different link. That happened twice here before this shape existed.
+#
+# So nothing waits on the person. The helper container waits, indefinitely,
+# in the background; this function starts it if it is not already running and
+# prints its link. Whenever the click lands, the state directory becomes
+# authorised, and the next `deploy.sh up` picks it up and carries on. Running
+# this repeatedly is safe and keeps showing the same link.
+tailscale_login_begin() {
+    local state name helper url deadline
+    state="$(tailscale_state_dir)"
+    name="$(tailscale_hostname)"
+    helper="$(compose_container tailscale)_login"
+
+    mkdir -p "$state"
+
+    if ! container_running "$helper"; then
+        # A stopped one has a dead link in it and holds the name.
+        docker rm -f "$helper" >/dev/null 2>&1 || true
+
+        # No --timeout: this is meant to outlast the person's coffee break.
+        # tailscaled and the login run in the same container so they share the
+        # socket, and the state directory is the one the sidecar will use.
+        docker run -d --name "$helper" \
+            --restart unless-stopped \
+            -v "${state}:/var/lib/tailscale" \
+            --entrypoint /bin/sh \
+            "tailscale/tailscale:${TS_IMAGE_TAG:-stable}" \
+            -c "tailscaled --tun=userspace-networking --statedir=/var/lib/tailscale \
+                    --socket=/tmp/tailscaled.sock &
+                sleep 3
+                exec tailscale --socket=/tmp/tailscaled.sock up --hostname='${name}'" \
+            >/dev/null || {
+            err "Could not start the login helper."
+            return 1
+        }
+    fi
+
+    deadline=$(( SECONDS + 60 ))
+    until url="$(docker logs "$helper" 2>&1 \
+        | grep -oE 'https://login\.tailscale\.com/a/[0-9a-f]+' | tail -n 1)" \
+        && [[ -n "$url" ]]; do
+        if (( SECONDS >= deadline )); then
+            err "The login helper printed no link. Its log:"
+            docker logs "$helper" 2>&1 | tail -20 >&2
+            return 1
+        fi
+        sleep 2
+    done
+
+    printf '%s' "$url"
+}
+
+# tailscale_login_finish - clear away the helper once the node has joined
+tailscale_login_finish() {
+    docker rm -f "$(compose_container tailscale)_login" >/dev/null 2>&1 || true
+}
+
+# tailscale_state_authorised - whether the stored state has joined a tailnet
+#
+# A heuristic, and deliberately one: the authoritative answer needs a running
+# tailscaled, and the point of asking is to decide whether to start one. An
+# unauthorised state directory holds only tailscaled.state and its logs; the
+# profile appears when a node is accepted. Being wrong here costs a prompt,
+# not correctness - the sidecar itself is what actually authenticates.
+tailscale_state_authorised() {
+    [[ -d "$(tailscale_state_dir)/profile-data" ]]
 }
 
 # tailscale_serve_mode - `serve` (tailnet only) or `funnel` (public)

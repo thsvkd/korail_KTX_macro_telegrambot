@@ -893,7 +893,7 @@ def _helper(env_file: Path, snippet: str) -> subprocess.CompletedProcess:
     )
 
 
-def test_a_stack_without_an_auth_key_has_no_sidecar(tmp_path):
+def test_a_stack_without_a_node_name_has_no_sidecar(tmp_path):
     """
     The sidecar is the only thing here that joins a network beyond this host.
     An install that never asked for one must not acquire it by upgrading.
@@ -905,8 +905,13 @@ def test_a_stack_without_an_auth_key_has_no_sidecar(tmp_path):
     assert result.stdout.strip() == "no"
 
 
-def test_an_auth_key_is_what_turns_the_sidecar_on(tmp_path):
-    env_file = _env_with(tmp_path, TS_AUTHKEY="tskey-auth-example")
+def test_naming_the_node_is_what_turns_the_sidecar_on(tmp_path):
+    """
+    The name, not the auth key. A node with no key is authorised by clicking a
+    link it prints on first start, and keying this on the key would have meant
+    the container that prints the link could never start.
+    """
+    env_file = _env_with(tmp_path, TS_HOSTNAME="korail-bot")
 
     result = _helper(env_file, "tailscale_enabled && echo yes || echo no")
 
@@ -918,7 +923,7 @@ def test_the_default_exposure_is_tailnet_only(tmp_path):
     Not public. Someone who sets an auth key has asked to be on their tailnet,
     which is not the same as asking to be on the internet.
     """
-    env_file = _env_with(tmp_path, TS_AUTHKEY="tskey-auth-example")
+    env_file = _env_with(tmp_path, TS_HOSTNAME="korail-bot")
 
     result = _helper(env_file, "tailscale_serve_mode")
 
@@ -926,7 +931,7 @@ def test_the_default_exposure_is_tailnet_only(tmp_path):
 
 
 def test_the_generated_config_keeps_funnel_off_for_serve(tmp_path):
-    env_file = _env_with(tmp_path, TS_AUTHKEY="tskey-auth-example")
+    env_file = _env_with(tmp_path, TS_HOSTNAME="korail-bot")
 
     _helper(env_file, "write_tailscale_serve_config serve")
 
@@ -935,7 +940,7 @@ def test_the_generated_config_keeps_funnel_off_for_serve(tmp_path):
 
 
 def test_publishing_is_the_only_thing_that_sets_allow_funnel(tmp_path):
-    env_file = _env_with(tmp_path, TS_AUTHKEY="tskey-auth-example")
+    env_file = _env_with(tmp_path, TS_HOSTNAME="korail-bot")
 
     _helper(env_file, "write_tailscale_serve_config funnel")
 
@@ -949,7 +954,7 @@ def test_the_sidecar_proxies_to_the_configured_mini_app_port(tmp_path):
     still name 8081 after somebody moved the listener, and the failure would
     be a Mini App that opens to nothing.
     """
-    env_file = _env_with(tmp_path, TS_AUTHKEY="tskey-auth-example", MINI_APP_API_PORT="9443")
+    env_file = _env_with(tmp_path, TS_HOSTNAME="korail-bot", MINI_APP_API_PORT="9443")
 
     _helper(env_file, "write_tailscale_serve_config serve")
 
@@ -957,7 +962,7 @@ def test_the_sidecar_proxies_to_the_configured_mini_app_port(tmp_path):
     assert '"Proxy": "http://app:9443"' in config
 
 
-def test_publish_without_an_auth_key_refuses_rather_than_starting(tmp_path):
+def test_publish_without_a_sidecar_refuses_rather_than_starting(tmp_path):
     """
     --publish means "put this on the internet". With nothing to publish
     through, starting anyway would leave the operator believing it is up.
@@ -975,7 +980,7 @@ def test_publish_without_an_auth_key_refuses_rather_than_starting(tmp_path):
     )
 
     assert result.returncode != 0
-    assert "TS_AUTHKEY" in result.stderr
+    assert "TS_HOSTNAME" in result.stderr
     assert "Nothing was started" in result.stderr
 
 
@@ -985,7 +990,7 @@ def test_the_chosen_exposure_survives_an_unrelated_restart(tmp_path):
     restarting the bot next week silently takes the Mini App off the internet,
     with nothing in the logs saying so.
     """
-    env_file = _env_with(tmp_path, TS_AUTHKEY="tskey-auth-example")
+    env_file = _env_with(tmp_path, TS_HOSTNAME="korail-bot")
 
     _helper(env_file, "set_env_key TS_SERVE_MODE funnel")
     result = _helper(env_file, "tailscale_serve_mode")

@@ -337,6 +337,16 @@ compose_start() {
     info "Receive mode: long polling (no public address needed)"
     info "Redis data:   $(redis_data_dir)"
 
+    # Regenerated rather than assumed present: it carries MINI_APP_API_PORT,
+    # and a stale copy would send the sidecar at a port nothing answers on.
+    # The mode is whatever was chosen last - restarting the bot is not a
+    # decision to stop publishing it. That decision is deploy.sh's.
+    if tailscale_enabled; then
+        write_tailscale_serve_config "$(tailscale_serve_mode)"
+        mkdir -p "$(tailscale_state_dir)"
+        info "Mini App:     $(tailscale_serve_mode) ($(tailscale_hostname))"
+    fi
+
     # No image and a build section means compose builds it here rather than
     # failing, so a fresh checkout needs no separate build step.
     (( build )) && up+=(--build)
@@ -943,6 +953,25 @@ compose_status() {
             "") info "헬스체크 없음" ;;
             *) err "헬스체크 ${health} - 봇은 살아 있는데 포트가 안 열렸습니다" ;;
         esac
+    fi
+
+    # The one thing here that is reachable from outside this machine, so worth
+    # stating plainly: whether it is, and at what address.
+    if tailscale_enabled; then
+        local ts_container ts_url ts_mode
+        ts_container="$(compose_container tailscale)"
+        ts_mode="$(tailscale_serve_mode)"
+        if container_running "$ts_container"; then
+            ts_url="$(tailscale_url || true)"
+            if [[ "$ts_mode" == "funnel" ]]; then
+                ok "Mini App 공개 중 - ${ts_url:-주소 확인 중}"
+            else
+                ok "Mini App 타일넷 전용 - ${ts_url:-주소 확인 중}"
+                info "  공개하려면: scripts/deploy.sh --publish up"
+            fi
+        else
+            err "Tailscale ${ts_container} 실행 중이 아님 - Mini App 에 접근할 수 없습니다"
+        fi
     fi
 
     # -------------------- What it is working on --------------------

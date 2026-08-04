@@ -853,3 +853,142 @@ esac
     assert f"compose --env-file {production} -f {ROOT / 'docker-compose.yml'} stop" in calls
     assert "down --volumes" not in calls
     assert (data_dir / "dump.rdb").read_bytes() == b"REDIS"
+
+
+# ============================================================
+# Putting the Mini App where a phone can reach it
+# ============================================================
+#
+# This is the one part of the deployment that can make the bot reachable from
+# the internet, so the interesting cases are all about it not happening by
+# accident: a stack with no sidecar configured must be unchanged, and the
+# public mode must be something somebody asked for in as many words.
+
+
+def _env_with(tmp_path: Path, **values: str) -> Path:
+    """A minimal env file holding what the deploy helpers read."""
+    path = tmp_path / "stack.env"
+    base = {
+        "BOTTOKEN": "token",
+        "REDIS_PASSWORD": "redis-password",
+        "REDIS_DATA_DIR": str(tmp_path / "redis"),
+        "TS_STATE_DIR": str(tmp_path / "ts-state"),
+        "TS_CONFIG_DIR": str(tmp_path / "ts-config"),
+    }
+    base.update(values)
+    path.write_text("".join(f"{key}={value}\n" for key, value in base.items()), encoding="utf-8")
+    return path
+
+
+def _helper(env_file: Path, snippet: str) -> subprocess.CompletedProcess:
+    """Run one expression against the shared shell helpers."""
+    return subprocess.run(
+        ["bash", "-c", f'source "{COMMON}"; {snippet}'],
+        cwd=ROOT,
+        env={**os.environ, "ENV_FILE": str(env_file)},
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+
+
+def test_a_stack_without_an_auth_key_has_no_sidecar(tmp_path):
+    """
+    The sidecar is the only thing here that joins a network beyond this host.
+    An install that never asked for one must not acquire it by upgrading.
+    """
+    env_file = _env_with(tmp_path)
+
+    result = _helper(env_file, "tailscale_enabled && echo yes || echo no")
+
+    assert result.stdout.strip() == "no"
+
+
+def test_an_auth_key_is_what_turns_the_sidecar_on(tmp_path):
+    env_file = _env_with(tmp_path, TS_AUTHKEY="tskey-auth-example")
+
+    result = _helper(env_file, "tailscale_enabled && echo yes || echo no")
+
+    assert result.stdout.strip() == "yes"
+
+
+def test_the_default_exposure_is_tailnet_only(tmp_path):
+    """
+    Not public. Someone who sets an auth key has asked to be on their tailnet,
+    which is not the same as asking to be on the internet.
+    """
+    env_file = _env_with(tmp_path, TS_AUTHKEY="tskey-auth-example")
+
+    result = _helper(env_file, "tailscale_serve_mode")
+
+    assert result.stdout.strip() == "serve"
+
+
+def test_the_generated_config_keeps_funnel_off_for_serve(tmp_path):
+    env_file = _env_with(tmp_path, TS_AUTHKEY="tskey-auth-example")
+
+    _helper(env_file, "write_tailscale_serve_config serve")
+
+    config = (tmp_path / "ts-config" / "serve.json").read_text(encoding="utf-8")
+    assert '"AllowFunnel": { "${TS_CERT_DOMAIN}:443": false }' in config
+
+
+def test_publishing_is_the_only_thing_that_sets_allow_funnel(tmp_path):
+    env_file = _env_with(tmp_path, TS_AUTHKEY="tskey-auth-example")
+
+    _helper(env_file, "write_tailscale_serve_config funnel")
+
+    config = (tmp_path / "ts-config" / "serve.json").read_text(encoding="utf-8")
+    assert '"AllowFunnel": { "${TS_CERT_DOMAIN}:443": true }' in config
+
+
+def test_the_sidecar_proxies_to_the_configured_mini_app_port(tmp_path):
+    """
+    Generated rather than committed for this reason: a checked-in file would
+    still name 8081 after somebody moved the listener, and the failure would
+    be a Mini App that opens to nothing.
+    """
+    env_file = _env_with(tmp_path, TS_AUTHKEY="tskey-auth-example", MINI_APP_API_PORT="9443")
+
+    _helper(env_file, "write_tailscale_serve_config serve")
+
+    config = (tmp_path / "ts-config" / "serve.json").read_text(encoding="utf-8")
+    assert '"Proxy": "http://app:9443"' in config
+
+
+def test_publish_without_an_auth_key_refuses_rather_than_starting(tmp_path):
+    """
+    --publish means "put this on the internet". With nothing to publish
+    through, starting anyway would leave the operator believing it is up.
+    """
+    env_file = _env_with(tmp_path)
+
+    result = subprocess.run(
+        ["bash", str(DEPLOY), "--publish", "up"],
+        cwd=ROOT,
+        env={**os.environ, "ENV_FILE": str(env_file)},
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=120,
+    )
+
+    assert result.returncode != 0
+    assert "TS_AUTHKEY" in result.stderr
+    assert "Nothing was started" in result.stderr
+
+
+def test_the_chosen_exposure_survives_an_unrelated_restart(tmp_path):
+    """
+    Recorded in the env file rather than held for one command. Otherwise
+    restarting the bot next week silently takes the Mini App off the internet,
+    with nothing in the logs saying so.
+    """
+    env_file = _env_with(tmp_path, TS_AUTHKEY="tskey-auth-example")
+
+    _helper(env_file, "set_env_key TS_SERVE_MODE funnel")
+    result = _helper(env_file, "tailscale_serve_mode")
+
+    assert result.stdout.strip() == "funnel"
+    assert "TS_SERVE_MODE=funnel" in env_file.read_text(encoding="utf-8")

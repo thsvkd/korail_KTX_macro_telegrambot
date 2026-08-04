@@ -140,50 +140,71 @@ MINI_APP_URL=https://<아래에서 정한 주소>/
 compose는 이 포트를 호스트의 루프백에만 매답니다. 인터넷에 내보내는 것은 앞단의
 역프록시입니다.
 
-### 2. 공개 HTTPS 주소 만들기
+### 2. Tailscale 사이드카로 주소 만들기
 
-셋 중 하나를 고르면 됩니다. **코드는 어느 쪽이든 동일합니다** — 바뀌는 것은
-명령 한 줄과 `MINI_APP_URL` 값뿐입니다.
+compose 스택에는 `tailscale` 서비스가 있고, 이것이 **자기 이름을 가진 노드**로
+타일넷에 붙습니다. 호스트의 테일스케일을 쓰지 않는 이유는 Funnel의 호스트명이
+**노드당 하나**이기 때문입니다 — 호스트 노드를 쓰면 이 머신이 서비스하는 다른
+것들과 주소를, 그리고 인증서를 공유하게 됩니다.
 
-**(a) Tailscale Funnel, 경로 마운트 (가장 단순)**
-
-```bash
-tailscale funnel --bg --set-path /korail http://127.0.0.1:8081
-```
+`TS_HOSTNAME`이 URL을 정합니다.
 
 ```bash
-MINI_APP_URL=https://<노드>.<테일넷>.ts.net/korail/
+TS_AUTHKEY=tskey-auth-...
+TS_HOSTNAME=thsvkd-korail     # → https://thsvkd-korail.<테일넷>.ts.net/
 ```
 
-표준 443을 쓰므로 Telegram이 확실히 받아줍니다. 같은 노드의 다른 앱이 루트
-경로를 쓰고 있어도 서로 간섭하지 않습니다.
+키는 [관리 콘솔](https://login.tailscale.com/admin/settings/keys)에서 만듭니다.
+**Reusable로 만들고 Ephemeral은 끄십시오** — 일회용 노드는 재시작할 때마다 사라져
+이름 뒤에 숫자가 붙고, 그러면 URL이 바뀝니다.
 
-**(b) Tailscale Funnel, 별도 포트**
+`TS_AUTHKEY`가 비어 있으면 사이드카는 아예 뜨지 않습니다. compose 프로파일로
+감싸 두었으므로 미니 앱을 쓰지 않는 설치는 이 서비스의 존재에 영향을 받지
+않습니다.
+
+### 3. 띄우기 — serve 와 funnel
 
 ```bash
-tailscale funnel --bg --https 10000 http://127.0.0.1:8081
+scripts/deploy.sh up               # 타일넷 전용 (Serve)
+scripts/deploy.sh --publish up     # 인터넷 공개 (Funnel).  -pb 도 같습니다
 ```
 
-루트 경로를 차지합니다. 다만 Funnel이 쓸 수 있는 포트는 443·8443·10000 셋뿐이고,
-Telegram이 Mini App URL로 비표준 포트를 받아주는지는 공식 문서에 명시가 없으므로
-실제로 등록해 확인해야 합니다.
+기본이 타일넷 전용인 것은 의도한 것입니다. 인증 키를 넣은 것은 "내 타일넷에
+올리겠다"는 뜻이지 "인터넷에 열겠다"는 뜻이 아닙니다. 본인 폰이 타일넷에 들어와
+있다면 이 상태로도 미니 앱을 다 써볼 수 있으므로, 공개는 다른 사용자가 필요할 때
+하면 됩니다.
 
-**(c) Cloudflare Tunnel**
+고른 값은 `.env`의 `TS_SERVE_MODE`에 기록됩니다. 한 번의 명령에만 적용되게 하면
+다음 주에 다른 이유로 봇을 재시작했을 때 미니 앱이 조용히 인터넷에서 사라지고
+로그에는 아무 말도 남지 않기 때문입니다. `scripts/server.sh restart`는 기록된
+모드를 유지하고, 모드를 바꾸는 것은 `deploy.sh`뿐입니다.
+
+`deploy.sh up`은 올라온 뒤 실제 주소를 출력합니다. 노드에게 물어서 얻는 값이라
+추측이 아닙니다. 그 값을 `MINI_APP_URL`에 넣고 봇을 재시작하십시오.
+
+`--publish`는 타일넷 정책에서 이 노드에 Funnel을 허용해야 동작합니다.
+
+```json
+"nodeAttrs": [{"target": ["tag:korail-bot"], "attr": ["funnel"]}]
+```
+
+> 참고로 `tailscale serve --service`로 만드는 Tailscale Services는 고유한 이름과
+> VIP를 받지만 **타일넷 전용**이라 Funnel로 공개할 수 없습니다 —
+> `tailscale funnel`에는 `--service` 플래그가 없습니다.
+
+### 다른 방식을 쓰려면
+
+사이드카를 쓰지 않고 앞단에 Cloudflare Tunnel 같은 것을 두어도 됩니다. compose가
+공개 리스너를 호스트 루프백(`MINI_APP_BIND_ADDRESS`, 기본 `127.0.0.1`)에 매달아
+두므로 거기로 프록시하면 됩니다.
 
 ```bash
 cloudflared tunnel --url http://127.0.0.1:8081
 ```
 
-고정 도메인과 WAF·레이트리밋을 앞단에서 얻고 호스트 IP도 가려집니다. 대신
-도메인과 Cloudflare 계정 준비가 필요합니다.
+**코드는 어느 쪽이든 동일합니다.** 바뀌는 것은 앞단과 `MINI_APP_URL` 값뿐입니다.
 
-> Funnel의 호스트명은 **노드당 하나**입니다(`<노드>.<테일넷>.ts.net`). 같은
-> 머신에서 호스트명까지 새로 받으려면 노드가 하나 더 있어야 하며, 컨테이너로
-> tailscaled를 띄우는 것이 그 방법입니다. `tailscale serve --service` 로 만드는
-> Tailscale Services는 고유한 이름과 VIP를 받지만 **타일넷 전용**이라 Funnel로
-> 공개할 수 없습니다 — `tailscale funnel` 에는 `--service` 플래그가 없습니다.
-
-### 3. Telegram에 등록
+### 4. Telegram에 등록
 
 봇을 재시작하면 `/start`의 답장 키보드와 채팅 입력창의 `예약 열기` 메뉴가 이
 주소를 엽니다. 봇 프로필에도 **앱 열기** 버튼을 띄우려면 `@BotFather`에서

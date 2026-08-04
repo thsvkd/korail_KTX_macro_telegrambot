@@ -162,6 +162,15 @@ compose() {
     [[ -n "${COMPOSE_EXTRA_FILE:-}" && -f "${COMPOSE_EXTRA_FILE}" ]] && \
         files+=(-f "$COMPOSE_EXTRA_FILE")
 
+    # The tailscale sidecar sits behind a profile so that an install which
+    # does not use the Mini App is unaffected by its existence. Selected here
+    # rather than at each call site, so `up`, `ps`, `logs` and `down` all
+    # agree about whether that container is part of this stack - a `down` that
+    # forgot the profile would leave it running and still proxying.
+    if tailscale_enabled && [[ ",${COMPOSE_PROFILES:-}," != *,tailscale,* ]]; then
+        export COMPOSE_PROFILES="${COMPOSE_PROFILES:+${COMPOSE_PROFILES},}tailscale"
+    fi
+
     if docker compose version >/dev/null 2>&1; then
         docker compose --env-file "$ENV_FILE" "${files[@]}" "$@"
     elif command -v docker-compose >/dev/null 2>&1; then
@@ -222,12 +231,121 @@ ensure_redis_data_dir() {
     mkdir -p "$(redis_data_dir)"
 }
 
-# compose_container <app|redis> - the container name the selected stack uses
+# ---------------------------------------------------------------- tailscale
+#
+# The Mini App needs the bot to be reachable from a phone, and the sidecar in
+# docker-compose.yml is how. It joins the tailnet as a node of its own - its
+# own name, its own address - rather than borrowing the host's, so the bot
+# gets a URL that is not shared with whatever else this machine serves.
+#
+# Two things it is deliberately not: it is not on the host's network, and it
+# is not given the host's tailscale state. A container that could rewrite the
+# host's tailnet identity would be a much larger thing to trust than a proxy.
+
+# tailscale_enabled - true when this stack has a sidecar to start
+#
+# Keyed on the auth key, because that is the thing without which the container
+# cannot join a tailnet at all. An install that does not use the Mini App sets
+# nothing and gets no sidecar.
+tailscale_enabled() {
+    [[ -n "$(clean_default "$(env_value TS_AUTHKEY)")" ]]
+}
+
+# tailscale_hostname - the node name, which decides the public URL
+tailscale_hostname() {
+    local name
+    name="$(env_value TS_HOSTNAME)"
+    printf '%s' "${name:-korail-bot}"
+}
+
+# tailscale_serve_mode - `serve` (tailnet only) or `funnel` (public)
+tailscale_serve_mode() {
+    local mode
+    mode="$(env_value TS_SERVE_MODE)"
+    [[ "$mode" == "funnel" ]] && { printf 'funnel'; return; }
+    printf 'serve'
+}
+
+# tailscale_config_dir - host directory holding the generated serve config
+#
+# Generated rather than committed, and a directory rather than a file for two
+# separate reasons. The port it proxies to comes from MINI_APP_API_PORT, so a
+# checked-in file would go stale the moment someone changed that. And
+# tailscaled only notices later edits when the mount is a directory.
+tailscale_config_dir() {
+    local dir
+    dir="$(env_value TS_CONFIG_DIR)"
+    dir="${dir:-./.data/tailscale/config}"
+    [[ "$dir" != /* ]] && dir="${ROOT_DIR}/${dir#./}"
+    printf '%s' "$dir"
+}
+
+# tailscale_state_dir - host directory holding the node's identity
+tailscale_state_dir() {
+    local dir
+    dir="$(env_value TS_STATE_DIR)"
+    dir="${dir:-./.data/tailscale/state}"
+    [[ "$dir" != /* ]] && dir="${ROOT_DIR}/${dir#./}"
+    printf '%s' "$dir"
+}
+
+# write_tailscale_serve_config <serve|funnel> - generate the sidecar's config
+#
+# AllowFunnel is the whole difference between the two modes: false keeps the
+# address inside the tailnet, true puts it on the internet. Generating both
+# from one place means the two cannot drift apart in what they proxy to.
+#
+# ${TS_CERT_DOMAIN} is left for the container to substitute - it is the node's
+# own name, which is not known here and does not need to be.
+write_tailscale_serve_config() {
+    local mode="${1:-serve}" allow="false" port dir
+    [[ "$mode" == "funnel" ]] && allow="true"
+
+    port="$(env_value MINI_APP_API_PORT)"
+    port="${port:-8081}"
+    dir="$(tailscale_config_dir)"
+    mkdir -p "$dir"
+
+    cat > "${dir}/serve.json" <<EOF
+{
+  "TCP": { "443": { "HTTPS": true } },
+  "Web": {
+    "\${TS_CERT_DOMAIN}:443": {
+      "Handlers": { "/": { "Proxy": "http://app:${port}" } }
+    }
+  },
+  "AllowFunnel": { "\${TS_CERT_DOMAIN}:443": ${allow} }
+}
+EOF
+}
+
+# tailscale_url - the address the running sidecar actually answers on
+#
+# Asked of the container rather than assembled from the hostname, because the
+# tailnet's domain is not something this checkout knows and a guessed URL that
+# almost works is worse than none.
+tailscale_url() {
+    local container
+    container="$(compose_container tailscale)"
+    container_running "$container" || return 1
+
+    docker exec "$container" tailscale status --json 2>/dev/null \
+        | python3 -c 'import json,sys
+try:
+    name = json.load(sys.stdin)["Self"]["DNSName"].rstrip(".")
+except Exception:
+    raise SystemExit(1)
+print(f"https://{name}/" if name else "", end="")' 2>/dev/null
+}
+
+# compose_container <app|redis|tailscale> - the container name the stack uses
 compose_container() {
     local name
     case "$1" in
         app)   name="$(env_value APP_CONTAINER_NAME)";   name="${name:-korail_bot}" ;;
         redis) name="$(env_value REDIS_CONTAINER_NAME)"; name="${name:-korail_redis}" ;;
+        tailscale)
+            name="$(env_value TS_CONTAINER_NAME)"; name="${name:-korail_tailscale}" ;;
         *)     return 1 ;;
     esac
     printf '%s' "$name"

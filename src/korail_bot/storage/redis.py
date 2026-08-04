@@ -359,10 +359,19 @@ class RedisStorage(StorageInterface):
         try:
             stored = json.loads(data)
             box = get_secret_box()
+            korail_id = box.decrypt(stored["korail_id"])
+            korail_pw = box.decrypt(stored["korail_pw"])
+            if korail_id is None or korail_pw is None:
+                # What the docstring above promises. decrypt() has already
+                # logged why it could not read the value; handing back a
+                # record with a None inside it would give every caller an
+                # account that cannot log in and does not admit it.
+                logger.error(f"Could not decrypt the onboarded account for chat_id={chat_id}")
+                return None
             return OnboardedAccount(
                 chat_id=chat_id,
-                korail_id=box.decrypt(stored["korail_id"]),
-                korail_pw=box.decrypt(stored["korail_pw"]),
+                korail_id=korail_id,
+                korail_pw=korail_pw,
                 # Records written before there were two carry no operator,
                 # and every one of them is a Korail registration.
                 operator=Operator.parse(stored.get("operator")),

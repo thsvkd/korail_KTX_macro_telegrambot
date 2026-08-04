@@ -955,6 +955,23 @@ class ConversationHandler:
             )
             return
 
+        if not session.credentials:
+            # The password just typed belongs to the number typed at the step
+            # before, and that number is what is missing. Filling it in from a
+            # registration would attach this password to an id the user did not
+            # give here, so the number is asked for again instead. Without this
+            # the attribute access below raised and the user got no reply at
+            # all - the one outcome that leaves nothing to do but wait.
+            from korail_bot.telegramBot.messages import Messages
+
+            logger.warning(f"Password step reached with no phone number for chat_id={chat_id}")
+            session.last_action = UserProgress.START_ACCEPTED
+            self.storage.save_user_session(session)
+            self.telegram.send_message(
+                chat_id, Messages.ASK_AGAIN_PHONE, reply_markup=keyboards.cancel_only_keyboard()
+            )
+            return
+
         username = session.credentials.korail_id
         password = text
 
@@ -2003,10 +2020,56 @@ class ConversationHandler:
                 chat_id, Messages.ERROR_CONFIRM_INVALID, reply_markup=keyboards.confirm_keyboard()
             )
 
+    def _booking_credentials(self, chat_id: int, session: UserSession) -> UserCredentials | None:
+        """
+        The account this booking runs under, restored if the session lost it.
+
+        The session carries the credentials from the login step through to the
+        search, and it can reach this point without them: a session stored
+        before a field existed, one whose stored copy could not be read back,
+        a flow picked up from a draft. That used to raise AttributeError at
+        the last question, which the user experienced as the bot going silent
+        with a booking half-confirmed.
+
+        The registration is the same account the login already verified, so
+        continuing with it asks the user for nothing. Returns None when there
+        is nothing left to book with, having said so.
+
+        Args:
+            chat_id: Telegram chat ID
+            session: The session at the confirmation step
+
+        Returns:
+            The credentials to book with, or None when the flow has to stop
+        """
+        if session.credentials:
+            return session.credentials
+
+        logger.warning(f"Booking confirmed with no credentials for chat_id={chat_id}")
+
+        # Speaks for itself when the registration no longer logs in, and sends
+        # the user back to registering - so True here does not mean the
+        # credentials are back, only that the user has been dealt with.
+        answered = self.resume_with_registered_account(chat_id, session, announce=False)
+        if session.credentials:
+            return session.credentials
+
+        if not answered:
+            from korail_bot.telegramBot.messages import Messages
+
+            session.reset()
+            self.storage.save_user_session(session)
+            self.telegram.send_message(chat_id, Messages.NO_CREDENTIALS)
+        return None
+
     def _start_reservation(self, chat_id: int, session: UserSession) -> None:
         """Start the reservation background process."""
-        username = session.credentials.korail_id
-        password = session.credentials.korail_pw
+        credentials = self._booking_credentials(chat_id, session)
+        if credentials is None:
+            return
+
+        username = credentials.korail_id
+        password = credentials.korail_pw
 
         # The gate goes here rather than earlier: what costs the operator is a
         # process asking Korail for seats every few seconds, and this is where
@@ -2043,7 +2106,7 @@ class ConversationHandler:
                 )
             # The background process now owns the password; there is no reason
             # to keep a copy at rest for the lifetime of the search.
-            session.credentials.korail_pw = ""
+            credentials.korail_pw = ""
             self.storage.save_user_session(session)
 
         if not success:

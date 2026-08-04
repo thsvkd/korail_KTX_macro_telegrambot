@@ -13,6 +13,7 @@ ways it is destroyed as the ways it is stored. Run against a real Redis so
 the encryption round trip is exercised rather than asserted about a Mock.
 """
 
+import json
 from unittest.mock import Mock, patch
 
 import pytest
@@ -133,6 +134,22 @@ class TestRegisteringAnAccount:
         assert account.korail_id == PHONE
         assert account.korail_pw == PASSWORD
         assert account.onboarded_at is not None
+
+    def test_a_record_that_cannot_be_read_is_not_a_registration(self, storage):
+        """
+        A record written under a different SESSION_SECRET, or before secrets
+        were encrypted at all, cannot be logged in with. It used to come back
+        as an account whose id and password were None - which every caller
+        then treated as a registration and took to the railway.
+        """
+        _register(storage)
+
+        key = f"user_credentials:{CHAT_ID}"
+        stored = json.loads(storage.redis.get(key))
+        stored["korail_pw"] = "from-before-any-of-this-was-encrypted"
+        storage.redis.set(key, json.dumps(stored))
+
+        assert storage.get_onboarded_account(CHAT_ID) is None
 
 
 class TestStartingWithARegisteredAccount:

@@ -147,7 +147,7 @@ class TelegramPoller:
         Returns:
             (True, updates) on a successful poll, (False, []) on any failure
         """
-        params = {
+        params: dict[str, str | int] = {
             "timeout": self.poll_timeout,
             # Telegram expects a JSON array here, not repeated parameters.
             # callback_query is what a button press arrives as; leave it out

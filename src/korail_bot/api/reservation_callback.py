@@ -51,21 +51,26 @@ class ReservationCallbackAPI(Resource):
             return make_response("Forbidden", 403)
 
         try:
-            # Extract parameters
-            chat_id = request.args.get("chatId")
+            # Extract parameters. Everything off the wire is str or missing;
+            # the converted values get names of their own rather than being
+            # assigned back over the raw ones, so each name means one thing.
+            chat_id_arg = request.args.get("chatId")
             msg = request.args.get("msg")
             status = request.args.get("status")
-            is_multi = request.args.get("isMulti", "0")
-            total_seats = request.args.get("totalSeats", "1")
+            is_multi_arg = request.args.get("isMulti", "0")
+            total_seats_arg = request.args.get("totalSeats", "1")
             seat_strategy = request.args.get("seatStrategy", "consecutive")
 
-            if not all([chat_id, msg, status]):
+            # Checked one at a time rather than with all([...]): that form
+            # rejects the same inputs but tells neither a type checker nor a
+            # reader which of the three was missing.
+            if not chat_id_arg or not msg or not status:
                 logger.warning("Incomplete callback parameters")
                 return make_response("OK")
 
-            chat_id = int(chat_id)
-            is_multi = is_multi == "1"
-            total_seats = int(total_seats)
+            chat_id = int(chat_id_arg)
+            is_multi = is_multi_arg == "1"
+            total_seats = int(total_seats_arg)
 
             logger.info(
                 f"Callback from background process: chat_id={chat_id}, status={status}, "

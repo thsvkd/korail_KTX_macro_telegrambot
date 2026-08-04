@@ -1125,7 +1125,7 @@ class CommandHandler:
         Returns:
             True if text starts with '/'
         """
-        return text and text.startswith("/")
+        return bool(text) and text.startswith("/")
 
     def route_command(self, chat_id: int, text: str) -> bool:
         """

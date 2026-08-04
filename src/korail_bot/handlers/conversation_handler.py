@@ -537,7 +537,10 @@ class ConversationHandler:
         """
         from korail_bot.telegramBot.messages import Messages
 
-        progress = session.last_action
+        # Widened because the draft's copy comes back out of train_info,
+        # which is a dict of whatever was put in it rather than of progress
+        # values. The membership test below is what makes either safe to use.
+        progress: object = session.last_action
         if progress == UserProgress.RESUME_DRAFT_PENDING:
             # /start again while the question is on screen. Answering it with
             # the draft would be the one reading where pressing /start twice

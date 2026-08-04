@@ -149,6 +149,16 @@ class ReservationService:
             proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, start_new_session=True)
             self._children[proc.pid] = proc
 
+            # Popen.stdin is Optional in general and never None here, because
+            # stdin=PIPE is what asked for it. Bound once so the three uses
+            # below do not each have to restate that, and raised rather than
+            # ignored if that ever stops being true: a search whose child
+            # never receives its credentials would sit there logging in
+            # nowhere.
+            child_stdin = proc.stdin
+            if child_stdin is None:
+                raise RuntimeError(f"No stdin pipe for search process {proc.pid}")
+
             # Hand over credentials and close the pipe so the child stops waiting.
             #
             # A child that died on startup makes this a write to a pipe with no
@@ -156,12 +166,12 @@ class ReservationService:
             # so it is noted and left to the check below to describe.
             credentials = json.dumps({"username": username, "password": password})
             try:
-                proc.stdin.write(credentials.encode("utf-8") + b"\n")
-                proc.stdin.flush()
+                child_stdin.write(credentials.encode("utf-8") + b"\n")
+                child_stdin.flush()
             except (BrokenPipeError, OSError) as e:
                 logger.warning(f"Could not hand credentials to process {proc.pid}: {e}")
             finally:
-                proc.stdin.close()
+                child_stdin.close()
 
             # Keep what a restart would need to log in again. Deleted as soon
             # as the search ends, whichever way it ends.

@@ -136,7 +136,10 @@ class PaymentReminderService:
 
             # Also check via API (for compatibility)
             callback_url = f"{settings.CALLBACK_BASE_URL}/check_payment"
-            params = {"chatId": chat_id, "token": settings.INTERNAL_CALLBACK_TOKEN}
+            params: dict[str, str | int] = {
+                "chatId": chat_id,
+                "token": settings.INTERNAL_CALLBACK_TOKEN,
+            }
             response = requests.get(callback_url, params=params, timeout=5)
             return response.json().get("completed", False)
 

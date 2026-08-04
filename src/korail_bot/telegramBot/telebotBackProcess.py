@@ -938,7 +938,7 @@ class BackgroundReservationProcess:
         """
         try:
             callback_url = f"{settings.CALLBACK_BASE_URL}/reservation-callback"
-            params = {
+            params: dict[str, str | int] = {
                 "chatId": self.chat_id,
                 "msg": message,
                 "status": status,

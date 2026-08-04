@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, StrEnum
+from typing import Any
 
 from korail_bot.models.operator import Operator
 
@@ -222,7 +223,7 @@ class SingleReservationInfo:
     """Information about a single train reservation."""
 
     reservation_id: str  # Unique ID from korail2
-    reservation_obj: any  # Original reservation object from korail2
+    reservation_obj: Any  # Original reservation object from korail2
     reserved_at: datetime  # When reservation was created
     expires_at: datetime  # When reservation will expire
     status: ReservationPaymentStatus  # Current payment status

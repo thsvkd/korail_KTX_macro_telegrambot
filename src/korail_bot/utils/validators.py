@@ -290,15 +290,19 @@ class InputValidator:
         return True, None
 
     @staticmethod
-    def validate_yes_no(answer: str) -> tuple[bool, str | None]:
+    def validate_yes_no(answer: str) -> tuple[bool | None, str | None]:
         """
         Validate yes/no answer with enhanced security.
+
+        Three answers, not two: yes, no, and "that was not an answer". The
+        third one has to stay distinct from no, because the caller re-asks on
+        it rather than proceeding as if the user had declined.
 
         Args:
             answer: User's answer
 
         Returns:
-            Tuple of (is_yes, None) or (False, error_message)
+            Tuple of (True, None), (False, None), or (None, error_message)
         """
         if not answer:
             return None, "Y/예 또는 N/아니오를 입력해주세요."

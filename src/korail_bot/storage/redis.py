@@ -796,7 +796,7 @@ class RedisStorage(StorageInterface):
         if self.redis.set(key, now, nx=True, ex=settings.RESUME_TTL_SECONDS):
             return now
 
-        stored = self.redis.get(key)
+        stored = self._text(self.redis.get(key))
         if not stored:
             # Expired between the two calls. Rare, and a fresh one is right.
             self.redis.set(key, now, ex=settings.RESUME_TTL_SECONDS)
@@ -972,7 +972,7 @@ class RedisStorage(StorageInterface):
     def get_pending_admin_command(self, chat_id: int) -> str | None:
         """Get pending admin command waiting for authentication."""
         key = f"pending_admin_command:{chat_id}"
-        return self.redis.get(key)
+        return self._text(self.redis.get(key))
 
     def set_pending_admin_command(self, chat_id: int, command: str | None) -> None:
         """Set pending admin command waiting for authentication."""

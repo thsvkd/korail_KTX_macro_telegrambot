@@ -30,7 +30,7 @@ class MultiReservationReminderService:
         """Initialize the reminder service."""
         self.storage = storage
         self.telegram = telegram
-        self.reminder_threads = {}  # chat_id -> threading.Thread
+        self.reminder_threads: dict[int, threading.Thread] = {}
         self.interval = settings.PAYMENT_REMINDER_INTERVAL_SECONDS
 
     def start_reminders(self, chat_id: int) -> None:

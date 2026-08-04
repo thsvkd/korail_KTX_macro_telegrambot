@@ -241,12 +241,11 @@ class TestRunningOutOfTrials(AccessFixture):
     """
 
     def exhausted(self):
-        self.handler._offer_access_request(
-            CHAT_ID,
-            self.session,
-            USERNAME,
-            AccessDecision(level=AccessLevel.EXHAUSTED, used=3, limit=3),
+        """Confirm a booking with the trial used up, by the ordinary route."""
+        self.access.evaluate.return_value = AccessDecision(
+            level=AccessLevel.EXHAUSTED, used=3, limit=3
         )
+        self.handler._start_reservation(CHAT_ID, self.session)
 
     def test_the_user_is_told_how_many_they_used(self):
         self.exhausted()
@@ -257,6 +256,12 @@ class TestRunningOutOfTrials(AccessFixture):
         self.exhausted()
 
         assert self.telegram.send_message.call_args.kwargs["reply_markup"]
+
+    def test_no_search_is_started(self):
+        """The gate is the point: an exhausted trial must reach no process."""
+        self.exhausted()
+
+        self.handler.reservation.start_reservation_process.assert_not_called()
 
     def test_the_conversation_is_put_down_rather_than_left_half_open(self):
         """

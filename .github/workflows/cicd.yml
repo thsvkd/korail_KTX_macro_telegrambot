@@ -85,12 +85,11 @@ jobs:
         run: uv run --frozen pytest tests/integration tests/e2e -q
     -
         name: Type check
-        # Not blocking yet: 51 pre-existing errors in 11 files as of 2026-08-01,
-        # mostly str|None reaching parameters typed int, concentrated in
-        # handlers/conversation_handler.py and other legacy call sites. A failure
-        # here does not stop a merge, so do not read a green tick on this job as
-        # "mypy is clean". Drop continue-on-error once the backlog is cleared.
-        continue-on-error: true
+        # Blocking. It was not, for as long as there was a backlog nobody was
+        # going to clear in one go - and a step allowed to fail is a step whose
+        # output nobody reads, so the real defects that arrived later sat in
+        # the same list as the noise. The backlog is gone; keep it that way by
+        # refusing the next one at the door.
         run: uv run --frozen mypy
 
   cicd:

@@ -53,7 +53,7 @@ fi
 cd "$ROOT_DIR" || die "Cannot enter repository root: $ROOT_DIR"
 
 info "Building ${IMAGE}"
-docker build -t "$IMAGE" .
+docker_build "$IMAGE" || exit 1
 ok "Built ${IMAGE}"
 
 docker image inspect "$IMAGE" --format '  size: {{.Size}} bytes'
@@ -356,7 +356,7 @@ read -r -p "Type 'yes' to continue: " confirmation
 [[ "$confirmation" == "yes" ]] || die "Aborted."
 
 info "Building ${IMAGE}"
-docker build -t "$IMAGE" .
+docker_build "$IMAGE" || exit 1
 
 info "Pushing ${IMAGE}"
 docker push "$IMAGE"

@@ -290,7 +290,10 @@ fi
     assert push_result.returncode == 0, push_result.stderr
 
     calls = marker.read_text(encoding="utf-8")
-    assert "staging-project|build -t registry.example/test-bot:audit ." in calls
+    # The tag and the project, not the trailing path: the build context is
+    # passed as an absolute path so the helper does not depend on the caller
+    # having chdir'd first.
+    assert "staging-project|build -t registry.example/test-bot:audit" in calls
     assert (
         f"staging-project|compose --env-file {test} -f {ROOT / 'docker-compose.yml'} down" in calls
     )

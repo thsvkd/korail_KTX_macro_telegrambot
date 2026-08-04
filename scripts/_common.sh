@@ -118,6 +118,24 @@ has_compose() {
     docker compose version >/dev/null 2>&1 || command -v docker-compose >/dev/null 2>&1
 }
 
+# docker_build <tag> - build this checkout's image
+#
+# BuildKit is not optional here. The Dockerfile mounts the uv cache and
+# bind-mounts the manifests with `RUN --mount`, which the legacy builder does
+# not understand - it stops with "the --mount option requires BuildKit".
+#
+# That was worth wrapping because of how it failed. `docker build` writes the
+# error and exits, and a caller that piped the output kept going and started
+# the stack on whatever image was already tagged. The build looked done, the
+# containers came up, and they were running last week's code.
+docker_build() {
+    local tag="$1"
+    DOCKER_BUILDKIT=1 docker build -t "$tag" "$ROOT_DIR" || {
+        err "Image build failed - nothing was rebuilt."
+        return 1
+    }
+}
+
 # compose_version - print the Compose version string (empty when absent)
 compose_version() {
     if docker compose version >/dev/null 2>&1; then

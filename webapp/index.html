@@ -4,121 +4,298 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
+    <!--
+      connect-src is 'self' rather than 'none' now: the page is served by the
+      bot and talks to it. That is also why there is no host list here - the
+      API shares this origin, so nothing outside it is reachable at all.
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' https://telegram.org; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+      content="default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
-    <title>취소표 감시 설정</title>
+    <title>취소표 감시</title>
     <link rel="stylesheet" href="app.css" />
     <script src="https://telegram.org/js/telegram-web-app.js" defer></script>
     <script src="app.js" defer></script>
   </head>
   <body>
     <main class="screen">
-      <header>
-        <p class="eyebrow">KTX WATCH</p>
-        <h1>취소표 감시 설정</h1>
-        <p class="intro">여행 조건을 한 번에 고르고, 열차 선택과 시작 확인은 채팅에서 이어갑니다.</p>
-      </header>
+      <p id="boot" class="boot">불러오는 중…</p>
 
-      <form id="reservation-form" novalidate>
-        <fieldset class="operator-picker" id="operator-picker">
-          <legend>철도</legend>
-          <label data-operator="korail">
-            <input type="radio" name="operator" value="korail" checked />
-            <span>코레일</span>
-          </label>
-          <label data-operator="srt">
-            <input type="radio" name="operator" value="srt" />
-            <span>SRT</span>
-          </label>
-        </fieldset>
+      <!-- ============ 홈 ============ -->
+      <section class="view" id="view-home" hidden>
+        <header>
+          <p class="eyebrow">KTX WATCH</p>
+          <h1>취소표 감시</h1>
+        </header>
 
-        <section class="card route-card" aria-labelledby="route-title">
-          <div class="section-heading">
-            <div><span class="step">01</span><h2 id="route-title">구간</h2></div>
-            <button id="swap-stations" class="text-button" type="button">서로 바꾸기</button>
+        <section class="card status-card" id="running-card" hidden>
+          <div class="status-head">
+            <span class="pulse" aria-hidden="true"></span>
+            <h2>검색 중</h2>
           </div>
-          <div class="route-fields">
-            <label class="field">
-              <span>출발역</span>
-              <input id="src-station" name="src_station" list="station-options" autocomplete="off" placeholder="서울" maxlength="10" required />
-            </label>
-            <span class="route-arrow" aria-hidden="true">→</span>
-            <label class="field">
-              <span>도착역</span>
-              <input id="dst-station" name="dst_station" list="station-options" autocomplete="off" placeholder="부산" maxlength="10" required />
-            </label>
-          </div>
-          <datalist id="station-options"></datalist>
-          <div class="quick-stations" id="quick-stations" aria-label="주요 역 빠른 선택"></div>
+          <p class="status-line" id="running-route"></p>
+          <p class="status-meta" id="running-meta"></p>
+          <button class="danger-button" id="stop-search" type="button">검색 중지</button>
         </section>
 
-        <section class="card" aria-labelledby="time-title">
-          <div class="section-heading"><div><span class="step">02</span><h2 id="time-title">날짜와 시간</h2></div></div>
-          <label class="field full">
-            <span>출발 날짜</span>
-            <input id="dep-date" name="dep_date" type="date" required />
-          </label>
-          <div class="two-columns time-fields">
-            <label class="field">
-              <span>검색 시작</span>
-              <input name="dep_time" type="time" value="07:00" required />
-            </label>
-            <label class="field" id="end-time-field">
-              <span>검색 종료</span>
-              <input id="max-dep-time" name="max_dep_time" type="time" value="12:00" required />
-            </label>
-          </div>
-          <label class="check-row">
-            <input id="unlimited-time" type="checkbox" />
-            <span><strong>종료 시각 제한 없음</strong><small>출발 날짜의 마지막 열차까지 감시</small></span>
-          </label>
+        <section class="card status-card" id="scheduled-card" hidden>
+          <div class="status-head"><h2>시작 예약됨</h2></div>
+          <p class="status-line" id="scheduled-route"></p>
+          <p class="status-meta" id="scheduled-meta"></p>
+          <button class="danger-button" id="drop-schedule" type="button">예약 취소</button>
         </section>
 
-        <section class="card" aria-labelledby="seat-title">
-          <div class="section-heading"><div><span class="step">03</span><h2 id="seat-title">열차와 좌석</h2></div></div>
+        <section class="card status-card warn" id="pending-card" hidden>
+          <div class="status-head"><h2>결제 대기</h2></div>
+          <div id="pending-list"></div>
+          <div class="button-row">
+            <a class="ghost-button" id="pay-link" target="_blank" rel="noopener noreferrer">결제하러 가기</a>
+            <button class="danger-button" id="cancel-pending" type="button">예약 취소</button>
+          </div>
+        </section>
 
-          <fieldset class="choice-group" id="train-type-group">
-            <legend>열차 종류</legend>
-            <label><input type="radio" name="train_type" value="1" checked /><span>KTX 계열만<small>빠른 열차만</small></span></label>
-            <label><input type="radio" name="train_type" value="2" /><span>모든 열차<small>무궁화호 포함</small></span></label>
+        <button class="submit-button" id="new-search" type="button">새 예약 시작</button>
+
+        <section class="card" id="favourites-card" hidden>
+          <div class="section-heading"><div><h2>즐겨찾기</h2></div></div>
+          <div id="favourites-list" class="stack"></div>
+        </section>
+
+        <div class="button-row">
+          <button class="ghost-button" id="open-settings" type="button">설정</button>
+          <button class="ghost-button" id="refresh-home" type="button">새로고침</button>
+        </div>
+      </section>
+
+      <!-- ============ 조건 입력 ============ -->
+      <section class="view" id="view-conditions" hidden>
+        <header>
+          <p class="eyebrow">01 / 03</p>
+          <h1>여행 조건</h1>
+          <p class="intro">감시할 구간과 시간대를 고릅니다.</p>
+        </header>
+
+        <form id="conditions-form" novalidate>
+          <fieldset class="operator-picker" id="operator-picker">
+            <legend>철도</legend>
+            <label data-operator="korail">
+              <input type="radio" name="operator" value="korail" checked />
+              <span>코레일</span>
+            </label>
+            <label data-operator="srt">
+              <input type="radio" name="operator" value="srt" />
+              <span>SRT</span>
+            </label>
           </fieldset>
+          <p class="hint-line" id="operator-hint" hidden></p>
 
-          <fieldset class="choice-group seat-options">
-            <legend>좌석 종류</legend>
-            <label><input type="radio" name="seat_option" value="1" checked /><span>일반실 우선</span></label>
-            <label><input type="radio" name="seat_option" value="2" /><span>일반실만</span></label>
-            <label><input type="radio" name="seat_option" value="3" /><span>특실 우선</span></label>
-            <label><input type="radio" name="seat_option" value="4" /><span>특실만</span></label>
-          </fieldset>
-
-          <div class="passenger-row">
-            <div><span class="field-label">탑승 인원</span><small>성인 기준, 최대 9명</small></div>
-            <div class="stepper">
-              <button id="passenger-minus" type="button" aria-label="인원 줄이기">−</button>
-              <output id="passenger-output" for="passenger-minus passenger-plus">1명</output>
-              <input id="passenger-count" name="passenger_count" type="hidden" value="1" />
-              <button id="passenger-plus" type="button" aria-label="인원 늘리기">＋</button>
+          <section class="card">
+            <div class="section-heading">
+              <div><span class="step">01</span><h2>구간</h2></div>
+              <button id="swap-stations" class="text-button" type="button">서로 바꾸기</button>
             </div>
-          </div>
+            <div class="route-fields">
+              <label class="field">
+                <span>출발역</span>
+                <input id="src-station" name="src_station" list="station-options" autocomplete="off" placeholder="서울" maxlength="10" required />
+              </label>
+              <span class="route-arrow" aria-hidden="true">→</span>
+              <label class="field">
+                <span>도착역</span>
+                <input id="dst-station" name="dst_station" list="station-options" autocomplete="off" placeholder="부산" maxlength="10" required />
+              </label>
+            </div>
+            <datalist id="station-options"></datalist>
+            <div class="quick-stations" id="quick-stations" aria-label="주요 역 빠른 선택"></div>
+          </section>
 
-          <fieldset class="choice-group" id="seat-strategy-group" hidden>
-            <legend>좌석 배치</legend>
-            <label><input type="radio" name="seat_strategy" value="1" checked /><span>연속 좌석<small>붙어 있는 자리만</small></span></label>
-            <label><input type="radio" name="seat_strategy" value="2" /><span>랜덤 배치<small>떨어져도 예약</small></span></label>
-          </fieldset>
+          <section class="card">
+            <div class="section-heading"><div><span class="step">02</span><h2>날짜와 시간</h2></div></div>
+            <label class="field full">
+              <span>출발 날짜</span>
+              <input id="dep-date" name="dep_date" type="date" required />
+            </label>
+            <div class="two-columns">
+              <label class="field">
+                <span>검색 시작</span>
+                <input id="dep-time" name="dep_time" type="time" value="07:00" required />
+              </label>
+              <label class="field" id="end-time-field">
+                <span>검색 종료</span>
+                <input id="max-dep-time" name="max_dep_time" type="time" value="12:00" required />
+              </label>
+            </div>
+            <label class="check-row">
+              <input id="unlimited-time" type="checkbox" />
+              <span><strong>종료 시각 제한 없음</strong><small>출발 날짜의 마지막 열차까지 감시</small></span>
+            </label>
+          </section>
+
+          <section class="card">
+            <div class="section-heading"><div><span class="step">03</span><h2>열차와 좌석</h2></div></div>
+
+            <fieldset class="choice-group" id="train-type-group">
+              <legend>열차 종류</legend>
+              <label><input type="radio" name="train_type" value="1" checked /><span>KTX 계열만<small>빠른 열차만</small></span></label>
+              <label><input type="radio" name="train_type" value="2" /><span>모든 열차<small>무궁화호 포함</small></span></label>
+            </fieldset>
+
+            <fieldset class="choice-group">
+              <legend>좌석 종류</legend>
+              <label><input type="radio" name="seat_option" value="1" checked /><span>일반실 우선</span></label>
+              <label><input type="radio" name="seat_option" value="2" /><span>일반실만</span></label>
+              <label><input type="radio" name="seat_option" value="3" /><span>특실 우선</span></label>
+              <label><input type="radio" name="seat_option" value="4" /><span>특실만</span></label>
+            </fieldset>
+
+            <div class="passenger-row">
+              <div><span class="field-label">탑승 인원</span><small>성인 기준, 최대 9명</small></div>
+              <div class="stepper">
+                <button id="passenger-minus" type="button" aria-label="인원 줄이기">−</button>
+                <output id="passenger-output">1명</output>
+                <input id="passenger-count" name="passenger_count" type="hidden" value="1" />
+                <button id="passenger-plus" type="button" aria-label="인원 늘리기">＋</button>
+              </div>
+            </div>
+
+            <fieldset class="choice-group" id="seat-strategy-group" hidden>
+              <legend>좌석 배치</legend>
+              <label><input type="radio" name="seat_strategy" value="1" checked /><span>연속 좌석<small>붙어 있는 자리만</small></span></label>
+              <label><input type="radio" name="seat_strategy" value="2" /><span>랜덤 배치<small>떨어져도 예약</small></span></label>
+            </fieldset>
+          </section>
+
+          <p id="conditions-error" class="error" role="alert" aria-live="assertive"></p>
+          <button class="submit-button" id="find-trains" type="submit">열차 찾기</button>
+        </form>
+      </section>
+
+      <!-- ============ 열차 선택 ============ -->
+      <section class="view" id="view-trains" hidden>
+        <header>
+          <p class="eyebrow">02 / 03</p>
+          <h1>감시할 열차</h1>
+          <p class="intro" id="trains-intro"></p>
+        </header>
+
+        <aside class="notice" id="trains-note">
+          <strong>매진된 열차를 고르세요.</strong>
+          <span>여석이 남은 열차는 감시할 이유가 없습니다. 아무것도 고르지 않으면 시간대 전체를 감시합니다.</span>
+        </aside>
+
+        <div class="stack" id="train-list"></div>
+        <p id="trains-error" class="error" role="alert" aria-live="assertive"></p>
+
+        <div class="button-row">
+          <button class="ghost-button" id="refresh-trains" type="button">새로고침</button>
+          <button class="submit-button" id="trains-next" type="button">다음</button>
+        </div>
+      </section>
+
+      <!-- ============ 최종 확인 ============ -->
+      <section class="view" id="view-confirm" hidden>
+        <header>
+          <p class="eyebrow">03 / 03</p>
+          <h1>확인</h1>
+        </header>
+
+        <section class="card">
+          <dl class="summary" id="summary"></dl>
         </section>
 
         <aside class="notice">
           <strong>결제는 자동으로 하지 않습니다.</strong>
-          <span>좌석을 잡으면 채팅으로 알려드리며, 철도사에서 직접 결제합니다.</span>
+          <span>좌석을 잡으면 알려드리며, 결제는 철도사에서 직접 하셔야 합니다.</span>
         </aside>
 
-        <p id="form-error" class="error" role="alert" aria-live="assertive"></p>
-        <pre id="browser-preview" class="browser-preview" hidden></pre>
-        <button id="submit-button" class="submit-button" type="submit">이 조건으로 열차 보기</button>
-      </form>
+        <p id="confirm-error" class="error" role="alert" aria-live="assertive"></p>
+
+        <button class="submit-button" id="start-now" type="button">지금 검색 시작</button>
+        <div class="button-row">
+          <button class="ghost-button" id="open-schedule" type="button">시작 시각 예약</button>
+          <button class="ghost-button" id="save-favourite" type="button">즐겨찾기 저장</button>
+        </div>
+
+        <section class="card" id="schedule-card" hidden>
+          <div class="section-heading"><div><h2>언제 시작할까요?</h2></div></div>
+          <label class="field full">
+            <span>시작 시각</span>
+            <input id="schedule-at" type="datetime-local" />
+          </label>
+          <button class="submit-button" id="confirm-schedule" type="button">이 시각에 시작</button>
+        </section>
+      </section>
+
+      <!-- ============ 계정 등록 ============ -->
+      <section class="view" id="view-register" hidden>
+        <header>
+          <p class="eyebrow">계정</p>
+          <h1 id="register-title">계정 등록</h1>
+          <p class="intro">철도사 회원 계정으로 로그인해야 좌석을 잡을 수 있습니다.</p>
+        </header>
+
+        <form id="register-form" novalidate>
+          <section class="card">
+            <label class="field full">
+              <span>회원번호 또는 휴대전화 번호</span>
+              <input id="register-username" name="username" inputmode="numeric" autocomplete="username" placeholder="010-1234-5678" required />
+            </label>
+            <label class="field full">
+              <span>비밀번호</span>
+              <input id="register-password" name="password" type="password" autocomplete="current-password" required />
+            </label>
+          </section>
+
+          <aside class="notice">
+            <strong>비밀번호는 암호화해 보관합니다.</strong>
+            <span>이 화면은 봇이 직접 제공하며, 입력한 값은 대화 기록에 남지 않습니다.</span>
+          </aside>
+
+          <p id="register-error" class="error" role="alert" aria-live="assertive"></p>
+          <button class="submit-button" type="submit">로그인하고 등록</button>
+        </form>
+      </section>
+
+      <!-- ============ 설정 ============ -->
+      <section class="view" id="view-settings" hidden>
+        <header>
+          <p class="eyebrow">설정</p>
+          <h1>설정</h1>
+        </header>
+
+        <section class="card">
+          <div class="section-heading"><div><h2>진행 알림</h2></div></div>
+          <p class="hint-line">검색이 도는 동안 얼마나 자주 알려드릴지 정합니다. 0분은 알리지 않습니다.</p>
+          <div class="passenger-row">
+            <div><span class="field-label">알림 간격</span></div>
+            <div class="stepper">
+              <button id="notify-minus" type="button" aria-label="간격 줄이기">−</button>
+              <output id="notify-output">5분</output>
+              <button id="notify-plus" type="button" aria-label="간격 늘리기">＋</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="section-heading"><div><h2>등록된 계정</h2></div></div>
+          <div id="accounts-list" class="stack"></div>
+        </section>
+
+        <p id="settings-error" class="error" role="alert" aria-live="assertive"></p>
+        <p class="version" id="version"></p>
+      </section>
+
+      <!-- ============ 안내 ============ -->
+      <section class="view" id="view-message" hidden>
+        <header>
+          <h1 id="message-title"></h1>
+          <p class="intro" id="message-body"></p>
+        </header>
+        <button class="submit-button" id="message-action" type="button">확인</button>
+      </section>
     </main>
+
+    <div class="blocker" id="blocker" hidden><span class="spinner" aria-label="처리 중"></span></div>
   </body>
 </html>

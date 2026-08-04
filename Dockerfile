@@ -43,10 +43,21 @@ RUN groupadd --system --gid 1000 app \
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    # The Mini App's files are served by the bot itself, and the package is
+    # installed into the virtualenv rather than laid out as a checkout - so
+    # the path relative to the source tree does not exist here. Stated
+    # explicitly instead of guessed.
+    MINI_APP_WEBAPP_DIR=/app/webapp
 
 WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
+
+# Owned by root rather than by the account that serves them. Nothing in the
+# application ever writes here, and a page the bot could rewrite is a page an
+# exploit could. Source modes are kept as they are - world-readable files
+# inside traversable directories - so the app user can still read them.
+COPY --chown=root:root webapp/ /app/webapp/
 
 USER app
 # waitress rather than the Flask development server, and deliberately a

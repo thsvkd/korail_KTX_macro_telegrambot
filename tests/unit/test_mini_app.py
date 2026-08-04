@@ -1,6 +1,7 @@
 """The static Telegram Mini App and its untrusted-data boundary."""
 
 import json
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -165,25 +166,64 @@ class TestMiniAppConfiguration:
         with patch.object(Settings, "MINI_APP_URL", url):
             assert settings.mini_app_enabled() is enabled
 
-    def test_the_static_page_has_no_credential_or_payment_inputs(self):
-        page = (WEBAPP / "index.html").read_text()
-        lower = page.lower()
+    def test_the_page_takes_no_payment_details(self):
+        """
+        A railway login is collected here now - that is the point of the app
+        having a registration screen - but a card number never is. The bot
+        does not pay for anything and must not look like it might.
+        """
+        lower = (WEBAPP / "index.html").read_text().lower()
+        # Only the <input> tags, not the whole page: 'card' is also the name
+        # of the layout class every section here uses.
+        inputs = " ".join(re.findall(r"<input\b[^>]*>", lower))
 
-        assert 'type="password"' not in lower
-        assert 'name="phone"' not in lower
-        assert 'name="password"' not in lower
-        assert 'name="payment"' not in lower
-        assert "connect-src 'none'" in page
+        assert "card" not in inputs
+        assert "cvc" not in inputs
+        assert "카드" not in lower
 
-    def test_the_static_page_offers_both_railways_and_returns_menu_launches_to_chat(self):
+    def test_the_page_talks_only_to_the_bot_that_served_it(self):
+        """
+        The one host in the page is Telegram's own SDK. Everything else is
+        same-origin, which is why the API needs no CORS and why a third party
+        cannot be talked into answering for the bot.
+        """
         page = (WEBAPP / "index.html").read_text()
         script = (WEBAPP / "app.js").read_text()
 
+        assert "connect-src 'self'" in page
+        assert re.findall(r"https?://[^\s\"')]+", script) == []
+        for source in re.findall(r'src="(https?://[^"]+)"', page):
+            assert source.startswith("https://telegram.org/")
+
+    def test_the_page_offers_both_railways(self):
+        page = (WEBAPP / "index.html").read_text()
+
         assert 'value="korail"' in page
         assert 'value="srt"' in page
-        assert '"ma1_"' in script
-        assert "openTelegramLink" in script
-        assert 'get("operators")' not in script
+
+    def test_no_station_list_is_hardcoded_in_the_page(self):
+        """
+        They used to be a constant here and another in Python, which meant
+        Korail's several hundred stations were the seventeen someone had
+        typed out, and the two copies could disagree. The page asks now.
+        """
+        script = (WEBAPP / "app.js").read_text()
+
+        assert "수서" not in script
+        assert "동대구" not in script
+        assert "majorStations" in script
+
+    def test_the_page_carries_no_secret(self):
+        """
+        It is served to every user, so anything in it is public. The bot token
+        in particular would be the whole bot.
+        """
+        for name in ("index.html", "app.js", "app.css"):
+            text = (WEBAPP / name).read_text().lower()
+
+            assert "bottoken" not in text
+            assert "session_secret" not in text
+            assert not re.search(r"\d{8,10}:[a-z0-9_-]{35}", text, re.IGNORECASE)
 
 
 class MiniAppConversationFixture:

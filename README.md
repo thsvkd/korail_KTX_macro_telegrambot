@@ -89,7 +89,9 @@ Mini App을 설정한 봇에서는 `/start`의 `🚄 예약 화면 열기`, 채�
 
 봇 프로필의 큰 **앱 열기** 버튼은 Telegram의 Main Mini App 기능입니다. BotFather의
 **Bot Settings → Configure Mini App → Enable Mini App**에서 배포 문서의 URL을
-등록하면 같은 화면을 프로필에서도 열 수 있습니다.
+등록하면 같은 화면을 프로필에서도 열 수 있습니다. 이 값은 BotFather에만 있고 봇이
+고칠 수 없으므로, 주소를 옮겼다면 **Edit Mini App URL**로 직접 바꿔야 합니다 —
+그러지 않으면 프로필과 채팅이 서로 다른 페이지를 엽니다.
 
 처음 한 번은 코레일 계정을 등록합니다. 등록이 끝나면 그 다음부터 `/start` 는
 로그인 단계를 건너뛰고 바로 날짜 선택으로 갑니다.

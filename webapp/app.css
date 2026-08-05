@@ -12,6 +12,13 @@
 }
 
 * { box-sizing: border-box; }
+/*
+  A grid item is never allowed to be narrower than its contents unless it is
+  told it may be. The station chips are a row that scrolls sideways on its
+  own, so its contents are wider than any phone - and without this the whole
+  grid grew to hold them and the page itself scrolled sideways.
+*/
+form, .view > *, .card, .card > * { min-width: 0; }
 html { background: var(--bg); }
 body { margin: 0; background: var(--bg); color: var(--text); }
 button, input { font: inherit; }

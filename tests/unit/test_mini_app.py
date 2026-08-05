@@ -213,6 +213,30 @@ class TestMiniAppConfiguration:
         assert "동대구" not in script
         assert "majorStations" in script
 
+    def test_a_row_that_scrolls_sideways_cannot_widen_the_page(self):
+        """
+        The station chips are a row far wider than any phone, meant to scroll
+        inside itself. A grid item is sized to hold its contents unless it is
+        told it may be narrower, so without this the card and the form around
+        that row grew to a thousand pixels and the phone scrolled sideways
+        through the whole booking screen instead.
+
+        This only checks that the escape is still declared - whether it works
+        is a question for a browser - but it is the line whose deletion brings
+        the bug straight back.
+        """
+        style = (WEBAPP / "app.css").read_text()
+        without_comments = re.sub(r"/\*.*?\*/", "", style, flags=re.DOTALL)
+        shrinkable = {
+            selector.strip()
+            for selectors, body in re.findall(r"([^{}]+)\{([^{}]*)\}", without_comments)
+            if "min-width: 0" in body
+            for selector in selectors.split(",")
+        }
+
+        assert "overflow-x: auto" in style
+        assert {"form", ".card"} <= shrinkable
+
     def test_the_page_carries_no_secret(self):
         """
         It is served to every user, so anything in it is public. The bot token

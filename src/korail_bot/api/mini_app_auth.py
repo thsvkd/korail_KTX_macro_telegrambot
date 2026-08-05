@@ -39,6 +39,10 @@ _SECRET_SALT = b"WebAppData"
 # and it is part of the payload this signature covers.
 _SIGNATURE_FIELD = "hash"
 
+# Telegram's Ed25519 field, named here only so a rejected payload can say
+# whether leaving it out would have made the signature check pass.
+_THIRD_PARTY_FIELD = "signature"
+
 
 class MiniAppAuthError(Exception):
     """A Mini App request whose sender could not be established."""
@@ -104,7 +108,9 @@ def verify_init_data(
         _signing_key(token), _data_check_string(fields).encode("utf-8"), hashlib.sha256
     ).hexdigest()
     if not hmac.compare_digest(expected, provided.lower()):
-        raise MiniAppAuthError("initData signature does not match")
+        raise MiniAppAuthError(
+            f"initData signature does not match ({_mismatch_detail(fields, token, provided)})"
+        )
 
     # A signature stays valid forever, so one captured off a device - a shared
     # screen, a backup, a browser history - would be a permanent key to that
@@ -124,6 +130,49 @@ def verify_init_data(
         raise MiniAppAuthError("initData is dated in the future")
 
     return _identity(fields)
+
+
+def _mismatch_detail(fields: list[tuple[str, str]], token: str, provided: str) -> str:
+    """
+    Say enough about a rejected payload to tell two unrelated causes apart.
+
+    A mismatch means the payload was signed with a different key, or over a
+    different set of fields than the one rebuilt here. Those need opposite
+    fixes - one is a misconfigured bot, the other is a bug in this module -
+    and the log said only that they had failed, which is the same sentence
+    for both.
+
+    Field names are safe to log and their values are not: the values are the
+    user's id and name, and this bot's logs are read in a public repository's
+    issues. So only the names go out, plus the one derived fact that
+    separates the causes.
+    """
+    names = ",".join(sorted(key for key, _ in fields)) or "none"
+    if not any(key == _THIRD_PARTY_FIELD for key, _ in fields):
+        # The observed cause, every time so far: a bot whose Mini App URL in
+        # BotFather names another bot's deployment. Telegram signs with the
+        # launching bot's token, this app checks with its own, and the two
+        # bots are not the same one.
+        return (
+            f"fields={names}; signed with another bot's token - check the Mini App URL "
+            f"registered in BotFather for the bot this launch came from"
+        )
+
+    # Telegram's own documentation is read both ways on whether its Ed25519
+    # field belongs in the HMAC's input. If leaving it out would have
+    # verified, that is the answer, and it is this module that is wrong.
+    without_third_party = hmac.new(
+        _signing_key(token),
+        "\n".join(
+            f"{key}={value}"
+            for key, value in sorted(fields)
+            if key not in (_SIGNATURE_FIELD, _THIRD_PARTY_FIELD)
+        ).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if hmac.compare_digest(without_third_party, provided.lower()):
+        return f"fields={names}; WOULD MATCH if `signature` were excluded"
+    return f"fields={names}; excluding `signature` does not help either"
 
 
 def _identity(fields: list[tuple[str, str]]) -> MiniAppIdentity:

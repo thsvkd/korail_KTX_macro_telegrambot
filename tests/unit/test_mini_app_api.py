@@ -82,6 +82,49 @@ class TestEstablishingWhoIsAsking:
         with pytest.raises(MiniAppAuthError):
             verify_init_data(init_data(token=OTHER_TOKEN), bot_token=TOKEN)
 
+    def test_a_refusal_says_which_kind_of_wrong_it_was(self):
+        """
+        Two unrelated faults produce this same refusal - a bot pointed at
+        another bot's deployment, and this module rebuilding the signed
+        string differently than Telegram did - and they need opposite fixes.
+        The message has to separate them or the log is a coin toss.
+        """
+        with pytest.raises(MiniAppAuthError) as refusal:
+            verify_init_data(init_data(token=OTHER_TOKEN), bot_token=TOKEN)
+
+        assert "auth_date,hash,query_id,user" in str(refusal.value)
+        assert "another bot's token" in str(refusal.value)
+        assert "BotFather" in str(refusal.value)
+
+    def test_a_refusal_says_so_when_the_ed25519_field_is_the_reason(self):
+        """
+        Telegram's docs are read both ways on whether `signature` belongs in
+        the HMAC's input, so a deployment meeting it for the first time
+        should not need a code change to find out.
+        """
+        fields = {
+            "auth_date": str(int(time.time())),
+            "user": json.dumps({"id": CHAT_ID}),
+        }
+        # Signed without it, then sent with it - which is the disputed shape.
+        raw = f"{sign(fields)}&signature=an-ed25519-signature"
+
+        with pytest.raises(MiniAppAuthError) as refusal:
+            verify_init_data(raw, bot_token=TOKEN)
+
+        assert "WOULD MATCH if `signature` were excluded" in str(refusal.value)
+
+    def test_a_refusal_never_puts_the_payload_in_the_log(self):
+        """
+        These messages are read out of a public repository's issues, and the
+        values are the user's id and name.
+        """
+        with pytest.raises(MiniAppAuthError) as refusal:
+            verify_init_data(init_data(chat_id=778899, token=OTHER_TOKEN), bot_token=TOKEN)
+
+        assert "778899" not in str(refusal.value)
+        assert "테스트" not in str(refusal.value)
+
     def test_swapping_the_user_after_signing_is_refused(self):
         """
         The whole attack in one line: take your own valid payload, edit the

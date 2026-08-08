@@ -23,7 +23,7 @@ import requests
 from korail2 import ReserveOption, TrainType
 
 from korail_bot.config.settings import settings
-from korail_bot.models import Operator, ReservationPaymentStatus
+from korail_bot.models import Operator, ReservationPaymentStatus, SeatPreference
 from korail_bot.services.korail_service import (
     DuplicateReservationError,
     KorailService,
@@ -287,6 +287,7 @@ class ProcessFixture:
         self.process.passenger_count = 1
         self.process.seat_strategy = "consecutive"
         self.process.train_numbers = []
+        self.process.seat_preference = SeatPreference()
         self.process.rail = Mock()
         # Reading a reservation is not faked: which field holds the
         # reservation number, and which the payment deadline, is the

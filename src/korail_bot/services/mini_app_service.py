@@ -5,7 +5,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from korail_bot.models import Operator
+from korail_bot.models import Operator, SeatPreference
 from korail_bot.utils.validators import InputValidator
 
 MAX_WEB_APP_DATA_BYTES = 4096
@@ -83,6 +83,11 @@ class MiniAppSubmission:
     seat_option: str
     passenger_count: int
     seat_strategy: str
+    # Which seats will do, flattened by SeatPreference.encode. Empty means any
+    # seat. Defaulted so that a page from before this existed - a cached one,
+    # or the fixed-width /start parameter - parses as asking for nothing in
+    # particular rather than failing.
+    seat_preference: str = ""
 
     @classmethod
     def parse(cls, raw: object) -> "MiniAppSubmission":
@@ -143,6 +148,14 @@ class MiniAppSubmission:
             if error:
                 raise MiniAppDataError(error)
 
+        # Only SR reports the seat it assigned before payment, so only SR
+        # can be held to a seat condition. A Korail submission carrying one is
+        # not rejected - the page hides the controls, and a stale page saying
+        # otherwise is not worth a dead end - the condition is just dropped.
+        seat_preference = ""
+        if operator.reports_seats_before_payment:
+            seat_preference = SeatPreference.decode(cls._text(payload, "seat_preference")).encode()
+
         return cls(
             operator=operator,
             dep_date=dep_date,
@@ -154,6 +167,7 @@ class MiniAppSubmission:
             seat_option=seat_option,
             passenger_count=int(passenger),
             seat_strategy=seat_strategy,
+            seat_preference=seat_preference,
         )
 
     @classmethod
@@ -275,5 +289,6 @@ class MiniAppSubmission:
             "passengerCount": self.passenger_count,
             "seatStrategy": strategy,
             "seatStrategyShow": strategy_display,
+            "seatPreference": self.seat_preference,
             "selectedTrains": [],
         }

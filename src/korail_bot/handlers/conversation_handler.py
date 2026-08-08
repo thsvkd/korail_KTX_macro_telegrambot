@@ -7,8 +7,10 @@ from korail2 import ReserveOption
 
 from korail_bot.config.settings import settings
 from korail_bot.models import (
+    SEAT_COLUMNS,
     OnboardedAccount,
     Operator,
+    SeatPreference,
     TrainSearchParams,
     UserCredentials,
     UserProgress,
@@ -24,6 +26,7 @@ from korail_bot.services import (
     SrtService,
     TelegramService,
 )
+from korail_bot.services.rail_service import RailService
 from korail_bot.storage.base import StorageInterface
 from korail_bot.telegramBot import keyboards
 from korail_bot.utils.crypto import identity_hash
@@ -147,6 +150,8 @@ class ConversationHandler:
         elif progress == UserProgress.PASSENGER_COUNT_INPUT_SUCCESS:
             self._handle_seat_strategy_input(chat_id, text, session)
         elif progress == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS:
+            self._handle_seat_preference_input(chat_id, text, session)
+        elif progress == UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS:
             self._handle_train_selection_input(chat_id, text, session)
         elif progress == UserProgress.TRAIN_SELECT_INPUT_SUCCESS:
             self._handle_final_confirmation(chat_id, text, session)
@@ -525,6 +530,7 @@ class ConversationHandler:
             UserProgress.SPECIAL_INPUT_SUCCESS,
             UserProgress.PASSENGER_COUNT_INPUT_SUCCESS,
             UserProgress.SEAT_STRATEGY_INPUT_SUCCESS,
+            UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS,
             UserProgress.TRAIN_SELECT_INPUT_SUCCESS,
             UserProgress.SCHEDULE_INPUT_PENDING,
         }
@@ -542,7 +548,8 @@ class ConversationHandler:
         UserProgress.TRAIN_TYPE_INPUT_SUCCESS: "좌석 종류",
         UserProgress.SPECIAL_INPUT_SUCCESS: "탑승 인원",
         UserProgress.PASSENGER_COUNT_INPUT_SUCCESS: "좌석 배치 방식",
-        UserProgress.SEAT_STRATEGY_INPUT_SUCCESS: "감시할 열차 선택",
+        UserProgress.SEAT_STRATEGY_INPUT_SUCCESS: "좌석 지정",
+        UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS: "감시할 열차 선택",
         UserProgress.TRAIN_SELECT_INPUT_SUCCESS: "최종 확인",
         UserProgress.SCHEDULE_INPUT_PENDING: "검색 시작 시각 예약",
     }
@@ -773,7 +780,9 @@ class ConversationHandler:
     def _finish_mini_app_submission(self, chat_id: int, session: UserSession) -> None:
         """Continue from retained Mini App conditions after a verified login."""
         session.train_info.pop(self.MINI_APP_PENDING_KEY, None)
-        session.last_action = UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+        # Straight to the train list: the Mini App asked for the seat
+        # condition on its own screen, so the chat has nothing left to ask.
+        session.last_action = UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS
         self.storage.save_user_session(session)
         self.telegram.send_message(
             chat_id,
@@ -1061,7 +1070,7 @@ class ConversationHandler:
         # the date is the last question rather than the first. Asking the
         # remaining eight anyway would make the shortcut no shortcut at all.
         if session.train_info.get("fromFavourite"):
-            session.last_action = UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+            session.last_action = UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS
             self.storage.save_user_session(session)
             self._show_train_selection(chat_id, session)
             return
@@ -1293,7 +1302,7 @@ class ConversationHandler:
             session.train_info["seatStrategy"] = "consecutive"
             session.last_action = UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
             self.storage.save_user_session(session)
-            self._show_train_selection(chat_id, session)
+            self._ask_seat_preference(chat_id, session)
 
     def _handle_seat_strategy_input(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle seat strategy selection."""
@@ -1314,6 +1323,135 @@ class ConversationHandler:
         session.last_action = UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
         self.storage.save_user_session(session)
 
+        self._ask_seat_preference(chat_id, session)
+
+    # ==================== Choosing which seats will do ======================
+    #
+    # Column letters and a row range, both optional. Neither railway lets a
+    # booking ask for a particular seat, so this is honoured after the fact:
+    # the search takes whatever seat it wins, looks at it, and gives it back
+    # if it is not one of these - which only works where the railway says
+    # which seat it gave before the ticket is paid for. SR does; Korail
+    # reports a seat only on a paid ticket, and this bot never pays. So the
+    # question is asked on SR and skipped, with a word about why, on Korail.
+
+    #: Where the half-finished answer lives while the screen is being ticked.
+    #: On train_info with everything else, so one write stores it and /cancel
+    #: throws it away with the rest.
+    SEAT_COLUMNS_KEY = "seatColumns"
+    SEAT_ROWS_KEY = "seatRows"
+
+    def _ask_seat_preference(self, chat_id: int, session: UserSession) -> None:
+        """
+        Put up the seat screen, or step past it on a railway that cannot use it.
+
+        Skipping still moves the session to SEAT_PREFERENCE_INPUT_SUCCESS, so
+        that one state means "the train list is on screen" whichever railway
+        this is - the alternative is every later step asking which.
+        """
+        from korail_bot.telegramBot.messages import Messages
+
+        if not self.session_operator(session).reports_seats_before_payment:
+            session.last_action = UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS
+            self.storage.save_user_session(session)
+            self._show_train_selection(chat_id, session)
+            return
+
+        self.telegram.send_message(
+            chat_id,
+            Messages.REQUEST_SEAT_PREFERENCE.format(
+                current=self._seat_preference(session).describe(),
+                limit=RailService.MAX_SEAT_REJECTIONS,
+            ),
+            reply_markup=keyboards.seat_preference_keyboard(
+                session.train_info.get(self.SEAT_COLUMNS_KEY, []),
+                session.train_info.get(self.SEAT_ROWS_KEY, ""),
+            ),
+        )
+
+    def _seat_preference(self, session: UserSession) -> SeatPreference:
+        """The seat condition as the session currently holds it."""
+        rows = session.train_info.get(self.SEAT_ROWS_KEY, "")
+        row_min, row_max = InputValidator.parse_seat_row_range(rows) if rows else (None, None)
+        return SeatPreference(
+            columns=tuple(session.train_info.get(self.SEAT_COLUMNS_KEY, [])),
+            row_min=row_min,
+            row_max=row_max,
+        )
+
+    def _handle_seat_preference_input(self, chat_id: int, text: str, session: UserSession) -> None:
+        """
+        Handle a press or a typed row range on the seat screen.
+
+        Three kinds of answer arrive here. A column letter toggles and leaves
+        the screen up, the way ticking a train does. The two sentinels finish
+        the step - one keeping what was ticked, one throwing it away. Anything
+        else is read as a row range.
+        """
+        text = text.strip()
+
+        if text == keyboards.SEAT_PREFERENCE_ANY:
+            session.train_info.pop(self.SEAT_COLUMNS_KEY, None)
+            session.train_info.pop(self.SEAT_ROWS_KEY, None)
+            self._finish_seat_preference(chat_id, session)
+            return
+
+        if text == keyboards.SEAT_PREFERENCE_DONE:
+            self._finish_seat_preference(chat_id, session)
+            return
+
+        if text.upper() in SEAT_COLUMNS:
+            letter = text.upper()
+            ticked = list(session.train_info.get(self.SEAT_COLUMNS_KEY, []))
+            if letter in ticked:
+                ticked.remove(letter)
+            else:
+                # Kept in the printed order rather than the order they were
+                # pressed, so the summary reads "A·D" however it was ticked.
+                ticked = [c for c in SEAT_COLUMNS if c in {*ticked, letter}]
+            session.train_info[self.SEAT_COLUMNS_KEY] = ticked
+            self.storage.save_user_session(session)
+            self._redraw_seat_preference(chat_id, session)
+            return
+
+        error = InputValidator.validate_seat_row_range(text)
+        if error:
+            self.telegram.send_message(
+                chat_id,
+                error,
+                reply_markup=keyboards.seat_preference_keyboard(
+                    session.train_info.get(self.SEAT_COLUMNS_KEY, []),
+                    session.train_info.get(self.SEAT_ROWS_KEY, ""),
+                ),
+            )
+            return
+
+        low, high = InputValidator.parse_seat_row_range(text)
+        session.train_info[self.SEAT_ROWS_KEY] = f"{low}-{high}" if low != high else str(low)
+        self.storage.save_user_session(session)
+        self._redraw_seat_preference(chat_id, session)
+
+    def _redraw_seat_preference(self, chat_id: int, session: UserSession) -> None:
+        """Put the screen back up with the condition as it now stands."""
+        from korail_bot.telegramBot.messages import Messages
+
+        self.telegram.send_message(
+            chat_id,
+            Messages.REQUEST_SEAT_PREFERENCE.format(
+                current=self._seat_preference(session).describe(),
+                limit=RailService.MAX_SEAT_REJECTIONS,
+            ),
+            reply_markup=keyboards.seat_preference_keyboard(
+                session.train_info.get(self.SEAT_COLUMNS_KEY, []),
+                session.train_info.get(self.SEAT_ROWS_KEY, ""),
+            ),
+        )
+
+    def _finish_seat_preference(self, chat_id: int, session: UserSession) -> None:
+        """Settle the seat condition and move on to the train list."""
+        session.train_info["seatPreference"] = self._seat_preference(session).encode()
+        session.last_action = UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS
+        self.storage.save_user_session(session)
         self._show_train_selection(chat_id, session)
 
     # ==================== Choosing which trains to watch ====================
@@ -1602,6 +1740,7 @@ class ConversationHandler:
             specialInfoShow=info.get("specialInfoShow", "N/A"),
             passengerCount=info.get("passengerCount", 1),
             seatStrategy=info.get("seatStrategyShow", "1명"),
+            seatPreference=SeatPreference.decode(info.get("seatPreference", "")).describe(),
             trainWatch=self._describe_watch(session),
         )
         self.telegram.send_message(
@@ -1639,7 +1778,8 @@ class ConversationHandler:
         UserProgress.SPECIAL_INPUT_SUCCESS: UserProgress.TRAIN_TYPE_INPUT_SUCCESS,
         UserProgress.PASSENGER_COUNT_INPUT_SUCCESS: UserProgress.SPECIAL_INPUT_SUCCESS,
         UserProgress.SEAT_STRATEGY_INPUT_SUCCESS: UserProgress.PASSENGER_COUNT_INPUT_SUCCESS,
-        UserProgress.TRAIN_SELECT_INPUT_SUCCESS: UserProgress.SEAT_STRATEGY_INPUT_SUCCESS,
+        UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS: UserProgress.SEAT_STRATEGY_INPUT_SUCCESS,
+        UserProgress.TRAIN_SELECT_INPUT_SUCCESS: UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS,
         UserProgress.SCHEDULE_INPUT_PENDING: UserProgress.TRAIN_SELECT_INPUT_SUCCESS,
     }
 
@@ -1676,6 +1816,21 @@ class ConversationHandler:
         ):
             target = UserProgress.SPECIAL_INPUT_SUCCESS
 
+        # The same, for the seat condition: a Korail search is never asked
+        # which seats will do, because Korail does not say which one it gave
+        # until the ticket is paid for. Landing on a question the user has
+        # never seen is what this guards against.
+        if (
+            target == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+            and not self.session_operator(session).reports_seats_before_payment
+        ):
+            target = UserProgress.PASSENGER_COUNT_INPUT_SUCCESS
+            # And that lands on the seat-strategy question, which a single
+            # passenger was never asked either - so the skip above has to be
+            # applied again rather than only once on the way through.
+            if (session.train_info.get("passengerCount") or 1) <= 1:
+                target = UserProgress.SPECIAL_INPUT_SUCCESS
+
         # The same, for the train type: an SRT search is never asked which
         # kind of train, because SR runs one. These states are named for the
         # answer behind them and stand for the question in front, so the one
@@ -1693,7 +1848,7 @@ class ConversationHandler:
             self.telegram.send_message(chat_id, Messages.BACK_AT_THE_START)
             return
 
-        if here == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS:
+        if here == UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS:
             # Leaving the train list, whose keyboard the router deliberately
             # leaves alone while it is being ticked.
             self._close_train_list(chat_id, session)
@@ -1725,8 +1880,11 @@ class ConversationHandler:
 
         # These two build their message out of every answer so far and know
         # how to send it, so going back to them is just drawing them again.
-        if progress == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS:
+        if progress == UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS:
             self._show_train_selection(chat_id, session, prefix=prefix or "")
+            return
+        if progress == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS:
+            self._ask_seat_preference(chat_id, session)
             return
         if progress == UserProgress.TRAIN_SELECT_INPUT_SUCCESS:
             self._show_final_confirmation(chat_id, session, prefix=prefix or "")
@@ -2015,6 +2173,7 @@ class ConversationHandler:
             seat_strategy=info.get("seatStrategy", "consecutive"),
             train_numbers=list(info.get("selectedTrains") or []),
             operator=self.session_operator(session),
+            seat_preference=info.get("seatPreference", ""),
         )
 
     def _handle_final_confirmation(self, chat_id: int, text: str, session: UserSession) -> None:

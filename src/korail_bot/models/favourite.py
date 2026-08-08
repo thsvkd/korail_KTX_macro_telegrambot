@@ -51,6 +51,9 @@ class FavouriteSearch:
     passenger_count: int = 1
     seat_strategy: str = "consecutive"
     seat_strategy_display: str = ""
+    # Which seats will do, as SeatPreference.encode wrote it. Defaulted so a
+    # favourite saved before this existed reads back as asking for any seat.
+    seat_preference: str = ""
     # Which railway the route belongs to. A favourite saved before there were
     # two is a Korail one, and 수서→부산 means a different search depending on
     # the answer, so it is saved rather than guessed at when the favourite is
@@ -96,6 +99,7 @@ class FavouriteSearch:
             passenger_count=int(info.get("passengerCount", 1) or 1),
             seat_strategy=info.get("seatStrategy", "consecutive"),
             seat_strategy_display=info.get("seatStrategyShow", ""),
+            seat_preference=info.get("seatPreference", ""),
             operator=Operator.parse(info.get("operator")),
         )
 
@@ -118,6 +122,7 @@ class FavouriteSearch:
             "passengerCount": self.passenger_count,
             "seatStrategy": self.seat_strategy,
             "seatStrategyShow": self.seat_strategy_display,
+            "seatPreference": self.seat_preference,
             "operator": str(self.operator),
         }
 

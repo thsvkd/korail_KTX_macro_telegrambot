@@ -94,9 +94,12 @@ class TestCredentialHandoff:
             "random",
             # No trains picked: the whole time window is watched.
             "",
-            # Which railway. Last, so that everything before it keeps the
-            # position an older build wrote it at.
             "korail",
+            # Which seats will do. Last, so that everything before it keeps
+            # the position an older build wrote it at - which is what lets a
+            # search started by that build resume against this one. Empty
+            # here: no seat was asked for.
+            "",
         ]
 
     def test_credentials_written_to_stdin(self, service, search_params):

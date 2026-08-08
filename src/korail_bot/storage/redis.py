@@ -451,6 +451,7 @@ class RedisStorage(StorageInterface):
                     "passenger_count": favourite.passenger_count,
                     "seat_strategy": favourite.seat_strategy,
                     "seat_strategy_display": favourite.seat_strategy_display,
+                    "seat_preference": favourite.seat_preference,
                     "operator": str(favourite.operator),
                     "created_at": favourite.created_at.isoformat(),
                 }
@@ -538,6 +539,7 @@ class RedisStorage(StorageInterface):
                 special_option_display=stored.get("special_option_display", ""),
                 passenger_count=int(stored.get("passenger_count", 1)),
                 seat_strategy=stored.get("seat_strategy", "consecutive"),
+                seat_preference=stored.get("seat_preference", ""),
                 seat_strategy_display=stored.get("seat_strategy_display", ""),
                 # Saved before there were two railways means Korail.
                 operator=Operator.parse(stored.get("operator")),
@@ -1226,6 +1228,7 @@ class RedisStorage(StorageInterface):
             "passenger_count": params.passenger_count,
             "seat_strategy": params.seat_strategy,
             "train_numbers": params.train_numbers,
+            "seat_preference": params.seat_preference,
         }
 
     def _deserialize_search_params(self, data: dict) -> TrainSearchParams:
@@ -1255,6 +1258,7 @@ class RedisStorage(StorageInterface):
             passenger_count=data.get("passenger_count", defaults.passenger_count),
             seat_strategy=data.get("seat_strategy", defaults.seat_strategy),
             train_numbers=data.get("train_numbers") or [],
+            seat_preference=data.get("seat_preference", defaults.seat_preference),
         )
 
     def _serialize_running_reservation(self, reservation: RunningReservation) -> dict:

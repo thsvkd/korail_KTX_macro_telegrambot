@@ -517,6 +517,23 @@ class SrtService(RailService):
             "soldout": not (hasattr(train, "seat_available") and train.seat_available()),
         }
 
+    @staticmethod
+    def assigned_seats(reservation) -> list[str]:
+        """
+        The seats SR gave this booking, as "3A".
+
+        SR fills these in before anything is paid for: reserving fetches the
+        booking back through get_reservations, which asks ticket_info for each
+        one, and that is where the seat numbers come from. So unlike Korail,
+        a search here can look at what it won and decide whether to keep it.
+
+        Read defensively - a booking that arrives without tickets is an SR
+        response shape this did not expect, and the caller reads an empty list
+        as "cannot tell" rather than cancelling on it.
+        """
+        tickets = getattr(reservation, "tickets", None) or []
+        return [str(seat) for seat in (getattr(t, "seat", None) for t in tickets) if seat]
+
     def cancel_reservation(self, rsv_id: str) -> bool:
         """
         Give one unpaid reservation back to SR.

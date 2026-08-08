@@ -159,6 +159,23 @@
               </div>
             </div>
 
+            <fieldset class="choice-group" id="seat-preference-group" hidden>
+              <legend>좌석 지정 <small>선택 사항 · SRT 전용</small></legend>
+              <div class="seat-columns" role="group" aria-label="좌석 열">
+                <label><input type="checkbox" name="seat_column" value="A" /><span>A<small>창측</small></span></label>
+                <label><input type="checkbox" name="seat_column" value="B" /><span>B<small>내측</small></span></label>
+                <label><input type="checkbox" name="seat_column" value="C" /><span>C<small>내측</small></span></label>
+                <label><input type="checkbox" name="seat_column" value="D" /><span>D<small>창측</small></span></label>
+              </div>
+              <div class="seat-rows">
+                <label for="seat-row-min">좌석 번호</label>
+                <input id="seat-row-min" name="seat_row_min" type="number" min="1" max="99" inputmode="numeric" placeholder="처음" />
+                <span aria-hidden="true">~</span>
+                <input id="seat-row-max" name="seat_row_max" type="number" min="1" max="99" inputmode="numeric" placeholder="끝" />
+              </div>
+              <p class="hint" id="seat-preference-hint">비워두면 아무 좌석이나 잡습니다. 조건이 좁을수록 맞지 않는 좌석은 돌려보내므로 더 오래 걸립니다.</p>
+            </fieldset>
+
             <fieldset class="choice-group" id="seat-strategy-group" hidden>
               <legend>좌석 배치</legend>
               <label><input type="radio" name="seat_strategy" value="1" checked /><span>연속 좌석<small>붙어 있는 자리만</small></span></label>

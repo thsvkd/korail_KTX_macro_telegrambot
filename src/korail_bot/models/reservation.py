@@ -1,11 +1,154 @@
 """Reservation data models."""
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, StrEnum
 from typing import Any
 
 from korail_bot.models.operator import Operator
+
+# How a seat label reads once the railway has assigned one: a row number and a
+# column letter, in that order. Matched case-insensitively and with the
+# leading zeros a railway may or may not pad with, because "3A", "03A" and
+# "3a" are the same seat and only one of them is worth depending on.
+_SEAT_LABEL = re.compile(r"^0*(\d{1,3})\s*([A-Z])$")
+
+#: The column letters a seat can carry. KTX and SRT general cars seat four
+#: across as A B | C D; special cars seat three as A B | C. Naming all four
+#: here and letting the user pick is deliberate - a car with no D simply never
+#: produces a seat that matches one, which is the honest outcome.
+SEAT_COLUMNS = ("A", "B", "C", "D")
+
+
+@dataclass(frozen=True)
+class SeatPreference:
+    """
+    Which seats the user will accept, as a set of candidates.
+
+    Not a single seat. Cancellation tickets appear one at a time and are gone
+    in seconds, so holding out for exactly 5호차 3A is holding out for
+    something that will almost never come. A column set and a row range say
+    "any of these will do", which is both what people actually want - a window
+    seat, near the front - and what a search can realistically fill.
+
+    Empty means no preference, which is what every search did before this
+    existed and what every search still does unless the user says otherwise.
+    """
+
+    #: Column letters that will do. Empty means any column.
+    columns: tuple[str, ...] = ()
+    #: Lowest and highest acceptable row. None on either side leaves that end
+    #: open, so a preference can say "row 5 or later" without inventing a last
+    #: row that differs per train.
+    row_min: int | None = None
+    row_max: int | None = None
+
+    def is_empty(self) -> bool:
+        """Whether this asks for anything at all."""
+        return not self.columns and self.row_min is None and self.row_max is None
+
+    def matches(self, seat: str | None) -> bool:
+        """
+        Whether an assigned seat is one of the ones asked for.
+
+        An empty preference matches everything. So does a seat label this
+        cannot read: the caller acts on a False by giving the seat back, and
+        giving back a seat because the label was in an unexpected shape would
+        turn a parsing surprise into a search that cancels every seat it wins.
+        Unreadable labels are reported by `parse_seat_label` returning None,
+        and the caller is expected to say so rather than silently cancel.
+        """
+        if self.is_empty():
+            return True
+
+        parsed = parse_seat_label(seat)
+        if parsed is None:
+            return True
+
+        row, column = parsed
+
+        if self.columns and column not in self.columns:
+            return False
+        if self.row_min is not None and row < self.row_min:
+            return False
+        return not (self.row_max is not None and row > self.row_max)
+
+    def describe(self) -> str:
+        """How the preference reads in a summary, in Korean."""
+        if self.is_empty():
+            return "지정 없음"
+
+        parts = []
+        if self.columns:
+            parts.append(f"{'·'.join(self.columns)}열")
+        if self.row_min is not None and self.row_max is not None:
+            parts.append(f"{self.row_min}~{self.row_max}번")
+        elif self.row_min is not None:
+            parts.append(f"{self.row_min}번 이상")
+        elif self.row_max is not None:
+            parts.append(f"{self.row_max}번 이하")
+        return " ".join(parts)
+
+    def encode(self) -> str:
+        """
+        Flatten to the one string form argv and storage both carry.
+
+        "A,D:1-15", "A,D:", ":1-15", and "" for no preference. One
+        representation rather than three fields spread across a command line,
+        a Redis hash and a JSON payload, so there is a single place where the
+        shape can be got wrong.
+        """
+        if self.is_empty():
+            return ""
+        rows = ""
+        if self.row_min is not None or self.row_max is not None:
+            rows = f"{self.row_min or ''}-{self.row_max or ''}"
+        return f"{','.join(self.columns)}:{rows}"
+
+    @classmethod
+    def decode(cls, text: str | None) -> "SeatPreference":
+        """
+        Read back what `encode` wrote.
+
+        Anything unreadable becomes no preference. This is reached with argv
+        from a build that predates the field and with records written before
+        it existed, and both of those mean the same thing: nobody asked for a
+        particular seat.
+        """
+        if not text or ":" not in text:
+            return cls()
+
+        column_part, _, row_part = text.partition(":")
+        columns = tuple(
+            letter
+            for letter in (piece.strip().upper() for piece in column_part.split(","))
+            if letter in SEAT_COLUMNS
+        )
+
+        row_min, row_max = None, None
+        if "-" in row_part:
+            low, _, high = row_part.partition("-")
+            row_min = int(low) if low.strip().isdigit() else None
+            row_max = int(high) if high.strip().isdigit() else None
+
+        return cls(columns=columns, row_min=row_min, row_max=row_max)
+
+
+def parse_seat_label(seat: str | None) -> tuple[int, str] | None:
+    """
+    Split a railway's seat label into its row and column.
+
+    Returns None when the label is not in the shape this understands, which
+    the caller must treat as "cannot tell" rather than "does not match" - see
+    SeatPreference.matches.
+    """
+    if not seat:
+        return None
+    match = _SEAT_LABEL.match(str(seat).strip().upper())
+    if not match:
+        return None
+    return int(match.group(1)), match.group(2)
 
 
 @dataclass
@@ -32,10 +175,29 @@ class TrainSearchParams:
     # still the better odds - a narrower watch is a deliberate choice to wait
     # for one particular train rather than take the first seat going.
     train_numbers: list[str] = field(default_factory=list)
+    # Which seats will do, in the flattened form SeatPreference.encode writes.
+    # Empty means any seat, which is what every search did before seats could
+    # be asked for. Held encoded rather than as the object so that this stays
+    # a plain dataclass of strings and numbers - the same thing argv carries
+    # and the same thing Redis stores.
+    #
+    # Only SR can honour it: it reports the seat it assigned as soon as the
+    # booking exists, and Korail does not report one until the ticket is paid
+    # for, which this bot never does. A Korail search leaves this empty.
+    seat_preference: str = ""
 
     def watches_specific_trains(self) -> bool:
         """Whether the search is narrowed to a chosen set of trains."""
         return bool(self.train_numbers)
+
+    @property
+    def seats_wanted(self) -> SeatPreference:
+        """The seats this search will accept, however they were stored."""
+        return SeatPreference.decode(self.seat_preference)
+
+    def wants_specific_seats(self) -> bool:
+        """Whether the search is narrowed to a chosen set of seats."""
+        return not self.seats_wanted.is_empty()
 
     @property
     def rail_operator(self) -> Operator:

@@ -13,7 +13,7 @@ every station in the country.
 
 from datetime import datetime, timedelta
 
-from korail_bot.models import KORAIL_MAJOR_STATIONS, Operator, UserProgress
+from korail_bot.models import KORAIL_MAJOR_STATIONS, SEAT_COLUMNS, Operator, UserProgress
 
 MINI_APP_OPEN = "🚄 예약 화면 열기"
 MINI_APP_CHAT_FALLBACK = "💬 채팅으로 예약"
@@ -43,6 +43,10 @@ STEP_TRAIN_TYPE = "tt"
 STEP_SEAT_OPTION = "so"
 STEP_PASSENGER_COUNT = "pc"
 STEP_SEAT_STRATEGY = "ss"
+# Which seats will do - column letters, and a row range. Only asked on SR,
+# which is the only railway that says which seat a booking got before it is
+# paid for, and so the only one where the answer can be acted on.
+STEP_SEAT_PREFERENCE = "sp"
 STEP_TRAIN_SELECT = "trs"
 STEP_CONFIRM = "cf"
 STEP_SCHEDULE = "sch"
@@ -90,6 +94,12 @@ BACK = "*back"
 TRAIN_SELECT_DONE = "*done"
 TRAIN_SELECT_ALL = "*all"
 TRAIN_SELECT_REFRESH = "*refresh"
+# Finishing the seat screen, and leaving it without a condition. Two buttons
+# rather than one, because "no seats ticked, press done" and "I do not care
+# which seat" look identical to the handler and mean different things to the
+# person pressing.
+SEAT_PREFERENCE_DONE = "*seatdone"
+SEAT_PREFERENCE_ANY = "*seatany"
 
 # Answers to STEP_DEAD: start the same search again, or be done with it.
 DEAD_RESUME = "resume"
@@ -138,7 +148,12 @@ STEP_PROGRESS = {
     STEP_SEAT_OPTION: UserProgress.TRAIN_TYPE_INPUT_SUCCESS,
     STEP_PASSENGER_COUNT: UserProgress.SPECIAL_INPUT_SUCCESS,
     STEP_SEAT_STRATEGY: UserProgress.PASSENGER_COUNT_INPUT_SUCCESS,
-    STEP_TRAIN_SELECT: UserProgress.SEAT_STRATEGY_INPUT_SUCCESS,
+    STEP_SEAT_PREFERENCE: UserProgress.SEAT_STRATEGY_INPUT_SUCCESS,
+    # The train list now stands in front of the seat question rather than the
+    # seat-strategy one. A Korail search never sees the seat question and is
+    # moved to the state behind it anyway, so there is still exactly one state
+    # that means "the train list is on screen".
+    STEP_TRAIN_SELECT: UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS,
     STEP_CONFIRM: UserProgress.TRAIN_SELECT_INPUT_SUCCESS,
     STEP_SCHEDULE: UserProgress.SCHEDULE_INPUT_PENDING,
     STEP_ONBOARD_OVERWRITE: UserProgress.ONBOARDING_OVERWRITE_PENDING,
@@ -150,7 +165,7 @@ STEP_PROGRESS = {
 # Ticking a train off a list is not the end of the question - the user is
 # expected to tick several. The keyboard stays, and the handler redraws it
 # with the new ticks rather than the router clearing it away.
-REPEATABLE_STEPS = frozenset({STEP_TRAIN_SELECT})
+REPEATABLE_STEPS = frozenset({STEP_TRAIN_SELECT, STEP_SEAT_PREFERENCE})
 
 # Presses that do not answer the question they are on.
 #
@@ -386,6 +401,45 @@ def seat_strategy_keyboard() -> InlineKeyboard:
         _back_row(STEP_SEAT_STRATEGY),
         _cancel_row(),
     )
+
+
+def seat_preference_keyboard(columns: list[str] | None = None, rows: str = "") -> InlineKeyboard:
+    """
+    Which seats will do: column letters to tick, and a row range.
+
+    The columns tick the way trains do - pressing one leaves the keyboard up
+    and changes only its own tick, because picking several is the point. The
+    row range is typed instead, since how many rows a carriage has depends on
+    the carriage and a keyboard claiming otherwise would be wrong half the
+    time; what shows here is what has been typed so far.
+
+    Args:
+        columns: Column letters currently ticked
+        rows: The row range as it stands, already formatted for reading
+
+    Returns:
+        The keyboard, with the four columns on one row
+    """
+    ticked = set(columns or [])
+
+    letters = [
+        _button(f"{'☑️' if letter in ticked else '⬜'} {letter}", STEP_SEAT_PREFERENCE, letter)
+        for letter in SEAT_COLUMNS
+    ]
+
+    # The row range is not a button. It is set by typing, and a button
+    # showing it would have to do something when pressed - there is nothing
+    # for it to do. The prompt above the keyboard reads it back instead.
+    rows_out = [letters]
+    if ticked or rows:
+        rows_out.append([_button("▶️ 이 조건으로 계속", STEP_SEAT_PREFERENCE, SEAT_PREFERENCE_DONE)])
+    rows_out.append(
+        [_button("🎲 좌석 지정 없이 (성공률 ↑)", STEP_SEAT_PREFERENCE, SEAT_PREFERENCE_ANY)]
+    )
+    rows_out.append(_back_row(STEP_SEAT_PREFERENCE))
+    rows_out.append(_cancel_row())
+
+    return _keyboard(*rows_out)
 
 
 def train_select_keyboard(options: list[dict], selected: list[str] | None = None) -> InlineKeyboard:

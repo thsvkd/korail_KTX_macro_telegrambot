@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from korail_bot.config.settings import settings
+from korail_bot.models import SeatPreference, parse_seat_label
 from korail_bot.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -74,6 +75,17 @@ class RailService(ABC):
     #: What this operator is called when talking to the user.
     operator_name = "철도"
 
+    #: How many unwanted seats a search will give back before it stops being
+    #: fussy and keeps the next one it wins.
+    #:
+    #: Every rejection hands a seat to whoever is searching next, and the seat
+    #: that replaces it may never come. Somewhere past here the preference has
+    #: stopped being a preference and started being the reason the user is
+    #: travelling tomorrow instead of today, so the search takes what it has
+    #: and says so - a seat in the wrong row beats no seat, and being told
+    #: which seat you got beats finding out at the platform.
+    MAX_SEAT_REJECTIONS = 20
+
     def __init__(
         self,
         app_session_start: str | None = None,
@@ -121,6 +133,14 @@ class RailService(ABC):
         self._failure_threshold = settings.KORAIL_FAILURE_ALERT_THRESHOLD
         self._failure_realert = settings.KORAIL_FAILURE_REALERT_SECONDS
         self._failure_backoff_cap = settings.KORAIL_FAILURE_BACKOFF_CAP
+        #: Seats given back for not being the ones asked for. Counted across
+        #: the whole search rather than per pass, because the cap it is
+        #: measured against is about the search as a whole.
+        self._seat_rejections: int = 0
+        #: Whether the user has already been told that seats cannot be checked
+        #: on this railway. Said once; repeating it every pass would be noise
+        #: on a loop that runs for hours.
+        self._seat_check_warned: bool = False
 
     # ==================== What each operator must supply ====================
 
@@ -497,6 +517,7 @@ class RailService(ABC):
         seat_strategy: str = "consecutive",
         max_attempts: int | None = None,
         train_numbers: list[str] | None = None,
+        seat_preference: SeatPreference | None = None,
     ):
         """
         Continuously search for trains and attempt reservation until successful.
@@ -514,6 +535,9 @@ class RailService(ABC):
             max_attempts: Maximum attempts (None for infinite)
             train_numbers: Watch only these train numbers; empty or None
                            watches every train in the time window
+            seat_preference: Which seats will do; None or empty takes any.
+                           Honoured only where the railway reports the seat it
+                           assigned before payment - see keeps_seat
 
         Returns:
             Reservation object(s) when successful, None if max_attempts reached
@@ -544,6 +568,7 @@ class RailService(ABC):
                 passenger_count,
                 max_attempts,
                 train_numbers,
+                seat_preference,
             )
         else:  # random
             return self._search_and_reserve_random(
@@ -557,6 +582,7 @@ class RailService(ABC):
                 passenger_count,
                 max_attempts,
                 train_numbers,
+                seat_preference,
             )
 
     def _search_and_reserve_consecutive(
@@ -571,6 +597,7 @@ class RailService(ABC):
         passenger_count: int,
         max_attempts: int | None,
         train_numbers: list[str] | None = None,
+        seat_preference: SeatPreference | None = None,
     ):
         """Reserve seats consecutively (together)."""
         attempts = 0
@@ -641,6 +668,12 @@ class RailService(ABC):
                         # Already notified - just log and continue
                         logger.debug("Duplicate reservation still exists, continuing search...")
                 elif reservation:
+                    # A seat is not a result until it is one of the seats the
+                    # user asked for. keeps_seat gives back the ones that are
+                    # not, so a False here leaves nothing held and the loop
+                    # carries on as if the train had been sold out.
+                    if not self.keeps_seat(reservation, seat_preference):
+                        continue
                     logger.info(f"🎉 CONSECUTIVE RESERVATION SUCCESS after {attempts} attempts!")
                     return reservation
                 else:
@@ -663,6 +696,7 @@ class RailService(ABC):
         passenger_count: int,
         max_attempts: int | None,
         train_numbers: list[str] | None = None,
+        seat_preference: SeatPreference | None = None,
     ):
         """Reserve seats randomly (one at a time until target count reached)."""
         attempts = 0
@@ -735,6 +769,13 @@ class RailService(ABC):
                         # Already notified - just log and continue
                         logger.debug("Duplicate reservation still exists, continuing search...")
                 elif reservation:
+                    # Each ticket here is booked on its own, so an unwanted
+                    # seat can be given back without touching the ones already
+                    # secured - unlike the consecutive case, where the whole
+                    # booking stands or falls together.
+                    if not self.keeps_seat(reservation, seat_preference):
+                        continue
+
                     reservations.append(reservation)
                     current_count = len(reservations)
                     logger.info(
@@ -768,6 +809,110 @@ class RailService(ABC):
             self.wait_between_requests()
 
         return reservations[0] if reservations else None
+
+    # ==================== Keeping only the seats that were asked for ========
+    #
+    # A search can be told which seats will do - a set of column letters, a
+    # range of rows. Neither railway lets a booking request a particular seat,
+    # so the only way to honour that is after the fact: take whatever seat
+    # comes, look at it, and give it back if it is not one of them.
+    #
+    # That only works where the railway says which seat it gave before the
+    # ticket is paid for. SR does. Korail reports a seat number only on a paid
+    # ticket, and this bot never pays, so a Korail search cannot check its own
+    # work and is never asked to - see assigned_seats.
+
+    @staticmethod
+    def assigned_seats(reservation) -> list[str]:
+        """
+        The seats a booking was given, labelled as the railway labels them.
+
+        Empty means the railway did not say - which is not the same as a
+        booking with no seats, and callers must not read it as one. Korail is
+        the case that matters: its unpaid reservations carry no seat number at
+        all, so this stays empty there however the booking went.
+        """
+        return []
+
+    def keeps_seat(self, reservation, preference: SeatPreference | None) -> bool:
+        """
+        Decide whether a booking just made is one to hold on to.
+
+        Returns True when the booking is kept, which covers every case where
+        there is nothing to object to: no preference was set, the railway does
+        not report seats, the seats match, or the search has been fussy for
+        long enough. Returns False only after the booking has already been
+        given back, so a caller that gets False has nothing to clean up and
+        can simply carry on searching.
+
+        Args:
+            reservation: The booking that was just made
+            preference: Which seats the user will accept; None or empty means
+                        any of them
+
+        Returns:
+            True to keep the booking, False once it has been released
+        """
+        if preference is None or preference.is_empty():
+            return True
+
+        seats = self.assigned_seats(reservation)
+        if not seats:
+            self._warn_seats_unchecked(
+                f"⚠️ {self.operator_name}은(는) 결제 전에 좌석 번호를 알려주지 않아 "
+                "좌석 조건을 확인할 수 없습니다. 조건은 무시하고 검색을 계속합니다."
+            )
+            return True
+
+        if any(parse_seat_label(seat) is None for seat in seats):
+            self._warn_seats_unchecked(
+                f"⚠️ 좌석 번호를 읽지 못했습니다 ({', '.join(seats)}). "
+                "좌석 조건은 무시하고 검색을 계속합니다."
+            )
+            return True
+
+        # Every seat has to do. On a multi-seat booking the ones that do not
+        # match are seats somebody in the party has to sit in, and there is no
+        # way to give back only those.
+        if all(preference.matches(seat) for seat in seats):
+            return True
+
+        self._seat_rejections += 1
+        got = ", ".join(seats)
+
+        if self._seat_rejections > self.MAX_SEAT_REJECTIONS:
+            self._announce(
+                f"🪑 원하시는 좌석({preference.describe()})을 "
+                f"{self.MAX_SEAT_REJECTIONS}번 놓쳐서 이번 좌석({got})으로 확정했습니다."
+            )
+            logger.info(f"Seat preference given up after {self._seat_rejections} rejections")
+            return True
+
+        rsv_id = self.reservation_id(reservation)
+        if not rsv_id or not self.cancel_reservation(rsv_id):
+            # The seat could not be handed back. Keeping it is the lesser
+            # wrong: the alternative is walking away from a booking that
+            # exists, which the user would never hear about and would still be
+            # on the hook for.
+            logger.warning(f"Could not release unwanted seat(s) {got}; keeping the booking")
+            self._announce(
+                f"🪑 조건에 맞지 않는 좌석({got})이지만 반납에 실패해 그대로 두었습니다."
+            )
+            return True
+
+        logger.info(
+            f"Released seat(s) {got} - not in {preference.describe()} "
+            f"({self._seat_rejections}/{self.MAX_SEAT_REJECTIONS})"
+        )
+        return False
+
+    def _warn_seats_unchecked(self, message: str) -> None:
+        """Say once that the seat condition cannot be honoured."""
+        if self._seat_check_warned:
+            return
+        self._seat_check_warned = True
+        logger.warning(message)
+        self._announce(message)
 
     def _cancel_reservations(self, reservations: list) -> None:
         """

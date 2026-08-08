@@ -156,3 +156,15 @@ class UserProgress:
     # to walk over one without saying so, which cost the user every answer
     # they had already given.
     RESUME_DRAFT_PENDING = 19
+    # Which seats will do - column letters and a row range. Sits between the
+    # seat strategy and the train list in the conversation, and is asked only
+    # on SR, the one railway that reports the seat it assigned before the
+    # ticket is paid for.
+    #
+    # A Korail search is moved to this state without ever being asked, so that
+    # exactly one state means "the train list is on screen" for both railways.
+    #
+    # Numbered last for the reason every state above it is: these numbers are
+    # stored in Redis, and renumbering would move every session that outlived
+    # a deploy to a different question than the one it was answering.
+    SEAT_PREFERENCE_INPUT_SUCCESS = 20

@@ -25,6 +25,7 @@ from korail_bot.models import (
     Operator,
     PaymentStatus,
     ReservationPaymentStatus,
+    SeatPreference,
     SingleReservationInfo,
 )
 from korail_bot.services import (
@@ -124,6 +125,10 @@ class BackgroundReservationProcess:
         # Which railway to search. Absent is how a search started by an older
         # build arrives, and every one of those is a Korail search.
         self.operator = Operator.parse(sys.argv[12] if len(sys.argv) > 12 else None)
+        # Which seats will do, flattened by SeatPreference.encode. Empty - and
+        # absent, which is how a search started before seats could be asked
+        # for arrives - means any seat, the behaviour that predates this.
+        self.seat_preference = SeatPreference.decode(sys.argv[13] if len(sys.argv) > 13 else None)
 
         # Parse train type
         self.train_type = self._parse_train_type(self.train_type_str)
@@ -360,6 +365,7 @@ class BackgroundReservationProcess:
                     passenger_count=self.passenger_count,
                     seat_strategy=self.seat_strategy,
                     train_numbers=self.train_numbers,
+                    seat_preference=self.seat_preference,
                 )
             except DuplicateReservationError as e:
                 # First duplicate detection - notify user but continue searching
@@ -393,6 +399,7 @@ class BackgroundReservationProcess:
                         passenger_count=self.passenger_count,
                         seat_strategy=self.seat_strategy,
                         train_numbers=self.train_numbers,
+                        seat_preference=self.seat_preference,
                     )
                 except DuplicateReservationError:
                     # Should not happen as we already notified, but handle gracefully
@@ -1169,6 +1176,12 @@ class BackgroundReservationProcess:
                     continue
 
                 elif reservation:
+                    # Not a win until it is a seat the user asked for. A
+                    # rejected seat has already been given back by the time
+                    # this returns False, so the loop just keeps looking.
+                    if not self.rail.keeps_seat(reservation, self.seat_preference):
+                        continue
+
                     logger.info(
                         f"✅ Seat {seat_index + 1} reserved after {attempts} search attempts!"
                     )

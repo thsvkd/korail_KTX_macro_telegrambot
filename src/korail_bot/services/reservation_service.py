@@ -119,10 +119,14 @@ class ReservationService:
                 # Not secret, unlike the credentials above - a train number is
                 # public timetable data.
                 ",".join(search_params.train_numbers),
-                # Which railway to search. Last so that the positions before
-                # it keep their meaning, which is what lets a search started
-                # by an older build resume against the new one.
+                # Which railway to search.
                 str(search_params.operator),
+                # Which seats will do, already flattened to one string by
+                # SeatPreference.encode. Appended last, and every addition
+                # goes last, so the positions before it keep their meaning -
+                # which is what lets a search started by an older build resume
+                # against the new one.
+                search_params.seat_preference,
             ]
 
             # Start background process.

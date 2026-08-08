@@ -469,12 +469,22 @@ class TestFullSrtReservationFlow:
         assert self.session().last_action == UserProgress.SPECIAL_INPUT_SUCCESS
 
         # Step 11: one passenger, which settles the seating strategy on its
-        # own and offers the train list. SR answered with no trains, so the
-        # flow carries on watching the whole window.
+        # own and brings up the seat condition - the one question SR is asked
+        # and Korail is not.
         self.say("1")
         session = self.session()
         assert session.train_info["passengerCount"] == 1
         assert session.train_info["seatStrategy"] == "consecutive"
+        assert session.last_action == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+
+        # Step 12: window seats near the front. Ticking leaves the screen up,
+        # so the condition is built over several messages and then finished.
+        self.say("A", "D", "1-15", keyboards.SEAT_PREFERENCE_DONE)
+        session = self.session()
+        assert session.train_info["seatPreference"] == "A,D:1-15"
+
+        # Which offers the train list. SR answered with no trains, so the flow
+        # carries on watching the whole window.
         assert session.last_action == UserProgress.TRAIN_SELECT_INPUT_SUCCESS
         assert session.train_info["selectedTrains"] == []
 
@@ -495,6 +505,7 @@ class TestFullSrtReservationFlow:
         assert params.rail_operator is Operator.SRT
         assert params.src_locate == "수서"
         assert params.dst_locate == "부산"
+        assert params.seat_preference == "A,D:1-15"
         assert params.validate() == (True, None)
 
     @patch("korail_bot.services.srt_service.SrtService.search_trains", return_value=[])
@@ -509,7 +520,8 @@ class TestFullSrtReservationFlow:
         failure - only as the wrong one having been asked.
         """
         self.walk_to_the_seat_option()
-        self.say("1", "1", "Y")
+        # Seat option, one passenger, no seat condition, start.
+        self.say("1", "1", keyboards.SEAT_PREFERENCE_ANY, "Y")
 
         assert self.session().last_action == UserProgress.FINDING_TICKET
         assert mock_srt.called
@@ -552,6 +564,9 @@ class TestFullSrtReservationFlow:
         self.say("2")
         assert self.session().train_info["seatStrategy"] == "random"
 
+        self.say(keyboards.SEAT_PREFERENCE_ANY)
+        assert self.session().train_info["seatPreference"] == ""
+
         self.say("Y")
         assert self.session().last_action == UserProgress.FINDING_TICKET
 
@@ -576,7 +591,7 @@ class TestFullSrtReservationFlow:
             "korail_bot.services.srt_service.SrtService.search_trains", return_value=offered
         ):
             self.walk_to_the_seat_option()
-            self.say("1", "1")
+            self.say("1", "1", keyboards.SEAT_PREFERENCE_ANY)
 
             # The list is up: the flow is waiting to be told which of them to
             # watch, rather than having moved past it.
@@ -586,7 +601,7 @@ class TestFullSrtReservationFlow:
                 "303",
                 "305",
             ]
-            assert session.last_action == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+            assert session.last_action == UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS
 
             self.say("301", "305", keyboards.TRAIN_SELECT_DONE)
 

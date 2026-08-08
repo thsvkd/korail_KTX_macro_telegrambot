@@ -212,6 +212,7 @@ class MiniAppGateway:
             }.get(str(info.get("specialInfo", "")).rsplit(".", 1)[-1], "1"),
             "passenger_count": info.get("passengerCount", 1),
             "seat_strategy": "1" if info.get("seatStrategy") == "consecutive" else "2",
+            "seat_preference": info.get("seatPreference", ""),
             "trains": list(info.get("selectedTrains") or []),
         }
 
@@ -697,6 +698,7 @@ class MiniAppGateway:
             "specialInfoShow": params.special_option_display,
             "passengerCount": params.passenger_count,
             "seatStrategy": params.seat_strategy,
+            "seatPreference": params.seats_wanted.describe(),
             "selectedTrains": list(params.train_numbers),
         }
 

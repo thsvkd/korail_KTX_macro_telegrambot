@@ -216,7 +216,7 @@ class TestTheScreensThatRedrawThemselves(BackFixture):
         ):
             progress = self.back()
 
-        assert progress == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+        assert progress == UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS
         show.assert_called_once()
 
     def test_the_schedule_prompt_sends_the_user_back_to_the_summary(self):
@@ -230,7 +230,7 @@ class TestTheScreensThatRedrawThemselves(BackFixture):
         The router leaves this keyboard alone while the list is being ticked -
         that is what makes ticking repeatable - so nobody else can clear it.
         """
-        self.at(UserProgress.SEAT_STRATEGY_INPUT_SUCCESS, trainListMessageId=555)
+        self.at(UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS, trainListMessageId=555)
 
         self.back()
 
@@ -240,9 +240,11 @@ class TestTheScreensThatRedrawThemselves(BackFixture):
 
     def test_a_list_that_cannot_be_cleared_does_not_cost_the_step(self):
         """Clearing it is cosmetic. The step back is not."""
-        self.at(UserProgress.SEAT_STRATEGY_INPUT_SUCCESS, trainListMessageId=555)
+        self.at(UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS, trainListMessageId=555)
         self.telegram.edit_message_reply_markup.side_effect = Exception("too old")
 
+        # Past the seat question, which a Korail search - the default here -
+        # is never asked, and onto the seat strategy.
         assert self.back() == UserProgress.PASSENGER_COUNT_INPUT_SUCCESS
 
 

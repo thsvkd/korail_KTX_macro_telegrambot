@@ -86,6 +86,20 @@ class Operator(StrEnum):
         return self is Operator.KORAIL
 
     @property
+    def reports_seats_before_payment(self) -> bool:
+        """
+        Whether this railway says which seat a booking got before it is paid for.
+
+        The question behind every seat condition. SR fills the seat and
+        carriage in as soon as the booking exists, so a search can look at
+        what it won and give it back if it is not what was asked for. Korail
+        reports a seat number only on a paid ticket, and this bot never pays -
+        so a Korail search cannot check its own work, and is not offered the
+        choice rather than being offered one that quietly does nothing.
+        """
+        return self is Operator.SRT
+
+    @property
     def major_stations(self) -> tuple[str, ...]:
         """The stations worth putting on buttons for this operator."""
         return KORAIL_MAJOR_STATIONS if self is Operator.KORAIL else SRT_MAJOR_STATIONS

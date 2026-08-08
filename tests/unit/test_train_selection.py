@@ -42,7 +42,7 @@ def fake_train(train_no, dep="185800", arr="195000", name="KTX", has_seat=False)
 def session_ready_to_pick() -> UserSession:
     """A session that has answered everything except which trains to watch."""
     session = UserSession(
-        chat_id=CHAT_ID, in_progress=True, last_action=UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+        chat_id=CHAT_ID, in_progress=True, last_action=UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS
     )
     session.credentials = UserCredentials(korail_id="010-1234-5678", korail_pw="pw")
     session.train_info = {
@@ -208,7 +208,7 @@ class TestShowingTheList:
         self.show([fake_train("101")])
 
         assert self.session.train_info["selectedTrains"] == []
-        assert self.session.last_action == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+        assert self.session.last_action == UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS
 
     def test_the_message_id_is_kept_so_ticks_can_rewrite_it(self):
         self.show([fake_train("101")])
@@ -297,7 +297,7 @@ class TestTicking:
         """Several trains is the normal answer, so one tick cannot end it."""
         self.send("101")
 
-        assert self.session.last_action == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+        assert self.session.last_action == UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS
 
     def test_a_tick_rewrites_the_list_instead_of_sending_another(self):
         self.send("101")
@@ -428,6 +428,23 @@ class TestFinishing:
         assert not params.watches_specific_trains()
 
 
+def _child_argv(popen) -> list[str]:
+    """
+    What the child will see as sys.argv, from the Popen it was started with.
+
+    Indexed from the front, exactly as the child indexes it. Counting back
+    from the end would tie these assertions to whatever happens to be the last
+    argument, and the last argument is precisely the slot new ones get added
+    to - so the convention that keeps old searches resumable is the one that
+    would break the tests.
+    """
+    # The child is started as `python -m <module> <args...>`, and -m leaves
+    # the module where sys.argv[0] would be - so dropping the interpreter and
+    # the -m flag is what lines these indices up with the child's.
+    command = popen.call_args.args[0]
+    return command[2:]
+
+
 class TestCrossingTheProcessBoundary:
     """The search runs elsewhere, and a restart rebuilds it from Redis."""
 
@@ -450,7 +467,7 @@ class TestCrossingTheProcessBoundary:
             popen.return_value.pid = 4242
             service.start_reservation_process(CHAT_ID, "010-1234-5678", "pw", params)
 
-        assert popen.call_args.args[0][-2] == "101,105"
+        assert _child_argv(popen)[11] == "101,105"
 
     def test_no_selection_crosses_as_an_empty_argument(self):
         """
@@ -472,4 +489,4 @@ class TestCrossingTheProcessBoundary:
             popen.return_value.pid = 4242
             service.start_reservation_process(CHAT_ID, "010-1234-5678", "pw", params)
 
-        assert popen.call_args.args[0][-2] == ""
+        assert _child_argv(popen)[11] == ""

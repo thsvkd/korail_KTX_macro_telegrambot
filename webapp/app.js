@@ -268,6 +268,10 @@ function renderStations() {
   }
 
   el("train-type-group").hidden = selectedOperator() === "srt";
+  // Korail does not say which seat a booking got until the ticket is paid
+  // for, and this bot never pays - so there is nothing to check a condition
+  // against, and offering one would be offering something that does nothing.
+  el("seat-preference-group").hidden = selectedOperator() !== "srt";
 
   const hint = el("operator-hint");
   hint.hidden = operator.registered;
@@ -302,7 +306,48 @@ function readConditions() {
     seat_option: String(data.get("seat_option") || "1"),
     passenger_count: Number(el("passenger-count").value || 1),
     seat_strategy: String(data.get("seat_strategy") || "1"),
+    seat_preference: readSeatPreference(),
   };
+}
+
+// "A,D:1-15", the same flattening SeatPreference.encode does on the bot side.
+// One representation across the page, the API and the search process, so
+// there is a single place the shape can be got wrong.
+function readSeatPreference() {
+  if (selectedOperator() !== "srt") return "";
+
+  const columns = [...document.querySelectorAll("input[name='seat_column']:checked")]
+    .map((box) => box.value)
+    .join(",");
+  const low = String(el("seat-row-min").value || "").trim();
+  const high = String(el("seat-row-max").value || "").trim();
+
+  if (!columns && !low && !high) return "";
+  return `${columns}:${low || high ? `${low}-${high}` : ""}`;
+}
+
+function applySeatPreference(encoded) {
+  const [columnPart = "", rowPart = ""] = String(encoded || "").split(":");
+  const wanted = new Set(columnPart.split(",").filter(Boolean));
+  for (const box of document.querySelectorAll("input[name='seat_column']")) {
+    box.checked = wanted.has(box.value);
+  }
+  const [low = "", high = ""] = rowPart.split("-");
+  el("seat-row-min").value = low;
+  el("seat-row-max").value = high;
+}
+
+function describeSeatPreference(encoded) {
+  const [columnPart = "", rowPart = ""] = String(encoded || "").split(":");
+  const columns = columnPart.split(",").filter(Boolean);
+  const [low = "", high = ""] = rowPart.split("-");
+
+  const parts = [];
+  if (columns.length) parts.push(`${columns.join("·")}열`);
+  if (low && high) parts.push(`${low}~${high}번`);
+  else if (low) parts.push(`${low}번 이상`);
+  else if (high) parts.push(`${high}번 이하`);
+  return parts.length ? parts.join(" ") : "지정 없음";
 }
 
 function applyConditions(conditions) {
@@ -331,6 +376,7 @@ function applyConditions(conditions) {
     if (value && form.elements[name]) form.elements[name].value = String(value);
   }
   setPassengerCount(Number(conditions.passenger_count || 1));
+  applySeatPreference(conditions.seat_preference);
   draft.trains = Array.isArray(conditions.trains) ? conditions.trains.map(String) : [];
   renderStations();
 }
@@ -447,6 +493,9 @@ function renderSummary() {
   }
   if (Number(conditions.passenger_count) > 1) {
     rows.push(["좌석 배치", conditions.seat_strategy === "1" ? "연속 좌석" : "랜덤 배치"]);
+  }
+  if (conditions.operator === "srt" && conditions.seat_preference) {
+    rows.push(["좌석 지정", describeSeatPreference(conditions.seat_preference)]);
   }
   rows.push([
     "감시 범위",

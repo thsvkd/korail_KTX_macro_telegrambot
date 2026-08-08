@@ -90,6 +90,9 @@ class TestMiniAppSubmission:
             "passengerCount": 2,
             "seatStrategy": "consecutive",
             "seatStrategyShow": "연속 좌석",
+            # A Korail submission never carries a seat condition: Korail does
+            # not say which seat it gave until the ticket is paid for.
+            "seatPreference": "",
             "selectedTrains": [],
         }
 
@@ -303,7 +306,7 @@ class TestApplyingMiniAppData(MiniAppConversationFixture):
         with patch("korail_bot.handlers.conversation_handler.KorailService", return_value=rail):
             self.conversation.handle_mini_app_data(CHAT_ID, payload())
 
-        assert self.session.last_action == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+        assert self.session.last_action == UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS
         assert self.session.credentials.korail_pw == PASSWORD
         assert self.session.train_info["srcLocate"] == "서울"
         self.conversation._show_train_selection.assert_called_once_with(CHAT_ID, self.session)
@@ -330,7 +333,7 @@ class TestApplyingMiniAppData(MiniAppConversationFixture):
             self.conversation.handle_message(CHAT_ID, PHONE)
             self.conversation.handle_message(CHAT_ID, PASSWORD)
 
-        assert self.session.last_action == UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
+        assert self.session.last_action == UserProgress.SEAT_PREFERENCE_INPUT_SUCCESS
         assert self.session.train_info["srcLocate"] == "수서"
         self.conversation._show_train_selection.assert_called_once_with(CHAT_ID, self.session)
 

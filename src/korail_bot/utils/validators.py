@@ -471,6 +471,70 @@ class InputValidator:
         return None
 
     @staticmethod
+    def validate_seat_row_range(text: str) -> str | None:
+        """
+        Validate a typed row range, as "1-15" or a single "7".
+
+        Rows are typed rather than offered as buttons because how many there
+        are depends on the carriage, and a keyboard claiming to know would be
+        wrong on half the trains.
+
+        Args:
+            text: The range as typed
+
+        Returns:
+            The reason it cannot be used, or None when it can
+        """
+        if not text or not text.strip():
+            return "좌석 번호 범위를 입력해주세요. (예: 1-15)"
+
+        # Any of the dashes a phone keyboard might produce.
+        cleaned = text.strip().replace("–", "-").replace("~", "-")
+        parts = [piece.strip() for piece in cleaned.split("-")]
+
+        if len(parts) > 2 or not all(part.isdigit() for part in parts if part):
+            return "숫자와 - 만 사용해주세요. (예: 1-15, 또는 7)"
+
+        numbers = [int(part) for part in parts if part]
+        if not numbers:
+            return "좌석 번호 범위를 입력해주세요. (예: 1-15)"
+
+        if any(number < 1 for number in numbers):
+            return "좌석 번호는 1번부터입니다."
+
+        # An upper bound rather than a real one: KTX and SRT carriages run to
+        # the teens, and a three-digit row is a typo, not a train.
+        if any(number > 99 for number in numbers):
+            return "좌석 번호는 99번까지만 지정할 수 있습니다."
+
+        if len(numbers) == 2 and numbers[0] > numbers[1]:
+            return "앞 숫자가 뒤 숫자보다 클 수 없습니다. (예: 1-15)"
+
+        return None
+
+    @staticmethod
+    def parse_seat_row_range(text: str) -> tuple[int, int]:
+        """
+        Read a row range that validate_seat_row_range has already accepted.
+
+        Split from the validation so that neither has to carry the other's
+        job - the same division every validate_* here follows. Calling it on
+        input that has not been validated is a programming error, not a user
+        one.
+
+        Args:
+            text: The range as typed, known to be valid
+
+        Returns:
+            The lowest and highest acceptable row; a bare "7" means 7 to 7
+        """
+        cleaned = text.strip().replace("–", "-").replace("~", "-")
+        numbers = [int(part) for part in (p.strip() for p in cleaned.split("-")) if part]
+        if len(numbers) == 1:
+            return numbers[0], numbers[0]
+        return numbers[0], numbers[1]
+
+    @staticmethod
     def validate_seat_strategy_choice(choice: str) -> str | None:
         """
         Validate seat strategy choice (1 or 2).

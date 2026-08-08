@@ -69,6 +69,19 @@ fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 .choice-group label > span { display: grid; min-height: 53px; align-content: center; gap: 2px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 12px; font-size: 13px; }
 .choice-group small { color: var(--hint); font-size: 10px; }
 .choice-group input:checked + span { border-color: var(--accent); background: var(--soft); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); font-weight: 750; }
+/* The seat condition. Four columns across one row, so the letters read as the
+   seat map they stand for rather than as a list; the row range is a pair of
+   numbers because how many rows a carriage has depends on the carriage. Both
+   sit inside a .choice-group, whose two-column grid they deliberately span. */
+.seat-columns { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.seat-rows { display: flex; grid-column: 1 / -1; align-items: center; gap: 8px; margin-top: 9px; }
+.seat-rows label { color: var(--hint); font-size: 12px; font-weight: 700; }
+/* .choice-group input hides its inputs, because every other control in one
+   is a radio drawn as the span beside it. These two are typed into, so the
+   hiding has to be undone rather than inherited. */
+.seat-rows input { position: static; width: 100%; min-width: 0; min-height: 44px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 12px; opacity: 1; background: transparent; color: inherit; font-size: 13px; text-align: center; pointer-events: auto; }
+.seat-rows span { color: var(--hint); }
+.hint { grid-column: 1 / -1; margin: 9px 0 0; color: var(--hint); font-size: 11px; line-height: 1.45; }
 .passenger-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 19px; }
 .passenger-row > div:first-child { display: grid; gap: 3px; }
 .stepper { display: grid; grid-template-columns: 38px 54px 38px; align-items: center; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }

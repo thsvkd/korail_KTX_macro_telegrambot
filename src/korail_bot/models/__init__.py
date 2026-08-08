@@ -8,6 +8,7 @@ from korail_bot.models.operator import (
     Operator,
 )
 from korail_bot.models.reservation import (
+    SEAT_COLUMNS,
     DeadSearch,
     DeathCause,
     MultiReservationStatus,
@@ -15,8 +16,10 @@ from korail_bot.models.reservation import (
     ReservationPaymentStatus,
     RunningReservation,
     ScheduledSearch,
+    SeatPreference,
     SingleReservationInfo,
     TrainSearchParams,
+    parse_seat_label,
 )
 from korail_bot.models.user import (
     AccessRequest,
@@ -29,6 +32,7 @@ from korail_bot.models.user import (
 
 __all__ = [
     "KORAIL_MAJOR_STATIONS",
+    "SEAT_COLUMNS",
     "SRT_MAJOR_STATIONS",
     "SRT_STATIONS",
     "AccessRequest",
@@ -43,9 +47,11 @@ __all__ = [
     "ReservationPaymentStatus",
     "RunningReservation",
     "ScheduledSearch",
+    "SeatPreference",
     "SingleReservationInfo",
     "TrainSearchParams",
     "UserCredentials",
     "UserProgress",
     "UserSession",
+    "parse_seat_label",
 ]

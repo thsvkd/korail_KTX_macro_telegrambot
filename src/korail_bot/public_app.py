@@ -24,12 +24,26 @@ from pathlib import Path
 
 from flask import Flask, Response, send_from_directory
 
+from korail_bot import __version__
 from korail_bot.api.mini_app import build_blueprint
 from korail_bot.config.settings import settings
 from korail_bot.services.mini_app_gateway import MiniAppGateway
 from korail_bot.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+#: The page's own files, which are stamped with the version as it is served.
+#:
+#: Telegram keeps a Mini App running when it is minimised rather than closed,
+#: so a deploy does not reach someone who never shut the page: they go on
+#: running the JavaScript they opened with, against a bot that has moved on.
+#: This is not theoretical - a seat-selection screen shipped and was reported
+#: missing, and what was in the phone was the build before it.
+#:
+#: Cache headers do not settle it. These files already go out no-cache and the
+#: WebView had them anyway. A URL that has changed is the one thing no cache
+#: can answer from what it already holds.
+STAMPED_ASSETS = ("app.js", "app.css")
 
 #: Where the Mini App's own files live, relative to the repository root. The
 #: page is served from here rather than from a static host so that it shares
@@ -44,6 +58,30 @@ def _webapp_root() -> Path:
     """Where to serve the page from, wherever this is installed."""
     configured = (settings.MINI_APP_WEBAPP_DIR or "").strip()
     return Path(configured).resolve() if configured else WEBAPP_DIRECTORY
+
+
+def stamped_index(root: Path, version: str = __version__) -> str:
+    """
+    The page, with its own assets pointed at a versioned URL.
+
+    Done here rather than in the file so that ``webapp/index.html`` stays a
+    page that opens and works on its own - a placeholder baked into the source
+    would be a literal in every context that is not this function.
+
+    Only the app's own two files are stamped. Telegram's SDK is somebody
+    else's URL and not ours to decorate.
+
+    Args:
+        root: Where the page's files live
+        version: What to stamp them with; the running version by default
+
+    Returns:
+        The page's HTML, ready to send
+    """
+    html = (root / "index.html").read_text(encoding="utf-8")
+    for asset in STAMPED_ASSETS:
+        html = html.replace(f'"{asset}"', f'"{asset}?v={version}"')
+    return html
 
 
 def create_public_app(gateway: MiniAppGateway) -> Flask:
@@ -97,7 +135,16 @@ def create_public_app(gateway: MiniAppGateway) -> Flask:
 
     @app.get("/")
     def index():
-        return send_from_directory(root, "index.html")
+        # Read per request rather than once at startup: the file is small,
+        # and a page held in memory is a page that goes on being served after
+        # it has been edited - which is the class of problem this is fixing.
+        response = Response(stamped_index(root), mimetype="text/html")
+        # The stamp only works while this page itself is fresh. A cached copy
+        # names the previous version's assets, and the versioning buys
+        # nothing. no-store rather than no-cache because the thing being
+        # guarded against is a client that revalidates when it feels like it.
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.get("/<path:filename>")
     def asset(filename: str):

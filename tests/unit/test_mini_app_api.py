@@ -373,3 +373,74 @@ class TestHowRefusalsAreAnswered:
         assert response.status_code == 500
         assert "hunter2" not in response.get_json()["error"]
         assert "redis" not in response.get_json()["error"].lower()
+
+
+class TestTheAssetsSurviveADeploy:
+    """
+    A redeploy has to reach a Mini App that was minimised rather than closed.
+
+    Telegram keeps such a page alive, so it goes on running the JavaScript it
+    opened with. Cache headers did not settle it - the files already went out
+    no-cache and the WebView served them anyway - and a seat-selection screen
+    shipped and was reported missing because of it. The page's own assets
+    therefore carry the version in their URL, which is the one thing a cache
+    cannot answer from what it already holds.
+    """
+
+    @pytest.fixture
+    def public(self, gateway, bot_token):
+        from korail_bot.public_app import create_public_app
+
+        return create_public_app(gateway).test_client()
+
+    def test_the_page_points_at_versioned_assets(self, public):
+        from korail_bot import __version__
+
+        body = public.get("/").get_data(as_text=True)
+
+        assert f'"app.js?v={__version__}"' in body
+        assert f'"app.css?v={__version__}"' in body
+        # And nothing is left pointing at the bare name, which is what a
+        # cache would answer from its own copy.
+        assert '"app.js"' not in body
+        assert '"app.css"' not in body
+
+    def test_somebody_elses_url_is_left_alone(self, public):
+        """Telegram's SDK is not ours to decorate."""
+        body = public.get("/").get_data(as_text=True)
+
+        assert "telegram.org/js/telegram-web-app.js?v=" not in body
+
+    def test_the_page_itself_is_never_cached(self, public):
+        """
+        The stamp is only worth having while the page carrying it is fresh.
+        A cached page names the previous version's assets and the versioning
+        buys nothing at all.
+        """
+        assert public.get("/").headers["Cache-Control"] == "no-store"
+
+    def test_a_stamped_asset_is_still_served(self, public):
+        """The query is not part of the path, but a test is cheaper than a bet."""
+        from korail_bot import __version__
+
+        response = public.get(f"/app.js?v={__version__}")
+        try:
+            assert response.status_code == 200
+        finally:
+            # A file response holds an open handle until it is read or shut.
+            response.close()
+
+    def test_the_stamp_follows_the_version(self, tmp_path):
+        """Two builds must not produce the same URL."""
+        from korail_bot.public_app import stamped_index
+
+        (tmp_path / "index.html").write_text(
+            '<link href="app.css"><script src="app.js"></script>', encoding="utf-8"
+        )
+
+        first = stamped_index(tmp_path, version="4.5.0b1")
+        second = stamped_index(tmp_path, version="4.5.0b2")
+
+        assert "app.js?v=4.5.0b1" in first
+        assert "app.js?v=4.5.0b2" in second
+        assert first != second
